@@ -440,12 +440,12 @@ and `keyed_offset_chain`.
 ### Metadata Record (`VKMT`)
 
 - The first record of the log, appended at create; its payload is read at
-  `append_log_start + 32`. 200 bytes:
+  `append_log_start + 32`. 1224 bytes:
 
   | Bytes | Field |
   | --- | --- |
   | 0..4 | magic `b"VKMT"` |
-  | 4..6 | version, 5 |
+  | 4..6 | version, 6 |
   | 6..8 | free-space ratio in thousandths of the record bytes, 10 to 50 |
   | 8..24 | zero |
   | 24..40 | ring payload offset and length |
@@ -455,13 +455,19 @@ and `keyed_offset_chain`.
   | 60..64 | zero |
   | 64..72 | overflow region list head (as the matrix metadata's bytes 72..80) |
   | 72..200 | the state: 16 `u64` fields, changed through the ring |
+  | 200..1224 | the first branch: 64 type roots of 16 bytes, changed through the ring |
 
-- The state fields, in order: the tree's root page and height (1: the root
-  is a leaf); live keys; the bytes of their keys and values; pages carved;
+- The state fields, in order: two zeros; live keys; the bytes of their keys and values; pages carved;
   the free page list's head, tail and length; the block pages are carved
   from (its first page, its pages, pages carved from it); leaf, interior and
   overflow pages; two zeros. Leaf, interior, overflow and free pages add up
   to the pages carved.
+- The first branch: one slot per keyed block type, in the order each type
+  stored its first key: `block id u32 | height u32 | root page u64` (height
+  1: the root is a leaf). Used slots come first and hold distinct block
+  ids; unused slots are zero. A lookup takes its type's slot and searches
+  that type's tree; a type with no slot has no keys. A file holds at most
+  64 keyed block types.
 
 ### Blocks And Pages
 
@@ -484,10 +490,10 @@ and `keyed_offset_chain`.
 
 ### The Tree (`VKLF`, `VKIN`)
 
-- A tree key is the block id (big-endian `u32`) then the record's declared
-  key fields, encoded big-endian whatever the format's endian. Byte order is
-  (block, key) order for unsigned key fields, so keys put in increasing
-  order fill pages in order. A signed key field orders negative values
+- A tree key is the record's declared key fields, encoded big-endian
+  whatever the format's endian; the block type is the first branch, not
+  part of the key. Byte order is key order for unsigned key fields, so keys
+  put in increasing order fill pages in order. A signed key field orders negative values
   after positive ones.
 - A record's value is the block encoded without its key fields (a fixed
   block: the other fields in order; a variable block: the other fields

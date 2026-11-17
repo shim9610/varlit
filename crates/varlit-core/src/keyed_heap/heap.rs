@@ -33,9 +33,9 @@ use super::node;
 use super::nodes::{HeapView, Nodes};
 use super::tree::{self, Body, KeyLoc, KeySrc, Path};
 use super::{
-    FIRST_BLOCK_PAGES, Fixed, MAX_BUDGET, META_FIXED_LEN, META_LEN, META_OVERFLOW_HEAD_AT,
-    META_STATE_AT, MIN_BUDGET, NEW_BLOCK_PAGES, NO_PAGE, PAGE_BYTES, RESERVED_BLOCK, State,
-    corrupt,
+    FIRST_BLOCK_PAGES, Fixed, MAX_BUDGET, MAX_TYPES, META_FIXED_LEN, META_LEN,
+    META_OVERFLOW_HEAD_AT, META_ROOTS_AT, META_STATE_AT, MIN_BUDGET, NEW_BLOCK_PAGES, NO_PAGE,
+    PAGE_BYTES, RESERVED_BLOCK, Roots, State, TypeRoot, corrupt,
 };
 use crate::matrix_tiles::RecordKind;
 use crate::matrix_tiles::ring_store::RingStore;
@@ -92,6 +92,11 @@ pub(crate) struct KeyedHeap {
     state: State,
     /// The state as the last publication staged it.
     staged: State,
+    /// The first branch: a root per block type, and as last staged.
+    roots: Roots,
+    staged_roots: Roots,
+    /// The slot of the type the open put or delete changes.
+    slot: usize,
     nodes: Nodes,
     tuning: Tuning,
     /// Bytes the open round changed, against the change budget.
@@ -104,8 +109,9 @@ pub(crate) struct KeyedHeap {
 }
 
 impl KeyedHeap {
-    /// Lays out empty keyed storage: the metadata record, a ring of
-    /// `ring_len` bytes and an empty leaf as the root, published.
+    /// Lays out empty keyed storage: the metadata record and a ring of
+    /// `ring_len` bytes, published. A block type gets its tree when it
+    /// stores its first key.
     pub(crate) fn create(
         store: &mut dyn TileStore,
         ring_len: u64,
@@ -133,8 +139,9 @@ impl KeyedHeap {
         fixed.ring = (ring.ring.base, ring.ring.len);
         store.write_at(meta, &fixed.encode())?;
         let mut heap = Self::with_parts(meta, fixed, ring, State::default(), tuning)?;
-        let (root, _) = heap.new_node(store, node::Kind::Leaf, &[])?;
-        heap.state.root = (root, 1);
+        heap.staged_roots = Roots::default();
+        heap.ring
+            .stage(store, meta + META_STATE_AT, &heap.state.encode())?;
         heap.publish(store)?;
         Ok(heap)
     }
@@ -148,8 +155,13 @@ impl KeyedHeap {
         let mut raw = [0u8; State::FIELDS * 8];
         ring.read(store, meta + META_STATE_AT, &mut raw)?;
         let state = State::decode(&raw)?;
+        let mut raw = [0u8; crate::width::small(super::META_ROOTS_LEN)];
+        ring.read(store, meta + META_ROOTS_AT, &mut raw)?;
+        let roots = Roots::decode(&raw)?;
         let mut heap = Self::with_parts(meta, fixed, ring, state, tuning)?;
         heap.staged = state;
+        heap.roots = roots;
+        heap.staged_roots = roots;
         // What generations before the last publication freed may be taken
         // once no reader keeps one.
         heap.raise(store)?;
@@ -169,6 +181,9 @@ impl KeyedHeap {
             ring,
             state,
             staged: State::default(),
+            roots: Roots::default(),
+            staged_roots: Roots::default(),
+            slot: 0,
             nodes: Nodes::new()?,
             tuning,
             round_bytes: 0,
@@ -184,7 +199,58 @@ impl KeyedHeap {
 
     /// Whether anything changed since the last publication.
     pub(crate) fn is_dirty(&self) -> bool {
-        self.ring.is_dirty() || self.nodes.is_dirty() || self.state != self.staged
+        self.ring.is_dirty()
+            || self.nodes.is_dirty()
+            || self.state != self.staged
+            || self.roots != self.staged_roots
+    }
+
+    /// The root of the type the open change is on.
+    fn root(&self) -> (u64, u64) {
+        self.roots.slots[self.slot].root()
+    }
+
+    fn set_root(&mut self, (page, height): (u64, u64)) -> Result<()> {
+        let slot = &mut self.roots.slots[self.slot];
+        slot.page = page;
+        slot.height = u32::try_from(height).map_err(|_| corrupt("keyed tree height"))?;
+        Ok(())
+    }
+
+    /// Makes `block_id`'s tree the one changes go to; a type storing its
+    /// first key gets the next slot and an empty leaf as its root.
+    fn enter(&mut self, store: &mut dyn TileStore, block_id: u32, create: bool) -> Result<bool> {
+        if let Some(slot) = self.roots.find(block_id) {
+            self.slot = slot;
+            return Ok(true);
+        }
+        if !create {
+            return Ok(false);
+        }
+        let slot = self.roots.used();
+        if slot == MAX_TYPES {
+            return Err(Error::LimitExceeded {
+                resource: "keyed block types",
+                actual: MAX_TYPES as u64 + 1,
+                limit: MAX_TYPES as u64,
+            });
+        }
+        let (page, _) = self.new_node(store, node::Kind::Leaf, &[])?;
+        self.roots.slots[slot] = TypeRoot {
+            block_id,
+            height: 1,
+            page,
+        };
+        self.slot = slot;
+        Ok(true)
+    }
+
+    /// The height of `block_id`'s tree, when it has one.
+    #[cfg(test)]
+    pub(crate) fn height(&self, block_id: u32) -> Option<u64> {
+        self.roots
+            .find(block_id)
+            .map(|slot| self.roots.slots[slot].root().1)
     }
 
     pub(crate) fn publish(&mut self, store: &mut dyn TileStore) -> Result<u64> {
@@ -193,6 +259,11 @@ impl KeyedHeap {
             self.ring
                 .stage(store, self.meta + META_STATE_AT, &self.state.encode())?;
             self.staged = self.state;
+        }
+        if self.roots != self.staged_roots {
+            self.ring
+                .stage(store, self.meta + META_ROOTS_AT, &self.roots.encode())?;
+            self.staged_roots = self.roots;
         }
         let generation = self.ring.publish(store)?;
         self.round_bytes = 0;
@@ -275,11 +346,14 @@ impl KeyedHeap {
         block_id: u32,
         key: &[u8],
     ) -> Result<Option<Found>> {
+        let Some(slot) = self.roots.find(block_id) else {
+            return Ok(None);
+        };
         let mut page = [0u8; PAGE];
         let mut view = self.view();
         let mut ctx = self.ctx(&mut view, store);
-        let key = KeySrc::Parts(block_id.to_be_bytes(), key);
-        let (_, body) = tree::find(&mut ctx, self.state.root, &key, &mut page)?;
+        let key = KeySrc::Parts(key);
+        let (_, body) = tree::find(&mut ctx, self.roots.slots[slot].root(), &key, &mut page)?;
         Ok(body.map(|body| Found { body }))
     }
 
@@ -309,9 +383,9 @@ impl KeyedHeap {
         store: &mut dyn TileStore,
         key: &KeySrc<'_>,
     ) -> Result<(Path, Option<Body>)> {
-        let height = crate::width::index(self.state.root.1)?;
+        let (mut at, height) = self.root();
+        let height = crate::width::index(height)?;
         let mut path = Path::new(height);
-        let mut at = self.state.root.0;
         for level in (0..height).rev() {
             let slot = self.nodes.load(&mut self.ring, store, at, &[])?;
             let mut view = self.view();
@@ -339,11 +413,11 @@ impl KeyedHeap {
         if block_id == RESERVED_BLOCK {
             return Err(corrupt("reserved keyed block id"));
         }
-        let block = block_id.to_be_bytes();
-        let key_len = 4 + key.len() as u64;
+        self.enter(store, block_id, true)?;
+        let key_len = key.len() as u64;
         let value_len = payload.len() as u64;
         let total = key_len + value_len;
-        let (path, old) = self.find_path(store, &KeySrc::Parts(block, key))?;
+        let (path, old) = self.find_path(store, &KeySrc::Parts(key))?;
         if let Some(old) = old {
             if old.overflowed() {
                 self.free_chain(store, old.key.overflow)?;
@@ -353,7 +427,7 @@ impl KeyedHeap {
             self.state.keys += 1;
         }
         self.state.record_bytes += total;
-        let record = RecSrc::Record(block, key, payload);
+        let record = RecSrc::Record(key, payload);
         let local = tree::local_len(total);
         let mut cell = [0u8; CELL_MAX];
         let mut at = 1;
@@ -380,7 +454,10 @@ impl KeyedHeap {
         block_id: u32,
         key: &[u8],
     ) -> Result<bool> {
-        let (path, old) = self.find_path(store, &KeySrc::Parts(block_id.to_be_bytes(), key))?;
+        if !self.enter(store, block_id, false)? {
+            return Ok(false);
+        }
+        let (path, old) = self.find_path(store, &KeySrc::Parts(key))?;
         let Some(old) = old else {
             return Ok(false);
         };
@@ -414,14 +491,14 @@ impl KeyedHeap {
         buf: &mut [u8],
     ) -> Result<()> {
         match src {
-            RecSrc::Record(block, key, payload) => {
-                let key_len = 4 + key.len() as u64;
+            RecSrc::Record(key, payload) => {
+                let key_len = key.len() as u64;
                 let mut done = 0usize;
                 if at < key_len {
                     let n = crate::width::bounded(key_len - at, buf.len());
                     let mut view = self.view();
                     let mut ctx = self.ctx(&mut view, store);
-                    KeySrc::Parts(*block, key).read(&mut ctx, at, &mut buf[..n])?;
+                    KeySrc::Parts(key).read(&mut ctx, at, &mut buf[..n])?;
                     done = n;
                 }
                 if done < buf.len() {
@@ -793,12 +870,13 @@ impl KeyedHeap {
             }
             let (root, slot) = self.new_node(store, node::Kind::Interior, &[])?;
             let mut first = [0u8; 10];
-            first[..8].copy_from_slice(&self.state.root.0.to_le_bytes());
+            first[..8].copy_from_slice(&self.root().0.to_le_bytes());
             let (page, scratch) = self.nodes.with_scratch(slot);
             if !(node::insert(page, 0, &first, scratch) && node::insert(page, 1, cell, scratch)) {
                 return Err(corrupt("keyed tree root"));
             }
-            self.state.root = (root, self.state.root.1 + 1);
+            let height = self.root().1 + 1;
+            self.set_root((root, height))?;
             return Ok(());
         }
         let slot = self
@@ -956,15 +1034,15 @@ impl KeyedHeap {
 
     /// Replaces a root with one child by that child, while there is one.
     fn collapse_root(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        while self.state.root.1 > 1 {
-            let root = self.state.root.0;
+        while self.root().1 > 1 {
+            let (root, height) = self.root();
             let slot = self.nodes.load(&mut self.ring, store, root, &[])?;
             if node::count(self.nodes.page(slot)) != 1 {
                 return Ok(());
             }
             let child = self.interior_cell(slot, 0)?.child;
             self.free_node(store, root, node::Kind::Interior)?;
-            self.state.root = (child, self.state.root.1 - 1);
+            self.set_root((child, height - 1))?;
         }
         Ok(())
     }
@@ -1085,9 +1163,13 @@ impl KeyedHeap {
             }
             Ok(pages)
         };
-        let height = usize::try_from(self.state.root.1).map_err(|e| e.to_string())?;
-        let mut stack: Vec<(u64, usize, Bound, Bound)> =
-            vec![(self.state.root.0, height - 1, None, None)];
+        let mut stack: Vec<(u64, usize, Bound, Bound)> = Vec::new();
+        let mut roots = Vec::new();
+        for slot in &self.roots.slots[..self.roots.used()] {
+            let height = usize::try_from(slot.height).map_err(|e| e.to_string())?;
+            stack.push((slot.page, height - 1, None, None));
+            roots.push(slot.page);
+        }
         while let Some((page, level, low, high)) = stack.pop() {
             if !seen.insert(page) {
                 return Err(format!("tree page {page} reached twice"));
@@ -1107,7 +1189,7 @@ impl KeyedHeap {
             } else {
                 leaves += 1;
                 keys += count as u64;
-                if count == 0 && page != self.state.root.0 {
+                if count == 0 && !roots.contains(&page) {
                     return Err(format!("leaf {page} is empty"));
                 }
             }
@@ -1225,8 +1307,8 @@ impl Default for SepBody {
 
 /// Where record bytes come from.
 enum RecSrc<'a> {
-    /// A record: the block id, the key, the value.
-    Record([u8; 4], &'a [u8], &'a [u8]),
+    /// A record: the key, then the value.
+    Record(&'a [u8], &'a [u8]),
     /// A key, as a separator's source.
     Key(KeySrc<'a>),
 }

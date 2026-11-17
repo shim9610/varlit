@@ -36,7 +36,7 @@ pub(crate) mod tree;
 use crate::{Error, Result};
 
 pub(crate) const META_MAGIC: &[u8; 4] = b"VKMT";
-pub(crate) const META_VERSION: u16 = 5;
+pub(crate) const META_VERSION: u16 = 6;
 /// The fixed, checksummed part of the metadata record.
 pub(crate) const META_FIXED_LEN: u64 = 64;
 /// Where the ring keeps its overflow list head: the first mutable field.
@@ -44,7 +44,14 @@ pub(crate) const META_OVERFLOW_HEAD_AT: u64 = META_FIXED_LEN;
 /// The mutable state, changed through the ring.
 pub(crate) const META_STATE_AT: u64 = META_OVERFLOW_HEAD_AT + 8;
 pub(crate) const META_STATE_LEN: u64 = State::FIELDS as u64 * 8;
-pub(crate) const META_LEN: u64 = META_STATE_AT + META_STATE_LEN;
+/// The first branch: one root per keyed block type, changed through the
+/// ring.
+pub(crate) const META_ROOTS_AT: u64 = META_STATE_AT + META_STATE_LEN;
+pub(crate) const META_ROOTS_LEN: u64 = MAX_TYPES as u64 * ROOT_BYTES as u64;
+pub(crate) const META_LEN: u64 = META_ROOTS_AT + META_ROOTS_LEN;
+/// Keyed block types one file holds, and the bytes of each one's root.
+pub(crate) const MAX_TYPES: usize = 64;
+const ROOT_BYTES: usize = 16;
 
 /// Every page of keyed storage: tree, overflow and free pages.
 pub(crate) const PAGE_BYTES: u64 = node::NODE_BYTES as u64;
@@ -123,8 +130,6 @@ impl Fixed {
 /// The mutable state in the metadata record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct State {
-    /// The tree's root page and height (1: the root is a leaf).
-    pub root: (u64, u64),
     /// Live keys, and the bytes of their keys and values.
     pub keys: u64,
     pub record_bytes: u64,
@@ -150,8 +155,8 @@ impl State {
 
     const fn fields(&self) -> [u64; Self::FIELDS] {
         [
-            self.root.0,
-            self.root.1,
+            0,
+            0,
             self.keys,
             self.record_bytes,
             self.pages,
@@ -182,7 +187,6 @@ impl State {
             u64::from_le_bytes(bytes[index * 8..index * 8 + 8].try_into().expect("eight"))
         };
         let state = Self {
-            root: (word(0), word(1)),
             keys: word(2),
             record_bytes: word(3),
             pages: word(4),
@@ -196,12 +200,10 @@ impl State {
             interiors: word(12),
             overflow: word(13),
         };
-        if state.root.0 == NO_PAGE
-            || state.root.1 == 0
-            || state.root.1 > tree::MAX_HEIGHT as u64
+        if word(0) != 0
+            || word(1) != 0
             || state.block_used > state.block_pages
             || state.block_pages > MAX_BLOCK_PAGES
-            || state.leaves == 0
             || state.leaves + state.interiors + state.overflow + state.free != state.pages
             || (state.free == 0) != (state.free_head == NO_PAGE)
             || word(14) != 0
@@ -210,6 +212,97 @@ impl State {
             return Err(corrupt("keyed storage state"));
         }
         Ok(state)
+    }
+}
+
+/// One keyed block type's tree: its block id, root page and height
+/// (1: the root is a leaf). An unused slot is all zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TypeRoot {
+    pub block_id: u32,
+    pub height: u32,
+    pub page: u64,
+}
+
+impl TypeRoot {
+    pub(crate) const fn root(&self) -> (u64, u64) {
+        (self.page, self.height as u64)
+    }
+}
+
+/// The first branch of keyed storage: the slots of the block types, in the
+/// order each first stored a key. A key is stored without its block id;
+/// the slot says which type's tree holds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Roots {
+    pub slots: [TypeRoot; MAX_TYPES],
+}
+
+impl Default for Roots {
+    fn default() -> Self {
+        Self {
+            slots: [TypeRoot::default(); MAX_TYPES],
+        }
+    }
+}
+
+impl Roots {
+    /// The slot of `block_id`, when it has stored a key.
+    pub(crate) fn find(&self, block_id: u32) -> Option<usize> {
+        self.slots
+            .iter()
+            .take_while(|slot| slot.height != 0)
+            .position(|slot| slot.block_id == block_id)
+    }
+
+    /// Slots in use: they come first.
+    pub(crate) fn used(&self) -> usize {
+        self.slots
+            .iter()
+            .take_while(|slot| slot.height != 0)
+            .count()
+    }
+
+    pub(crate) fn encode(&self) -> [u8; crate::width::small(META_ROOTS_LEN)] {
+        let mut out = [0u8; crate::width::small(META_ROOTS_LEN)];
+        for (slot, bytes) in self.slots.iter().zip(out.as_chunks_mut::<ROOT_BYTES>().0) {
+            bytes[0..4].copy_from_slice(&slot.block_id.to_le_bytes());
+            bytes[4..8].copy_from_slice(&slot.height.to_le_bytes());
+            bytes[8..16].copy_from_slice(&slot.page.to_le_bytes());
+        }
+        out
+    }
+
+    pub(crate) fn decode(bytes: &[u8; crate::width::small(META_ROOTS_LEN)]) -> Result<Self> {
+        let mut roots = Self::default();
+        for (slot, raw) in roots
+            .slots
+            .iter_mut()
+            .zip(bytes.as_chunks::<ROOT_BYTES>().0)
+        {
+            *slot = TypeRoot {
+                block_id: u32::from_le_bytes(raw[0..4].try_into().expect("four")),
+                height: u32::from_le_bytes(raw[4..8].try_into().expect("four")),
+                page: u64::from_le_bytes(raw[8..16].try_into().expect("eight")),
+            };
+        }
+        let used = roots.used();
+        for (index, slot) in roots.slots.iter().enumerate() {
+            let valid = if index < used {
+                slot.page != NO_PAGE
+                    && slot.height as usize <= tree::MAX_HEIGHT
+                    && slot.block_id != RESERVED_BLOCK
+                    && roots.slots[..index]
+                        .iter()
+                        .all(|other| other.block_id != slot.block_id)
+            } else {
+                *slot == TypeRoot::default()
+            };
+            if !valid {
+                return Err(corrupt("keyed storage roots"));
+            }
+        }
+        Ok(roots)
     }
 }
 

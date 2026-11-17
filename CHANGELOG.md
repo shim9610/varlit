@@ -66,9 +66,10 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   show a generation that used them (the writer raises the ring's mark,
   expiring older readers). Splits and merges keep pages at least half
   full; pages freed by mass deletes stay in the file for new keys.
-  Keys are encoded big-endian, so keys put in increasing order fill pages
-  in order, and a record stores its key fields once (in the key, not again
-  in the value). The keyed ring is 2 MiB and blocks grow to 1 MiB, so a
+  Each keyed block type has its own tree under a first branch held in the
+  metadata (up to 64 types), so keys carry no type id. Keys are encoded
+  big-endian, so keys put in increasing order fill pages in order, and a
+  record stores its key fields once (in the key, not again in the value). The keyed ring is 2 MiB and blocks grow to 1 MiB, so a
   file carries little space it does not use.
   Repeated updates no longer grow the file (the growth the security advisory
   describes). `KeyedStorage::with_change_budget` (64 MiB by default) bounds

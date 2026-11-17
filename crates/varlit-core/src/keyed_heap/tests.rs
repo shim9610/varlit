@@ -84,7 +84,7 @@ fn puts_deletes_and_reopens_match_a_model_across_splits() {
         check(&heap, &store, &model);
         consistent(&heap, &store, &format!("round {round}"));
     }
-    assert!(heap.state().root.1 >= 3, "{:?}", heap.state());
+    assert!(heap.height(1).unwrap() >= 3, "{:?}", heap.state());
 }
 
 /// Values of every length, around every boundary a cell and an overflow
@@ -162,7 +162,7 @@ fn long_keys_build_deep_trees() {
     }
     check(&heap, &store, &model);
     consistent(&heap, &store, "after the steps");
-    assert!(heap.state().root.1 >= 3, "{:?}", heap.state());
+    assert!(heap.height(1).unwrap() >= 3, "{:?}", heap.state());
 }
 
 /// Every key rewritten round after round, with values of new sizes: the
@@ -263,7 +263,8 @@ fn deletes_shrink_the_tree_and_new_keys_reuse_the_pages() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn a_crash_after_any_write_keeps_a_publication_whole() {
     let mut store = MemStore::new();
-    let mut heap = create(&mut store, BUDGET, SMALL_PAGES);
+    // A ring the second generation fits in: it must stay one publication.
+    let mut heap = KeyedHeap::create(&mut store, 8 << 20, 50, BUDGET, SMALL_PAGES).unwrap();
     let mut model = Model::new();
     for key in 0..300u64 {
         let bytes = value(50 + key as usize % 2000, key);
@@ -484,7 +485,6 @@ fn a_few_puts_and_deletes_match_a_model() {
 #[test]
 fn the_state_layout_is_the_same_bytes_on_every_platform() {
     let state = State {
-        root: (PAGE_BYTES, 1),
         keys: 3,
         pages: 2,
         leaves: 1,
@@ -540,4 +540,32 @@ fn profile_updates() {
         assert!(heap.find(&store, 1, &key.to_le_bytes()).unwrap().is_some());
     }
     eprintln!("20 000 lookups {:?}", t.elapsed());
+}
+
+/// Each block type has its own tree under the first branch: the same key
+/// bytes in two types are two records, and a file holds up to 64 types.
+#[test]
+fn block_types_have_their_own_trees() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
+    let types = super::MAX_TYPES as u32;
+    for block in 0..types {
+        heap.put(&mut store, block * 7, b"same key", &block.to_le_bytes())
+            .unwrap();
+    }
+    assert!(matches!(
+        heap.put(&mut store, types * 7, b"same key", b"x"),
+        Err(crate::Error::LimitExceeded { .. })
+    ));
+    heap.publish(&mut store).unwrap();
+    let heap = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
+    for block in 0..types {
+        assert_eq!(
+            get(&heap, &store, block * 7, b"same key").as_deref(),
+            Some(&block.to_le_bytes()[..])
+        );
+    }
+    assert_eq!(get(&heap, &store, 3, b"same key"), None);
+    assert_eq!(heap.state().keys, u64::from(types));
+    consistent(&heap, &store, "64 types");
 }

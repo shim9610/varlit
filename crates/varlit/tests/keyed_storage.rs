@@ -302,12 +302,12 @@ fn key_fields_are_stored_once_and_come_back_from_the_key() -> varlit::Result<()>
         }
     }
     writer.sync()?;
-    // A record is its key (block id, row, col: 10 bytes) and its value (the
-    // one field that is not a key field: 8 bytes), the key fields not
-    // repeated in the value.
+    // A record is its key (row, col: 6 bytes; the block type is the tree's
+    // first branch, not part of the key) and its value (the one field that
+    // is not a key field: 8 bytes), the key fields not repeated in the value.
     let stats = writer.inner().file().keyed_storage_stats()?;
     assert_eq!(stats.keys, 1000);
-    assert_eq!(stats.live_bytes, 1000 * (4 + 4 + 2 + 8));
+    assert_eq!(stats.live_bytes, 1000 * (4 + 2 + 8));
     drop(writer);
     let reader = Cells::open_reader(&path)?;
     let mut scratch = Vec::new();

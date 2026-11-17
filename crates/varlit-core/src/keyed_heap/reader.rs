@@ -6,7 +6,7 @@
 use super::lookup::{Ctx, View};
 use super::node::NODE_BYTES;
 use super::tree::{self, KeySrc};
-use super::{Fixed, META_FIXED_LEN, META_STATE_AT, State};
+use super::{Fixed, META_FIXED_LEN, META_ROOTS_AT, META_ROOTS_LEN, META_STATE_AT, Roots, State};
 use crate::matrix_tiles::store::TileSource;
 use crate::matrix_tiles::view::RingReader;
 use crate::{Error, Result};
@@ -15,6 +15,7 @@ pub(crate) struct KeyedReader {
     meta: u64,
     reader: RingReader,
     state: State,
+    roots: Roots,
 }
 
 impl KeyedReader {
@@ -28,6 +29,7 @@ impl KeyedReader {
             meta,
             reader: RingReader::open(source, fixed.ring)?,
             state: State::default(),
+            roots: Roots::default(),
         };
         reader.load_state(source)?;
         Ok(reader)
@@ -37,7 +39,12 @@ impl KeyedReader {
         let mut raw = [0u8; State::FIELDS * 8];
         self.reader
             .read(source, self.meta + META_STATE_AT, &mut raw)?;
-        self.state = State::decode(&raw)?;
+        let state = State::decode(&raw)?;
+        let mut raw = [0u8; crate::width::small(META_ROOTS_LEN)];
+        self.reader
+            .read(source, self.meta + META_ROOTS_AT, &mut raw)?;
+        self.roots = Roots::decode(&raw)?;
+        self.state = state;
         Ok(())
     }
 
@@ -83,7 +90,7 @@ impl KeyedReader {
             let result = attempt(
                 &mut view,
                 source,
-                &self.state,
+                &self.roots,
                 block_id,
                 buf,
                 key_at,
@@ -109,7 +116,7 @@ impl KeyedReader {
 fn attempt(
     view: &mut Unsettled<'_>,
     source: &dyn TileSource,
-    state: &State,
+    roots: &Roots,
     block_id: u32,
     buf: &mut Vec<u8>,
     key_at: usize,
@@ -120,10 +127,13 @@ fn attempt(
     let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
         "keyed lookup key starts past its buffer",
     ))?;
+    let Some(slot) = roots.find(block_id) else {
+        return Ok(false);
+    };
     let mut page = [0u8; NODE_BYTES];
     let mut ctx = Ctx::new(view, source);
-    let key = KeySrc::Parts(block_id.to_be_bytes(), key);
-    let (_, found) = tree::find(&mut ctx, state.root, &key, &mut page)?;
+    let key = KeySrc::Parts(key);
+    let (_, found) = tree::find(&mut ctx, roots.slots[slot].root(), &key, &mut page)?;
     let Some(body) = found else {
         return Ok(false);
     };

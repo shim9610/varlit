@@ -2,8 +2,8 @@
 //! the [`View`](super::lookup::View) its bytes come through differs. Each
 //! page of a path is read whole (4 KiB) and searched in memory.
 //!
-//! A key is the block id (big-endian) then the user's key bytes, so byte
-//! order is (block, key) order. A leaf cell holds a record (key then value):
+//! A key is the user's key bytes; each block type has its own tree. A
+//! leaf cell holds a record (key then value):
 //! whole when it is short, else its first bytes, the rest in a chain of
 //! overflow pages. An interior cell holds a child and a separator, whose
 //! bytes past [`SEP_LOCAL`] are in an overflow chain too.
@@ -57,11 +57,11 @@ pub(crate) struct KeyLoc {
     pub overflow: u64,
 }
 
-/// A key to compare: a block id and key bytes in memory, where a cell
+/// A key to compare: key bytes in memory, where a cell
 /// keeps it, or a cell held in memory.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum KeySrc<'a> {
-    Parts([u8; 4], &'a [u8]),
+    Parts(&'a [u8]),
     Loc(KeyLoc),
     Held {
         local: &'a [u8],
@@ -73,7 +73,7 @@ pub(crate) enum KeySrc<'a> {
 impl KeySrc<'_> {
     pub(crate) fn len(&self) -> u64 {
         match self {
-            Self::Parts(_, key) => 4 + key.len() as u64,
+            Self::Parts(key) => key.len() as u64,
             Self::Loc(loc) => loc.len,
             Self::Held { len, .. } => *len,
         }
@@ -85,19 +85,9 @@ impl KeySrc<'_> {
             return Err(corrupt("keyed key range"));
         }
         match self {
-            Self::Parts(block, key) => {
-                let mut done = 0usize;
-                if from < 4 {
-                    let start = crate::width::index(from)?;
-                    let n = (4 - start).min(buf.len());
-                    buf[..n].copy_from_slice(&block[start..start + n]);
-                    done = n;
-                }
-                if done < buf.len() {
-                    let start = crate::width::index(from + done as u64 - 4)?;
-                    let n = buf.len() - done;
-                    buf[done..].copy_from_slice(&key[start..start + n]);
-                }
+            Self::Parts(key) => {
+                let start = crate::width::index(from)?;
+                buf.copy_from_slice(&key[start..start + buf.len()]);
                 Ok(())
             }
             Self::Loc(loc) => read_record(ctx, loc.at, loc.local, loc.overflow, from, buf),
@@ -267,10 +257,7 @@ pub(crate) fn parse(cell: &[u8], at: u64, interior: bool) -> Result<Body> {
         local_len(total)
     };
     let overflowed = local < total;
-    if flags & !FLAG_OVERFLOW != 0
-        || (flags & FLAG_OVERFLOW != 0) != overflowed
-        || (!interior && key_len < 4)
-    {
+    if flags & !FLAG_OVERFLOW != 0 || (flags & FLAG_OVERFLOW != 0) != overflowed {
         return Err(bad());
     }
     let local_bytes = crate::width::index(local)?;

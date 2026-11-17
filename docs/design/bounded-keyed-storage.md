@@ -306,6 +306,11 @@ table, inside varlit blocks.
   (16 pages, then twice the last, up to 1 MiB). Freed pages go on a free
   list and are taken again once the ring's mark reaches the generation that
   freed them.
+- **The first branch is the block type.** The metadata holds one root per
+  keyed block type (up to 64), so a key is stored without its type: a
+  lookup goes to its type's tree, whose keys are the declared key fields
+  only (big-endian, so increasing keys fill pages in order). A record's
+  value leaves the key fields out; a read fills them from the key.
 - **Leaves hold the records.** A record of up to 1024 bytes is held whole
   in its cell; a longer one keeps its first bytes in the cell (sized so the
   rest fills whole overflow pages) and the rest in a chain of overflow
