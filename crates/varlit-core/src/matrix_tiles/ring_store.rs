@@ -554,6 +554,71 @@ impl RingStore {
         Ok(())
     }
 
+    /// Writes `bytes` at `target` straight to the file instead of through
+    /// the ring, when nothing the ring holds covers any of them: no range
+    /// staged since the last checkpoint (published or not) and no index.
+    /// Returns `false`, writing nothing, otherwise.
+    ///
+    /// Only for space the caller knows no generation from the mark on points
+    /// at, such as space freed by a generation the mark has reached. A
+    /// reader whose snapshot is older than the mark expires, and newer
+    /// snapshots do not point at the space, so no reader can see these bytes
+    /// before the publication that points at them; that publication makes
+    /// them durable before its commit frame, as it does appended records. A
+    /// recovery shows the last publication, which does not point at them
+    /// either.
+    pub(crate) fn write_unreferenced(
+        &mut self,
+        store: &mut dyn TileStore,
+        target: u64,
+        bytes: &[u8],
+    ) -> Result<bool> {
+        let len = bytes.len() as u64;
+        if !self.is_fresh(target, len) && self.covers(&*store, target, len)? {
+            return Ok(false);
+        }
+        store.write_at(target, bytes)?;
+        self.appended = true;
+        Ok(true)
+    }
+
+    /// Whether anything staged since the last checkpoint, in the ring or in
+    /// an index, published or not, covers any of `[target, target + len)`.
+    fn covers(&self, store: &dyn TileSource, target: u64, len: u64) -> Result<bool> {
+        let mut covered = false;
+        self.layers
+            .overlay
+            .for_each_overlapping(target, len, &mut |_, _| {
+                covered = true;
+                Ok(())
+            })?;
+        if covered {
+            return Ok(true);
+        }
+        let checkpointed = self.header.checkpointed;
+        let open = self.building.map(|b| (b.generation, b.root));
+        let indexes = self.layers.indexes().iter().copied();
+        let mut cache = self.cache()?;
+        for (generation, root) in indexes.filter(|(g, _)| *g > checkpointed).chain(open) {
+            index::for_each_overlapping(
+                &mut cache,
+                Io::Read(store),
+                generation,
+                root,
+                target,
+                len,
+                &mut |_, _, _| {
+                    covered = true;
+                    Ok(())
+                },
+            )?;
+            if covered {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Whether `[target, target + len)` lies inside a record appended, or
     /// space carved, since the last publication.
     fn is_fresh(&self, target: u64, len: u64) -> bool {

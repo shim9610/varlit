@@ -511,14 +511,23 @@ fn profile_updates() {
     heap.publish(&mut store).unwrap();
     let mut state = 3u64;
     let t = std::time::Instant::now();
+    let (mut puts, mut publishes) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
     for txn in 0..1000u64 {
+        let p = std::time::Instant::now();
         for _ in 0..20 {
             let key = random(&mut state) % 200_000;
             heap.put(&mut store, 1, &key.to_le_bytes(), &value(44, txn))
                 .unwrap();
         }
+        puts += p.elapsed();
+        let p = std::time::Instant::now();
         heap.publish(&mut store).unwrap();
+        publishes += p.elapsed();
     }
+    eprintln!(
+        "puts {puts:?} publishes {publishes:?} ring {:?}",
+        heap.ring.stats
+    );
     eprintln!(
         "1000 txns of 20 puts {:?}: {:?} {:?}",
         t.elapsed(),

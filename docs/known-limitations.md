@@ -78,21 +78,16 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
   implemented.
 - **Not with matrices.** A format cannot declare both keyed storage and
   matrix blocks yet: each keeps its metadata as the first record.
-- **Constant slack.** Beyond the live data a file holds one partial and one
-  spare 64 KiB page per size class in use, the ring (16 MiB by default), and
-  freed values not yet reused (at most about two change budgets and twice
-  the ratio, at least 1 MiB). These do not grow with updates, but they
-  dominate a small file.
-- **Readers expire more often.** To reuse freed space without putting the
+- **Pages are at least half full.** The B-tree splits a full page in half
+  and merges neighbours that fit one page, so leaves hold between half and
+  all of a page; values over 1 KiB fill overflow pages but the last.
+- **Readers expire more often.** To reuse freed pages without putting the
   ring in place, the writer raises the ring's mark to its last publication
-  once freed values wait past the ratio, and at the end of every round:
-  a reader older than that gets `MatrixSnapshotExpired` and must `follow`.
-- **Deletes leave pages in the file.** Pages a class gives up go to a pool
-  that other classes take from before the file grows; the file itself does
-  not shrink yet.
-- **Rounding to a class.** A record takes whole items of its size class: at
-  most a sixteenth more than it needs (16 bytes below 256 bytes), plus a
-  40-byte header per 64 KiB.
+  once freed pages wait past the ratio, and at the end of every round: a
+  reader older than that gets `MatrixSnapshotExpired` and must `follow`.
+- **Deletes leave pages in the file.** Freed pages wait in a free list that
+  new keys take from before the file grows; the file itself does not
+  shrink. Rebuild a file that shrank for good.
 - **Two barriers per publication with updates.** New values written straight
   to the file are made durable before the commit frame, so a `sync` that
   wrote any costs two barriers instead of one, and every few publications a
@@ -100,11 +95,6 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
 - **Records larger than the change budget** are written in one round for
   now; the streamed replacement and the `Refuse` policy are not implemented
   yet ([design](design/bounded-keyed-storage.md#bounds-at-the-extremes)).
-- **The file does not shrink.** After deletes, emptied pages wait in a pool
-  for new records of any class; returning them to the file system is
-  designed separately.
-- **Buckets do not merge.** Deleting keys leaves the bucket table at the
-  size the most keys needed.
 
 ## Native scans and temporary storage
 

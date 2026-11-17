@@ -45,9 +45,9 @@ use crate::{Error, Result};
 const PAGE: usize = node::NODE_BYTES;
 /// The most a leaf cell takes: flags, two lengths, the local bytes and an
 /// overflow page.
-const CELL_MAX: usize = 1 + 10 + 10 + tree::MAX_LOCAL as usize + 8;
+const CELL_MAX: usize = 1 + 10 + 10 + crate::width::small(tree::MAX_LOCAL) + 8;
 /// The most a separator takes (without its child).
-const SEP_MAX: usize = 1 + 10 + tree::SEP_LOCAL as usize + 8;
+const SEP_MAX: usize = 1 + 10 + crate::width::small(tree::SEP_LOCAL) + 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeapStats {
@@ -438,15 +438,15 @@ impl KeyedHeap {
         from: u64,
         to: u64,
     ) -> Result<u64> {
-        let head = self.alloc_page(store, Use::Overflow)?;
+        let (head, mut in_place) = self.alloc_page_placed(store, Use::Overflow)?;
         let mut page_at = head;
         let mut at = from;
         loop {
             let n = (to - at).min(tree::OVERFLOW_DATA);
-            let next = if at + n < to {
-                self.alloc_page(store, Use::Overflow)?
+            let (next, next_in_place) = if at + n < to {
+                self.alloc_page_placed(store, Use::Overflow)?
             } else {
-                NO_PAGE
+                (NO_PAGE, false)
             };
             let mut page = [0u8; PAGE];
             page[16..20].copy_from_slice(tree::OVERFLOW_MAGIC);
@@ -460,12 +460,24 @@ impl KeyedHeap {
                 at,
                 &mut page[tree::OVERFLOW_AT..tree::OVERFLOW_AT + bytes],
             )?;
-            self.ring.stage(store, page_at, &page)?;
+            // A page carved, or freed by a generation in place, is one no
+            // generation from the mark on uses and nothing staged covers
+            // past its link: its bytes past the link go straight to the
+            // file. The link, which the published free list may still
+            // follow, is left as it is.
+            if !(in_place
+                && self
+                    .ring
+                    .write_unreferenced(store, page_at + 16, &page[16..])?)
+            {
+                self.ring.stage(store, page_at, &page)?;
+            }
             at += n;
             if next == NO_PAGE {
                 return Ok(head);
             }
             page_at = next;
+            in_place = next_in_place;
         }
     }
 
@@ -492,19 +504,26 @@ impl KeyedHeap {
     /// the mark has reached the generation that freed it, else one carved
     /// from the last block, else from a new block.
     fn alloc_page(&mut self, store: &mut dyn TileStore, use_: Use) -> Result<u64> {
-        let page = match self.take_free(store)? {
-            Some(page) => page,
-            None => self.carve(store)?,
+        Ok(self.alloc_page_placed(store, use_)?.0)
+    }
+
+    /// [`Self::alloc_page`], and whether the page's bytes past its link may
+    /// be written in place: it was carved, or freed by a generation already
+    /// in place (so nothing the ring holds covers it but links).
+    fn alloc_page_placed(&mut self, store: &mut dyn TileStore, use_: Use) -> Result<(u64, bool)> {
+        let (page, in_place) = match self.take_free(store)? {
+            Some((page, freed_by)) => (page, freed_by <= self.ring.checkpointed()),
+            None => (self.carve(store)?, true),
         };
         match use_ {
             Use::Leaf => self.state.leaves += 1,
             Use::Interior => self.state.interiors += 1,
             Use::Overflow => self.state.overflow += 1,
         }
-        Ok(page)
+        Ok((page, in_place))
     }
 
-    fn take_free(&mut self, store: &mut dyn TileStore) -> Result<Option<u64>> {
+    fn take_free(&mut self, store: &mut dyn TileStore) -> Result<Option<(u64, u64)>> {
         let head = self.state.free_head;
         if head == NO_PAGE {
             return Ok(None);
@@ -528,7 +547,7 @@ impl KeyedHeap {
         }
         self.state.free -= 1;
         self.stats.pages_reused += 1;
-        Ok(Some(head))
+        Ok(Some((head, freed_by)))
     }
 
     /// A page carved from the last block, or from a new one.

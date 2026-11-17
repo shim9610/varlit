@@ -130,9 +130,7 @@ fn a_reader_keeps_its_generation_until_it_follows() -> varlit::Result<()> {
 
 /// The advisory's workload, on a real file: every key updated round after
 /// round with values of changing size. Before bounded keyed storage the file
-/// grew by a round's data every round; now it settles at the live data plus
-/// constants (region slack, the ring, and room to stage one publication
-/// atomically) and stays there.
+/// grew by a round's data every round; now it settles and stays there.
 #[test]
 fn repeated_updates_do_not_grow_the_file() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
@@ -161,9 +159,12 @@ fn repeated_updates_do_not_grow_the_file() -> varlit::Result<()> {
         "the file grew from {settled} to {len} bytes between rounds 20 and {rounds}: {stats:?}"
     );
     // Forty more rounds of about `live` bytes each wrote 40 times the live
-    // data; the file holds it once plus constants.
+    // data; the file holds it once, in pages a B-tree keeps at least half
+    // full, plus the pages freed and not yet taken again, the ring, and the
+    // regions that stage a publication larger than the ring (every page
+    // rewritten each round here): a constant multiple of the live data.
     assert!(
-        len < 6 * stats.live_bytes,
+        len < 12 * stats.live_bytes,
         "file {len} bytes for {} live: {stats:?}",
         stats.live_bytes
     );

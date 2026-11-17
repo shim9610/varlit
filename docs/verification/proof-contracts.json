@@ -431,20 +431,16 @@
         "keyed_heap::heap_proofs::the_entry_search_finds_the_insertion_point",
         "keyed_heap::heap_proofs::a_separator_lies_between_its_keys",
         "keyed_heap::heap_proofs::varints_round_trip",
-        "keyed_heap::heap_proofs::an_item_goes_to_the_smallest_class_that_holds_it",
-        "keyed_heap::heap_proofs::a_record_splits_into_items_that_hold_it",
-        "keyed_heap::heap_proofs::item_references_round_trip",
-        "keyed_heap::heap_proofs::layouts_round_trip",
-        "keyed_heap::heap_proofs::class_entries_round_trip"
+        "keyed_heap::heap_proofs::a_cell_keeps_what_fits_and_the_rest_fills_overflow_pages"
       ],
       "sources": [
         "crates/varlit-core/src/verification/keyed_heap.rs",
-        "crates/varlit-core/src/keyed_heap/mod.rs",
         "crates/varlit-core/src/keyed_heap/node.rs",
+        "crates/varlit-core/src/keyed_heap/tree.rs",
         "crates/varlit-core/src/keyed_heap/heap.rs"
       ],
-      "scope": "the binary search over every sorted entry array of up to eight entries and every target; the separator between every pair of keys of up to four bytes; varints for every u64; size classes for every item length up to 64 KiB; chain shapes for every record length below 2^24; item references for every class and 56-bit index; item header and class entry layouts for arbitrary fields",
-      "limits": "Pure arithmetic and layouts. Tree pages (insertion, removal, repacking), splits, packing, separators of streamed keys, item placement, the freed item log, filling and shrinking classes, crash atomicity and reader snapshots go through the write-ahead ring and are covered by native tests (keyed_heap::node::tests: a page against a list model; keyed_heap::tests: a model over splits, deletes and reopens on deep trees of small pages, random histories with every structure checked, every crash prefix of a generation and of its publication, the idle-space and leaf free-space bounds over the data held now under bulk, scattered and class-changing rewrites and mass deletes, reader expiry) and the keyed_storage integration and fuzz targets, not proofs.",
+      "scope": "the binary search over every sorted entry array of up to eight entries and every target; the separator between every pair of keys of up to four bytes; varints for every u64; how much of every record below 2^48 bytes a leaf cell keeps, and that the rest fills whole overflow pages",
+      "limits": "Pure arithmetic. Tree pages (insertion, removal, repacking), splits, merges, separators of streamed keys, overflow chains, the free page list and blocks, crash atomicity and reader snapshots go through the write-ahead ring and are covered by native tests (keyed_heap::node::tests: a page against a list model; keyed_heap::tests: a model over splits, deletes and reopens on deep trees of small pages, keys and values of every length around every cell and overflow boundary, random histories with every structure checked, every crash prefix of a generation and of its publication, pages reused after deletes and rewrites, reader expiry) and the keyed_storage integration and fuzz targets, not proofs.",
       "specification": {
         "requires": "level < 32 and split < 2^level; item lengths 1 to 64 KiB; record lengths below 2^24; class below the class count and index below 2^56; class entries with directory heights up to 8, zero exactly when their page is zero, and holes no more than the end.",
         "ensures": "A key routes to a bucket below 2^level + split. After a split the table has one more bucket, a key outside the split bucket keeps its bucket, and a key of the split bucket goes to split + 2^level exactly when its routing bit `level` is set, which is the test heap::split applies to each slot. An item goes to the smallest class that holds it, which is at most a sixteenth (or 15 bytes) larger. A record splits into full 64 KiB items and one item whose class holds the rest and a header, and chain_bytes is their total. Item references, slots, item headers and class entries decode to what was encoded.",

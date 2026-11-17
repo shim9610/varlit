@@ -293,7 +293,40 @@ before the file grows; returning them to the filesystem is the end-of-file
 work. The ring and the bucket and directory pages the live keys need come on
 top.
 
-## Sorted pages: an index that holds only page boundaries
+## The B-tree of 4 KiB pages (version 5)
+
+This replaces both earlier tree attempts below (64 KiB pages with values in
+size-class chains, then leaves of key prefixes). Measurements showed what
+mattered: lookups read whole 64 KiB pages per level, and every value lived
+outside its leaf, so a lookup and an update each touched far more bytes
+than the record. Keyed storage is now laid out the way SQLite lays out a
+table, inside varlit blocks.
+
+- **Pages.** 4 KiB, carved from blocks the writer appends as it needs them
+  (16 pages, then twice the last, up to 16 MiB). Freed pages go on a free
+  list and are taken again once the ring's mark reaches the generation that
+  freed them.
+- **Leaves hold the records.** A record of up to 1024 bytes is held whole
+  in its cell; a longer one keeps its first bytes in the cell (sized so the
+  rest fills whole overflow pages) and the rest in a chain of overflow
+  pages. A lookup reads one page per level, and the leaf usually has the
+  value.
+- **Interior pages hold separators**: the shortest prefix between two
+  neighbouring keys, at most 256 bytes in the page, the rest in overflow
+  pages. A tree of 4 KiB pages holds a few hundred entries per interior
+  page: four levels reach billions of keys.
+- **Changes go through the ring**: a changed page is staged whole, so a
+  publication is atomic. Overflow pages no generation uses yet are written
+  in place.
+- **Space.** Pages are kept at least half full (splits halve a page;
+  merges join neighbours that fit one page), and freed pages are reused
+  before the file grows. The strict free-space ratio of the earlier designs
+  is given up: it cost about `1/ratio` bytes of repacking per byte freed.
+  Deleting most keys leaves their pages in the free list for new keys; a
+  file that shrank for good is rebuilt, which also returns the space to the
+  file system.
+
+## Superseded: sorted pages with key prefixes (version 4)
 
 The slot buckets above keep one 16-byte slot per key: the index grows with
 the number of keys, and the pages a table gives up when keys are deleted

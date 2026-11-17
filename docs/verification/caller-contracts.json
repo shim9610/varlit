@@ -2714,114 +2714,93 @@
     },
     "keyed-heap": {
       "symbols": [
-        "class_of",
-        "chain_shape",
         "search_entries",
         "read_varint",
-        "write_varint"
+        "write_varint",
+        "local_len"
       ],
       "result_policy": {},
       "callers": {
         "default": [
           {
-            "caller": "chain_bytes(_1: u64) -> u64 [CTFE] [body:93b5c02516d98290]",
-            "target": "chain_shape",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:4b3c94fd4ced264b]",
+            "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "chain_bytes(_1: u64) -> u64 [body:2832452163571bda]",
-            "target": "chain_shape",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "class_of_fitting(_1: u64) -> usize [CTFE] [body:d98096de5ea26958]",
-            "target": "class_of",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "class_of_fitting(_1: u64) -> usize [body:2b3e9e5975521449]",
-            "target": "class_of",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9100e1597f70f866]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:4b3c94fd4ced264b]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::separator(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: &KeySrc<'_>, _4: &KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:cab585ce84de772d]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:4b3c94fd4ced264b]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_chain(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: bool, _6: &RecSrc<'_>) -> std::result::Result<u64, error::Error> [body:442c48e28433b062]",
-            "target": "chain_shape",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::separator(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: &KeySrc<'_>, _4: &KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:03170e78e8190d67]",
+            "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: usize, _4: bool) -> std::result::Result<Body, error::Error> [body:cac9b4206b9f561c]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:f8a2175139b57187]",
+            "target": "local_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:f8a2175139b57187]",
+            "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:f8a2175139b57187]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
             "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:d94ca0072803b707]",
-            "target": "search_entries",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "search_page(_1: &mut Ctx<'_>, _2: u64, _3: usize, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:6561121c5f7a1bc6]",
             "target": "search_entries",
             "result": "model/caller-specific"
           }
         ],
         "all": [
           {
-            "caller": "chain_bytes(_1: u64) -> u64 [CTFE] [body:93b5c02516d98290]",
-            "target": "chain_shape",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:4b3c94fd4ced264b]",
+            "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "chain_bytes(_1: u64) -> u64 [body:2832452163571bda]",
-            "target": "chain_shape",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "class_of_fitting(_1: u64) -> usize [CTFE] [body:d98096de5ea26958]",
-            "target": "class_of",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "class_of_fitting(_1: u64) -> usize [body:2b3e9e5975521449]",
-            "target": "class_of",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9100e1597f70f866]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:4b3c94fd4ced264b]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::separator(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: &KeySrc<'_>, _4: &KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:cab585ce84de772d]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:4b3c94fd4ced264b]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_chain(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: bool, _6: &RecSrc<'_>) -> std::result::Result<u64, error::Error> [body:442c48e28433b062]",
-            "target": "chain_shape",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::separator(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: &KeySrc<'_>, _4: &KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:03170e78e8190d67]",
+            "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: usize, _4: bool) -> std::result::Result<Body, error::Error> [body:cac9b4206b9f561c]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:f8a2175139b57187]",
+            "target": "local_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:f8a2175139b57187]",
+            "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:f8a2175139b57187]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
             "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:d94ca0072803b707]",
-            "target": "search_entries",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "search_page(_1: &mut Ctx<'_>, _2: u64, _3: usize, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:6561121c5f7a1bc6]",
             "target": "search_entries",
             "result": "model/caller-specific"
           }
@@ -2831,11 +2810,7 @@
         "keyed_heap::heap_proofs::the_entry_search_finds_the_insertion_point",
         "keyed_heap::heap_proofs::a_separator_lies_between_its_keys",
         "keyed_heap::heap_proofs::varints_round_trip",
-        "keyed_heap::heap_proofs::an_item_goes_to_the_smallest_class_that_holds_it",
-        "keyed_heap::heap_proofs::a_record_splits_into_items_that_hold_it",
-        "keyed_heap::heap_proofs::item_references_round_trip",
-        "keyed_heap::heap_proofs::layouts_round_trip",
-        "keyed_heap::heap_proofs::class_entries_round_trip"
+        "keyed_heap::heap_proofs::a_cell_keeps_what_fits_and_the_rest_fills_overflow_pages"
       ]
     }
   },
