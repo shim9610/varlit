@@ -15,6 +15,8 @@ use crate::{Error, Result};
 
 /// Page buffers.
 pub(crate) const SLOTS: usize = 64;
+const HINTS: usize = 256;
+const _: () = assert!(SLOTS <= u8::MAX as usize + 1);
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Tag {
@@ -31,6 +33,9 @@ pub(crate) struct Nodes {
     bytes: Box<[u8]>,
     scratch: Box<[u8]>,
     tags: [Tag; SLOTS],
+    /// The buffer a page was last found in, by a hash of its offset: a
+    /// guess `slot_of` checks before searching every buffer.
+    hint: [u8; HINTS],
     clock: u64,
     /// Page bytes written back since [`Self::take_written`] last ran.
     written: u64,
@@ -53,6 +58,7 @@ impl Nodes {
             bytes: buffer(SLOTS * NODE_BYTES)?,
             scratch: buffer(NODE_BYTES)?,
             tags: [Tag::default(); SLOTS],
+            hint: [0; HINTS],
             clock: 0,
             written: 0,
         })
@@ -62,8 +68,22 @@ impl Nodes {
         slot * NODE_BYTES..(slot + 1) * NODE_BYTES
     }
 
-    fn slot_of(&self, at: u64) -> Option<usize> {
-        self.tags.iter().position(|tag| tag.at == at && at != 0)
+    fn hint_of(at: u64) -> usize {
+        ((at / NODE_BYTES as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 56) as usize % HINTS
+    }
+
+    fn slot_of(&mut self, at: u64) -> Option<usize> {
+        if at == 0 {
+            return None;
+        }
+        let hint = Self::hint_of(at);
+        let guess = usize::from(self.hint[hint]);
+        if self.tags[guess].at == at {
+            return Some(guess);
+        }
+        let slot = self.tags.iter().position(|tag| tag.at == at)?;
+        self.hint[hint] = u8::try_from(slot).unwrap_or(0);
+        Some(slot)
     }
 
     fn slot_containing(&self, offset: u64) -> Option<usize> {
@@ -113,6 +133,7 @@ impl Nodes {
             .min_by_key(|&slot| (self.tags[slot].at != 0, self.tags[slot].used))
             .ok_or(Error::InvalidCanonicalEncoding("keyed tree page buffers"))?;
         self.write_back(ring, store, slot)?;
+        self.hint[Self::hint_of(at)] = u8::try_from(slot).unwrap_or(0);
         self.tags[slot] = Tag {
             at,
             dirty: false,

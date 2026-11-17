@@ -109,8 +109,22 @@ impl KeySrc<'_> {
     }
 }
 
+impl<'a> KeySrc<'a> {
+    /// The whole key, when it is all in memory.
+    fn whole(&self) -> Option<&'a [u8]> {
+        match *self {
+            Self::Parts(key) => Some(key),
+            Self::Held { local, len, .. } => local.get(..crate::width::index(len).ok()?),
+            Self::Loc(_) => None,
+        }
+    }
+}
+
 /// Compares two keys byte by byte, streaming what is not in memory.
 pub(crate) fn compare(ctx: &mut Ctx<'_>, a: &KeySrc<'_>, b: &KeySrc<'_>) -> Result<Ordering> {
+    if let (Some(a), Some(b)) = (a.whole(), b.whole()) {
+        return Ok(a.cmp(b));
+    }
     let common = a.len().min(b.len());
     let mut at = 0u64;
     let mut left = [0u8; CHUNK];
@@ -129,6 +143,9 @@ pub(crate) fn compare(ctx: &mut Ctx<'_>, a: &KeySrc<'_>, b: &KeySrc<'_>) -> Resu
 
 /// The length of the common prefix of two keys.
 pub(crate) fn common_prefix(ctx: &mut Ctx<'_>, a: &KeySrc<'_>, b: &KeySrc<'_>) -> Result<u64> {
+    if let (Some(a), Some(b)) = (a.whole(), b.whole()) {
+        return Ok(a.iter().zip(b).take_while(|(x, y)| x == y).count() as u64);
+    }
     let common = a.len().min(b.len());
     let mut at = 0u64;
     let mut left = [0u8; CHUNK];
@@ -292,6 +309,25 @@ pub(crate) fn held_body(page: &[u8], at: u64, index: usize, interior: bool) -> R
     parse(&page[offset..offset + len], at + offset as u64, interior)
 }
 
+/// The key of cell `index` of a page held in memory, when the cell keeps
+/// it whole (no overflow); `None` sends the caller to [`held_body`], which
+/// checks the cell.
+fn inline_key(page: &[u8], index: usize, interior: bool) -> Option<&[u8]> {
+    let (offset, len) = node::entry(page, index).ok()?;
+    let cell = page.get(offset..offset + len)?;
+    let mut pos = if interior { 8 } else { 0 };
+    if *cell.get(pos)? != 0 {
+        return None;
+    }
+    pos += 1;
+    let (key_len, n) = node::read_varint(cell.get(pos..)?).ok()?;
+    pos += n;
+    if !interior {
+        pos += node::read_varint(cell.get(pos..)?).ok()?.1;
+    }
+    cell.get(pos..pos + usize::try_from(key_len).ok()?)
+}
+
 /// Searches a page held in memory (at file offset `at`) for `key`:
 /// `(index, found)` as [`node::search_entries`] gives them.
 pub(crate) fn search_held(
@@ -306,6 +342,13 @@ pub(crate) fn search_held(
         if interior && index == 0 {
             // The first child has no lower bound.
             return Ok(Ordering::Less);
+        }
+        // A cell with no overflow keeps its key whole right after its
+        // lengths: compare it in place without parsing the rest.
+        if let Some(wanted) = key.whole()
+            && let Some(stored) = inline_key(page, index, interior)
+        {
+            return Ok(stored.cmp(wanted));
         }
         let body = held_body(page, at, index, interior)?;
         let start = crate::width::index(body.key.at - at)?;
