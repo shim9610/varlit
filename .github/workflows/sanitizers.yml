@@ -224,7 +224,7 @@ jobs:
       # Nothing executes big-endian code natively in CI, so Miri is also the
       # only place the byte-order-sensitive safe code runs on such a target:
       # the wire layouts, the row packers, the snapshot codecs and keyed
-      # storage's layouts and seeded hash (a file's keys must hash alike on
+      # storage's layouts and tree pages (a file's keys must order alike on
       # every platform; its model tests run natively). The matrix
       # tile tests are left out for their cost under an interpreter; their
       # encoding uses explicit little-endian conversions throughout.

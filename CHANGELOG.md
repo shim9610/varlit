@@ -56,27 +56,27 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   [migration guide](docs/migration-guide.md)).
 - Add bounded keyed storage (opt-in). A format that declares
   `keyed_storage: in_place(free_space = N%)` (or
-  `FormatSpec::with_keyed_storage`) stores each keyed block once per key in a
-  record heap inside the file: size classes 1/16 apart, each a dense array
-  of fixed-size items with free space only at its end (records over 64 KiB
-  are item chains); a freed item is marked dead and logged, and once no
+  `FormatSpec::with_keyed_storage`) stores each keyed block once per key
+  inside the file. Records (key then payload) are size-class item chains:
+  classes 1/16 apart, each a dense array of fixed-size items with free space
+  only at its end; a freed item is marked dead and logged, and once no
   reader or recovery can show a generation that uses it, the class's last
   item is written into it once and the class shrinks (the writer raises the
   ring's mark, expiring older readers, when freed items wait past the
-  declared 1 to 5 % of live data); new values and moved items are written
-  straight to the file and only headers, slots and entries go through the
-  write-ahead ring,
-  found through linear-hashed slot buckets keyed by a per-file SipHash seed,
-  which split above three quarters full and merge back below a quarter.
-  The pages in use stay within a constant of the data held now, not the
-  most ever held.
+  declared 1 to 5 % of live data). Keys are found through a tree of 64 KiB
+  pages: leaves hold one entry per record (its key's first 32 bytes and its
+  chain) in key order, interior pages one separator per child, so the index
+  holds page boundaries, not keys. An update rewrites its leaf entry in
+  place; inserts and deletes split leaves, remove emptied ones, and pack
+  leaves so their free bytes stay within the ratio. The pages in use stay
+  within a constant of the data held now, not the most ever held.
   Repeated updates no longer grow the file (the growth the security advisory
   describes). `KeyedStorage::with_change_budget` (64 MiB by default) bounds
   one round of changes; past it the writer publishes the round itself. Generated `put_<block>`, `get_<block>` and `remove_<block>`;
   `VarlitFile::put_keyed`, `get_keyed`, `remove_keyed`, `keyed_storage_stats`;
   `KeyedStorage`, `KeyedStorageStats` and
-  `Error::KeyedStorageRequiresPut`. Kani proofs cover routing, splits, chunk
-  lengths and layouts; the layouts and hash are checked under
+  `Error::KeyedStorageRequiresPut`. Kani proofs cover the entry search,
+  separators, varints, chunk lengths and layouts; the layouts are checked under
   Miri on a big-endian target; `keyed_storage_model` fuzzes it against a model.
 - Stream `sync` and stream reader `follow` now run through the verified
   publication drivers that the indexed writer used, so the commit and follow

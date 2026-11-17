@@ -74,9 +74,9 @@ impl Nodes {
     }
 
     fn slot_containing(&self, offset: u64) -> Option<usize> {
-        self.tags.iter().position(|tag| {
-            tag.at != 0 && tag.at <= offset && offset - tag.at < NODE_BYTES as u64
-        })
+        self.tags
+            .iter()
+            .position(|tag| tag.at != 0 && tag.at <= offset && offset - tag.at < NODE_BYTES as u64)
     }
 
     /// Reads as the writer sees the file: buffered pages over `ring`.
@@ -139,9 +139,7 @@ impl Nodes {
         keep: &[usize],
     ) -> Result<usize> {
         let (slot, held) = self.take(ring, store, at, keep)?;
-        if !held
-            && let Err(error) = ring.read(&*store, at, &mut self.bytes[Self::range(slot)])
-        {
+        if !held && let Err(error) = ring.read(&*store, at, &mut self.bytes[Self::range(slot)]) {
             self.tags[slot] = Tag::default();
             return Err(error);
         }
@@ -177,18 +175,6 @@ impl Nodes {
         self.tags[slot].at
     }
 
-    /// Two different buffers, both to change.
-    pub(crate) fn pair_mut(&mut self, a: usize, b: usize) -> (&mut [u8], &mut [u8]) {
-        assert!(a != b && a < SLOTS && b < SLOTS);
-        self.tags[a].dirty = true;
-        self.tags[b].dirty = true;
-        let (low, high, swap) = if a < b { (a, b, false) } else { (b, a, true) };
-        let (first, second) = self.bytes.split_at_mut(high * NODE_BYTES);
-        let low_page = &mut first[low * NODE_BYTES..(low + 1) * NODE_BYTES];
-        let high_page = &mut second[..NODE_BYTES];
-        if swap { (high_page, low_page) } else { (low_page, high_page) }
-    }
-
     /// A buffer to change, and the scratch page.
     pub(crate) fn with_scratch(&mut self, slot: usize) -> (&mut [u8], &mut [u8]) {
         self.tags[slot].dirty = true;
@@ -218,11 +204,6 @@ impl Nodes {
         }
     }
 
-    /// The scratch page alone.
-    pub(crate) fn scratch(&mut self) -> &mut [u8] {
-        &mut self.bytes[SLOTS * NODE_BYTES..]
-    }
-
     /// Forgets the page at `at` without writing it back: it was freed.
     pub(crate) fn forget(&mut self, at: u64) {
         if let Some(slot) = self.slot_of(at) {
@@ -232,7 +213,12 @@ impl Nodes {
 
     /// Writes back the segments of a changed buffer whose bytes differ from
     /// what the file and the ring show.
-    fn write_back(&mut self, ring: &mut RingStore, store: &mut dyn TileStore, slot: usize) -> Result<()> {
+    fn write_back(
+        &mut self,
+        ring: &mut RingStore,
+        store: &mut dyn TileStore,
+        slot: usize,
+    ) -> Result<()> {
         let tag = self.tags[slot];
         if tag.at == 0 || !tag.dirty {
             return Ok(());

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use super::heap::{KeyedHeap, Tuning};
 use super::{
-    CLASSES, ITEM_HEADER, MAX_ITEM, MIN_BUDGET, PAGE_BYTES, chain_bytes,
-    chain_shape, class_of, class_size,
+    CLASSES, ITEM_HEADER, MAX_ITEM, MIN_BUDGET, PAGE_BYTES, chain_bytes, chain_shape, class_of,
+    class_size,
 };
 use crate::matrix_tiles::store::memory::MemStore;
 
@@ -815,7 +815,11 @@ fn deletes_shrink_the_tree() {
         }
     }
     let leaves = heap.state().leaves;
-    assert!(leaves * 4 <= peak, "{leaves} leaves, {peak} at the peak: {:?}", heap.stats);
+    assert!(
+        leaves * 4 <= peak,
+        "{leaves} leaves, {peak} at the peak: {:?}",
+        heap.stats
+    );
     check(&heap, &store, &model);
     consistent(&heap, &store, "after the deletes");
     let pending = store.writes_since_sync();
@@ -846,21 +850,27 @@ fn profile_scattered() {
     let mut state = 7u64;
     for key in 0..20_000u64 {
         let len = 64 + (random(&mut state) % 2000) as usize;
-        heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, key)).unwrap();
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, key))
+            .unwrap();
     }
     heap.publish(&mut store).unwrap();
     let t = std::time::Instant::now();
     for step in 0..20_000u64 {
         let key = random(&mut state) % 20_000;
         let len = 64 + (random(&mut state) % 2000) as usize;
-        heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, step)).unwrap();
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, step))
+            .unwrap();
         if step % 500 == 0 {
             heap.publish(&mut store).unwrap();
         }
         if step % 5000 == 0 {
-            eprintln!("step {step} {:?} {:?} ring {:?}", t.elapsed(), heap.stats, heap.ring.stats);
+            eprintln!(
+                "step {step} {:?} {:?} ring {:?}",
+                t.elapsed(),
+                heap.stats,
+                heap.ring.stats
+            );
         }
     }
     eprintln!("done {:?} {:?}", t.elapsed(), heap.state());
 }
-

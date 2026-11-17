@@ -33,9 +33,9 @@ pub(crate) mod node;
 pub(crate) mod nodes;
 pub(crate) mod radix;
 pub(crate) mod reader;
-pub(crate) mod tree;
 #[cfg(test)]
 mod tests;
+pub(crate) mod tree;
 
 use crate::{Error, Result};
 

@@ -35,7 +35,7 @@
 //! it joins the pool.
 
 use super::lookup::{self, Ctx, View};
-use super::node::{self, NODE_BYTES};
+use super::node;
 use super::nodes::{HeapView, Nodes};
 use super::tree::{self, Body, KeyLoc, KeySrc, Path};
 use super::{
@@ -45,7 +45,6 @@ use super::{
     chain_shape, checked_ref, class_entry_at, class_size, corrupt, item_ref, radix, ref_class,
     ref_index,
 };
-use core::cmp::Ordering;
 use crate::matrix_tiles::ring_store::RingStore;
 use crate::matrix_tiles::store::{TileSource, TileStore};
 use crate::matrix_tiles::view::directory_offset;
@@ -363,7 +362,7 @@ impl KeyedHeap {
         let tree_key = 4 + key.len() as u64;
         let total = key.len() as u64 + payload.len() as u64;
         let mut varint = [0u8; 10];
-        let varint_len = node::put_varint(&mut varint, tree_key);
+        let varint_len = node::write_varint(&mut varint, tree_key);
         let bytes = chain_bytes(total);
         // A round changes at most the change budget (bytes written, moved
         // and freed): past it, the round so far is published and the mark
@@ -379,7 +378,13 @@ impl KeyedHeap {
         body[0] = tree::FLAG_CHAIN;
         body[1..1 + varint_len].copy_from_slice(&varint[..varint_len]);
         let mut at = 1 + varint_len;
-        let head = self.write_chain(store, block_id, key_len, false, &RecSrc::Parts(key, payload))?;
+        let head = self.write_chain(
+            store,
+            block_id,
+            key_len,
+            false,
+            &RecSrc::Parts(key, payload),
+        )?;
         self.state.live += bytes;
         let inline = crate::width::bounded(tree_key, tree::LEAF_PREFIX);
         body[at..at + 4].copy_from_slice(&block);
@@ -512,7 +517,13 @@ impl KeyedHeap {
     }
 
     /// Reads bytes `[at, at + buf.len())` of a chain's record bytes.
-    fn rec_read(&self, store: &dyn TileSource, src: &RecSrc<'_>, at: u64, buf: &mut [u8]) -> Result<()> {
+    fn rec_read(
+        &self,
+        store: &dyn TileSource,
+        src: &RecSrc<'_>,
+        at: u64,
+        buf: &mut [u8],
+    ) -> Result<()> {
         match src {
             RecSrc::Parts(key, payload) => {
                 let mut filled = 0usize;
@@ -923,7 +934,9 @@ impl KeyedHeap {
                 return Ok(None);
             }
             let body = self.body_at(store, path.pages[0], path.index[0], false)?;
-            return Ok((body.key.head == item).then_some(Referrer::Entry(path.pages[0], path.index[0])));
+            return Ok(
+                (body.key.head == item).then_some(Referrer::Entry(path.pages[0], path.index[0]))
+            );
         }
         // A separator: the interior entry holding it, on the way down.
         let mut view = self.view();
@@ -1086,7 +1099,7 @@ impl KeyedHeap {
         let mut reached = 0u64;
         let (mut leaves, mut interiors, mut keys, mut leaf_free) = (0u64, 0u64, 0u64, 0u64);
         let mut tree_pages = std::collections::HashSet::new();
-        let mut page_bytes = vec![0u8; NODE_BYTES];
+        let mut page_bytes = vec![0u8; node::NODE_BYTES];
         let full_key = |loc: KeyLoc| -> std::result::Result<Vec<u8>, String> {
             let mut view = self.view();
             let mut ctx = self.ctx(&mut view, store);
@@ -1094,7 +1107,7 @@ impl KeyedHeap {
             KeySrc::Loc(loc).read(&mut ctx, 0, &mut key).map_err(text)?;
             Ok(key)
         };
-        let mut chain = |head: u64, reached: &mut u64| -> std::result::Result<(), String> {
+        let chain = |head: u64, reached: &mut u64| -> std::result::Result<(), String> {
             let mut item = head;
             while item != NO_ITEM {
                 let (class, at_index) = (ref_class(item), ref_index(item));
@@ -1110,7 +1123,8 @@ impl KeyedHeap {
         };
         // (page, level, low bound, high bound)
         let height = usize::try_from(self.state.root.1).map_err(|e| e.to_string())?;
-        let mut stack: Vec<(u64, usize, Option<Vec<u8>>, Option<Vec<u8>>)> =
+        type Bound = Option<Vec<u8>>;
+        let mut stack: Vec<(u64, usize, Bound, Bound)> =
             vec![(self.state.root.0, height - 1, None, None)];
         while let Some((page, level, low, high)) = stack.pop() {
             if !tree_pages.insert(page) {
@@ -1266,17 +1280,17 @@ impl KeyedHeap {
         tree::find(&mut ctx, self.state.root, key)
     }
 
-    fn body_at(&self, store: &dyn TileSource, page: u64, index: usize, interior: bool) -> Result<Body> {
+    fn body_at(
+        &self,
+        store: &dyn TileSource,
+        page: u64,
+        index: usize,
+        interior: bool,
+    ) -> Result<Body> {
         let mut view = self.view();
         let mut ctx = self.ctx(&mut view, store);
         let (_, count) = tree::read_header(&mut ctx, page)?;
         tree::read_body(&mut ctx, page, count, index, interior)
-    }
-
-    fn compare_keys(&self, store: &dyn TileSource, a: &KeySrc<'_>, b: &KeySrc<'_>) -> Result<Ordering> {
-        let mut view = self.view();
-        let mut ctx = self.ctx(&mut view, store);
-        tree::compare(&mut ctx, a, b)
     }
 
     /// Finds `key` of `block_id` as this writer sees it.
@@ -1328,8 +1342,16 @@ impl KeyedHeap {
         let limit = self.tuning.node_bytes;
         let fitted = {
             let (page, scratch) = self.nodes.with_scratch(slot);
-            let old = if replace { node::entry(page, index)?.1 } else { 0 };
-            let cost = if replace { body.len() } else { node::cost(body.len()) };
+            let old = if replace {
+                node::entry(page, index)?.1
+            } else {
+                0
+            };
+            let cost = if replace {
+                body.len()
+            } else {
+                node::cost(body.len())
+            };
             if used(page) - old + cost > limit {
                 false
             } else if replace {
@@ -1353,7 +1375,12 @@ impl KeyedHeap {
     }
 
     /// A new page for the tree, buffered and laid out empty.
-    fn new_node(&mut self, store: &mut dyn TileStore, kind: node::Kind, keep: &[usize]) -> Result<(u64, usize)> {
+    fn new_node(
+        &mut self,
+        store: &mut dyn TileStore,
+        kind: node::Kind,
+        keep: &[usize],
+    ) -> Result<(u64, usize)> {
         let (at, pooled) = self.take_page(store)?;
         let slot = self.nodes.create(&mut self.ring, store, at, pooled, keep)?;
         node::init(self.nodes.page_mut(slot), kind);
@@ -1389,12 +1416,22 @@ impl KeyedHeap {
     }
 
     /// Splits the full leaf of `path`, then inserts `body` at `index`.
-    fn split_leaf(&mut self, store: &mut dyn TileStore, path: &Path, index: usize, body: &[u8]) -> Result<()> {
+    fn split_leaf(
+        &mut self,
+        store: &mut dyn TileStore,
+        path: &Path,
+        index: usize,
+        body: &[u8],
+    ) -> Result<()> {
         let left_slot = self.nodes.load(&mut self.ring, store, path.pages[0], &[])?;
         let before = free_of(self.nodes.page(left_slot));
         let (right, right_slot) = self.new_node(store, node::Kind::Leaf, &[left_slot])?;
         let n = node::count(self.nodes.page(left_slot));
-        let m = if index >= n { n } else { split_point(self.nodes.page(left_slot)) };
+        let m = if index >= n {
+            n
+        } else {
+            split_point(self.nodes.page(left_slot))
+        };
         {
             let (left, right_page, scratch) = self.nodes.pair_with_scratch(left_slot, right_slot);
             for moved in m..n {
@@ -1428,7 +1465,12 @@ impl KeyedHeap {
     /// The separator body (without its child) for two neighbouring keys: the
     /// shortest prefix of `high` greater than `low`, inline, or in a chain
     /// when longer than [`tree::KEY_PREFIX`].
-    fn separator(&mut self, store: &mut dyn TileStore, low: &KeySrc<'_>, high: &KeySrc<'_>) -> Result<SepBody> {
+    fn separator(
+        &mut self,
+        store: &mut dyn TileStore,
+        low: &KeySrc<'_>,
+        high: &KeySrc<'_>,
+    ) -> Result<SepBody> {
         let common = {
             let mut view = self.view();
             let mut ctx = self.ctx(&mut view, &*store);
@@ -1444,9 +1486,13 @@ impl KeyedHeap {
             high.read(&mut ctx, 0, &mut prefix[..inline])?;
         }
         let mut at = 0;
-        sep.bytes[at] = if len > tree::KEY_PREFIX as u64 { tree::FLAG_CHAIN } else { 0 };
+        sep.bytes[at] = if len > tree::KEY_PREFIX as u64 {
+            tree::FLAG_CHAIN
+        } else {
+            0
+        };
         at += 1;
-        at += node::put_varint(&mut sep.bytes[at..], len);
+        at += node::write_varint(&mut sep.bytes[at..], len);
         sep.bytes[at..at + inline].copy_from_slice(&prefix[..inline]);
         at += inline;
         if len > tree::KEY_PREFIX as u64 {
@@ -1456,7 +1502,8 @@ impl KeyedHeap {
                 actual: len,
                 limit: u64::from(u32::MAX),
             })?;
-            let head = self.write_chain(store, block, key_len, true, &RecSrc::Key(*high, 4, len - 4))?;
+            let head =
+                self.write_chain(store, block, key_len, true, &RecSrc::Key(*high, 4, len - 4))?;
             sep.bytes[at..at + 8].copy_from_slice(&len.to_le_bytes());
             sep.bytes[at + 8..at + 16].copy_from_slice(&head.to_le_bytes());
             at += 16;
@@ -1494,10 +1541,13 @@ impl KeyedHeap {
             self.state.root = (root, self.state.root.1 + 1);
             return Ok(());
         }
-        let slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let slot = self
+            .nodes
+            .load(&mut self.ring, store, path.pages[level], &[])?;
         let limit = self.tuning.node_bytes;
         let (page, scratch) = self.nodes.with_scratch(slot);
-        if used(page) + node::cost(body.len()) <= limit && node::insert(page, index, body, scratch) {
+        if used(page) + node::cost(body.len()) <= limit && node::insert(page, index, body, scratch)
+        {
             return Ok(());
         }
         self.split_interior(store, path, level, index, body)
@@ -1514,7 +1564,9 @@ impl KeyedHeap {
         index: usize,
         body: &[u8],
     ) -> Result<()> {
-        let left_slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let left_slot = self
+            .nodes
+            .load(&mut self.ring, store, path.pages[level], &[])?;
         let (right, right_slot) = self.new_node(store, node::Kind::Interior, &[left_slot])?;
         let n = node::count(self.nodes.page(left_slot));
         let m = split_point(self.nodes.page(left_slot)).max(1);
@@ -1548,22 +1600,40 @@ impl KeyedHeap {
             }
         }
         self.stats.splits += 1;
-        self.insert_entry(store, path, level + 1, path.index[level + 1] + 1, right, &up)
+        self.insert_entry(
+            store,
+            path,
+            level + 1,
+            path.index[level + 1] + 1,
+            right,
+            &up,
+        )
     }
 
     /// Removes the entry pointing at the page at `level` of `path` from its
     /// parent and frees the page, which holds nothing. A parent left empty
     /// goes too; a root left with one child is replaced by it.
     fn remove_child(&mut self, store: &mut dyn TileStore, path: &Path, level: usize) -> Result<()> {
-        let kind = if level == 0 { node::Kind::Leaf } else { node::Kind::Interior };
+        let kind = if level == 0 {
+            node::Kind::Leaf
+        } else {
+            node::Kind::Interior
+        };
         self.free_node(store, path.pages[level], kind)?;
         let parent = level + 1;
         let index = path.index[parent];
-        let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+        let slot = self
+            .nodes
+            .load(&mut self.ring, store, path.pages[parent], &[])?;
         let old = {
             let page = self.nodes.page(slot);
             let (offset, len) = node::entry(page, index)?;
-            tree::parse(&page[offset..offset + len.min(tree::HEAD_MAX)], 0, len, true)?
+            tree::parse(
+                &page[offset..offset + len.min(tree::HEAD_MAX)],
+                0,
+                len,
+                true,
+            )?
         };
         if old.chained() {
             self.release(store, old.key.head)?;
@@ -1571,7 +1641,12 @@ impl KeyedHeap {
         let next_sep = if index == 0 && node::count(self.nodes.page(slot)) > 1 {
             let page = self.nodes.page(slot);
             let (offset, len) = node::entry(page, 1)?;
-            Some(tree::parse(&page[offset..offset + len.min(tree::HEAD_MAX)], 0, len, true)?)
+            Some(tree::parse(
+                &page[offset..offset + len.min(tree::HEAD_MAX)],
+                0,
+                len,
+                true,
+            )?)
         } else {
             None
         };
@@ -1585,12 +1660,16 @@ impl KeyedHeap {
             let raw = {
                 let page = self.nodes.page(slot);
                 let (offset, len) = node::entry(page, 1)?;
-                let mut sep = SepBody::default();
-                sep.len = len - 8;
-                sep.bytes[..sep.len].copy_from_slice(&page[offset + 8..offset + len]);
-                sep
+                let mut bytes = [0u8; SEP_MAX];
+                bytes[..len - 8].copy_from_slice(&page[offset + 8..offset + len]);
+                SepBody {
+                    bytes,
+                    len: len - 8,
+                }
             };
-            let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+            let slot = self
+                .nodes
+                .load(&mut self.ring, store, path.pages[parent], &[])?;
             let mut first = [0u8; 10];
             first[..8].copy_from_slice(&next.child.to_le_bytes());
             {
@@ -1599,7 +1678,9 @@ impl KeyedHeap {
             }
             match ancestor {
                 Some(level) => {
-                    let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+                    let slot = self
+                        .nodes
+                        .load(&mut self.ring, store, path.pages[parent], &[])?;
                     node::remove(self.nodes.page_mut(slot), index)?;
                     self.set_separator(store, path, level, path.index[level], &raw)?;
                     return Ok(());
@@ -1609,7 +1690,9 @@ impl KeyedHeap {
                 None => 0,
             };
         }
-        let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+        let slot = self
+            .nodes
+            .load(&mut self.ring, store, path.pages[parent], &[])?;
         node::remove(self.nodes.page_mut(slot), index)?;
         let left = node::count(self.nodes.page(slot));
         if parent + 1 == path.height {
@@ -1644,16 +1727,25 @@ impl KeyedHeap {
         index: usize,
         sep: &SepBody,
     ) -> Result<()> {
-        let slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let slot = self
+            .nodes
+            .load(&mut self.ring, store, path.pages[level], &[])?;
         let old = {
             let page = self.nodes.page(slot);
             let (offset, len) = node::entry(page, index)?;
-            tree::parse(&page[offset..offset + len.min(tree::HEAD_MAX)], 0, len, true)?
+            tree::parse(
+                &page[offset..offset + len.min(tree::HEAD_MAX)],
+                0,
+                len,
+                true,
+            )?
         };
         if old.chained() {
             self.release(store, old.key.head)?;
         }
-        let slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let slot = self
+            .nodes
+            .load(&mut self.ring, store, path.pages[level], &[])?;
         node::remove(self.nodes.page_mut(slot), index)?;
         self.insert_entry(store, path, level, index, old.child, sep)
     }
@@ -1661,7 +1753,11 @@ impl KeyedHeap {
     // ---- packing ----
 
     /// The path to the leaf the packing cursor is at.
-    fn cursor_path(&self, store: &dyn TileSource, cursor: &[usize; tree::MAX_HEIGHT]) -> Result<Path> {
+    fn cursor_path(
+        &self,
+        store: &dyn TileSource,
+        cursor: &[usize; tree::MAX_HEIGHT],
+    ) -> Result<Path> {
         let mut view = self.view();
         let mut ctx = self.ctx(&mut view, store);
         let height = crate::width::index(self.state.root.1)?;
@@ -1693,9 +1789,7 @@ impl KeyedHeap {
         for level in 1..path.height {
             if cursor[level] + 1 < path.counts[level] {
                 cursor[level] += 1;
-                for lower in 1..level {
-                    cursor[lower] = 0;
-                }
+                cursor[1..level].fill(0);
                 return Some(cursor);
             }
         }
@@ -1720,8 +1814,12 @@ impl KeyedHeap {
                 continue;
             };
             let right_path = self.cursor_path(store, &next)?;
-            let left_slot = self.nodes.load(&mut self.ring, store, left_path.pages[0], &[])?;
-            let right_slot = self.nodes.load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
+            let left_slot = self
+                .nodes
+                .load(&mut self.ring, store, left_path.pages[0], &[])?;
+            let right_slot =
+                self.nodes
+                    .load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
             let before = free_of(self.nodes.page(left_slot)) + free_of(self.nodes.page(right_slot));
             let mut moved = 0u64;
             let limit = self.tuning.node_bytes;
@@ -1755,10 +1853,17 @@ impl KeyedHeap {
                     .rev()
                     .find(|&level| right_path.index[level] != left_path.index[level])
                     .ok_or(corrupt("keyed tree paths"))?;
-                let left_slot = self.nodes.load(&mut self.ring, store, left_path.pages[0], &[])?;
+                let left_slot = self
+                    .nodes
+                    .load(&mut self.ring, store, left_path.pages[0], &[])?;
                 let right_slot =
-                    self.nodes.load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
-                let low = self.key_loc(left_slot, node::count(self.nodes.page(left_slot)) - 1, false)?;
+                    self.nodes
+                        .load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
+                let low = self.key_loc(
+                    left_slot,
+                    node::count(self.nodes.page(left_slot)) - 1,
+                    false,
+                )?;
                 let high = self.key_loc(right_slot, 0, false)?;
                 let sep = self.separator(store, &KeySrc::Loc(low), &KeySrc::Loc(high))?;
                 self.set_separator(store, &right_path, level, right_path.index[level], &sep)?;

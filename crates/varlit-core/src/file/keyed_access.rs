@@ -212,8 +212,7 @@ impl VarlitFile {
         Ok(crate::KeyedStorageStats {
             generation,
             keys: state.keys,
-            live_bytes: state.live
-                + state.leaves * crate::keyed_heap::node::CAPACITY as u64
+            live_bytes: state.live + state.leaves * crate::keyed_heap::node::CAPACITY as u64
                 - state.leaf_free,
             heap_bytes: state.pages * crate::keyed_heap::PAGE_BYTES,
             free_region_bytes: state.pooled * crate::keyed_heap::PAGE_BYTES,
@@ -262,4 +261,3 @@ fn read_into(
     scratch.resize(len, 0);
     read(scratch)
 }
-

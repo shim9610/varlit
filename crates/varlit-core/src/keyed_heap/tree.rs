@@ -213,7 +213,7 @@ pub(crate) fn parse(head: &[u8], at: u64, len: usize, interior: bool) -> Result<
     }
     let flags = *head.get(pos).ok_or_else(bad)?;
     pos += 1;
-    let (key_len, n) = node::varint(head.get(pos..).ok_or_else(bad)?)?;
+    let (key_len, n) = node::read_varint(head.get(pos..).ok_or_else(bad)?)?;
     pos += n;
     if flags & !FLAG_CHAIN != 0 {
         return Err(bad());
@@ -244,7 +244,10 @@ pub(crate) fn parse(head: &[u8], at: u64, len: usize, interior: bool) -> Result<
     }
     let word = |from: usize| -> Result<u64> {
         Ok(u64::from_le_bytes(
-            head.get(from..from + 8).ok_or_else(bad)?.try_into().expect("eight"),
+            head.get(from..from + 8)
+                .ok_or_else(bad)?
+                .try_into()
+                .expect("eight"),
         ))
     };
     let total = word(pos + inline)?;
@@ -328,7 +331,7 @@ pub(crate) fn search_page(
     key: &KeySrc<'_>,
     interior: bool,
 ) -> Result<(usize, bool)> {
-    node::search(count, &mut |index| {
+    node::search_entries(count, &mut |index| {
         if interior && index == 0 {
             // The first child has no lower bound.
             return Ok(Ordering::Less);

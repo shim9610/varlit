@@ -362,8 +362,10 @@ parent, interior pages merging below a quarter full). Each operation packs
 at least as many bytes as it freed or left free, so the free bytes inside
 leaves stay within the ratio plus a constant, over the data held now. The
 cost is the price of the bound: with a ratio `r`, a freed byte costs about
-`1/r` bytes of repacking in the worst case. Interior pages, about 0.1 % of
-the data, are kept at least a quarter full instead.
+`1/r` bytes of repacking in the worst case; since values live in chains,
+only inserts and deletes of keys pay it, on entries of a few dozen bytes.
+Interior pages, about 0.1 % of the data, are removed when they empty and
+are not packed.
 
 **What stays.** The ring, the mark, the freed-item log and the size classes
 (every record's key and value), the page pool and its link

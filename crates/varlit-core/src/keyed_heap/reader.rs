@@ -131,7 +131,13 @@ fn attempt(
     if !path.found {
         return Ok(false);
     }
-    let body = tree::read_body(&mut ctx, path.pages[0], path.counts[0], path.index[0], false)?;
+    let body = tree::read_body(
+        &mut ctx,
+        path.pages[0],
+        path.counts[0],
+        path.index[0],
+        false,
+    )?;
     let len = tree::value_len(&body);
     if len > max_payload {
         return Err(Error::LimitExceeded {

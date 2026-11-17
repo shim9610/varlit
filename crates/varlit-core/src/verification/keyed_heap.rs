@@ -3,7 +3,7 @@
 //! entry bodies, which size class an item goes to and how a record splits
 //! into items, and that every stored structure decodes to what was encoded.
 //! I/O, the ring and checksums are outside these harnesses.
-use super::node::{self, put_varint, search, separator_len, varint};
+use super::node::{self, read_varint, search_entries, separator_len, write_varint};
 use super::{
     CLASSES, ClassEntry, ITEM_HEADER, Item, MAX_ITEM, chain_bytes, chain_shape, class_of,
     class_size, item_ref, ref_class, ref_index,
@@ -26,7 +26,8 @@ fn the_entry_search_finds_the_insertion_point() {
         }
     }
     let target: u8 = kani::any();
-    let (at, found) = search(n, &mut |index| Ok(keys[index].cmp(&target))).expect("no errors");
+    let (at, found) =
+        search_entries(n, &mut |index| Ok(keys[index].cmp(&target))).expect("no errors");
     assert!(at <= n);
     assert!(keys[..at].iter().all(|&key| key < target));
     if at < n {
@@ -60,8 +61,8 @@ fn a_separator_lies_between_its_keys() {
 fn varints_round_trip() {
     let value: u64 = kani::any();
     let mut bytes = [0u8; 10];
-    let len = put_varint(&mut bytes, value);
-    let read = varint(&bytes[..len]);
+    let len = write_varint(&mut bytes, value);
+    let read = read_varint(&bytes[..len]);
     assert!(matches!(read, Ok((read, used)) if read == value && used == len));
     core::mem::forget(read);
     let _ = node::NODE_BYTES;

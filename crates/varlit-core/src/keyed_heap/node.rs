@@ -65,10 +65,15 @@ fn high(page: &[u8]) -> usize {
 }
 
 fn set_high(page: &mut [u8], high: usize) {
-    set_u16(page, HEADER_AT + 6, if high == NODE_BYTES { 0 } else { high });
+    set_u16(
+        page,
+        HEADER_AT + 6,
+        if high == NODE_BYTES { 0 } else { high },
+    );
 }
 
 /// Checks a page's header and returns its kind.
+#[cfg(test)]
 pub(crate) fn kind(page: &[u8]) -> Result<Kind> {
     if page.len() != NODE_BYTES {
         return Err(corrupt("keyed tree page"));
@@ -219,7 +224,7 @@ pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) {
 /// The first entry for which `probe` is not `Less`: the insertion point of a
 /// key `probe` compares entries against (`probe(i)` is entry `i` compared
 /// with the key). Entries are sorted, so this is a binary search.
-pub(crate) fn search(
+pub(crate) fn search_entries(
     n: usize,
     probe: &mut dyn FnMut(usize) -> Result<Ordering>,
 ) -> Result<(usize, bool)> {
@@ -237,12 +242,10 @@ pub(crate) fn search(
 
 /// The length of the shortest prefix of `right` that is greater than
 /// `left`, given `left < right`: a separator `S` with `left < S <= right`.
+/// The writer finds the same length streaming keys (`tree::common_prefix`).
+#[cfg(any(test, kani))]
 pub(crate) fn separator_len(left: &[u8], right: &[u8]) -> usize {
-    let common = left
-        .iter()
-        .zip(right)
-        .take_while(|(a, b)| a == b)
-        .count();
+    let common = left.iter().zip(right).take_while(|(a, b)| a == b).count();
     (common + 1).min(right.len())
 }
 
@@ -250,7 +253,7 @@ pub(crate) fn separator_len(left: &[u8], right: &[u8]) -> usize {
 
 /// Writes `value` as a LEB128 varint at the start of `out`; returns its
 /// length (at most ten bytes).
-pub(crate) fn put_varint(out: &mut [u8], mut value: u64) -> usize {
+pub(crate) fn write_varint(out: &mut [u8], mut value: u64) -> usize {
     let mut at = 0;
     loop {
         #[allow(clippy::cast_possible_truncation, reason = "seven bits")]
@@ -267,7 +270,7 @@ pub(crate) fn put_varint(out: &mut [u8], mut value: u64) -> usize {
 
 /// Reads a LEB128 varint: `(value, length)`. Refuses overlong encodings and
 /// values past 64 bits.
-pub(crate) fn varint(bytes: &[u8]) -> Result<(u64, usize)> {
+pub(crate) fn read_varint(bytes: &[u8]) -> Result<(u64, usize)> {
     let mut value = 0u64;
     for (at, &byte) in bytes.iter().enumerate().take(10) {
         let bits = u64::from(byte & 0x7f);
@@ -283,11 +286,6 @@ pub(crate) fn varint(bytes: &[u8]) -> Result<(u64, usize)> {
         }
     }
     Err(corrupt("keyed varint"))
-}
-
-/// Compares two byte strings as keys are ordered: lexicographically.
-pub(crate) fn compare(a: &[u8], b: &[u8]) -> Ordering {
-    a.cmp(b)
 }
 
 #[cfg(test)]
@@ -317,9 +315,8 @@ mod tests {
                 let body: Vec<u8> = (0..len).map(|i| (i as u64 ^ step) as u8).collect();
                 if roll < 5 || model.is_empty() {
                     let index = (rng(&mut state) % (model.len() as u64 + 1)) as usize;
-                    let fits = cost(len)
-                        <= CAPACITY
-                            - model.iter().map(|b| cost(b.len())).sum::<usize>();
+                    let fits =
+                        cost(len) <= CAPACITY - model.iter().map(|b| cost(b.len())).sum::<usize>();
                     assert_eq!(insert(&mut page, index, &body, &mut scratch), fits);
                     if fits {
                         model.insert(index, body);
@@ -332,7 +329,10 @@ mod tests {
                     let index = (rng(&mut state) % model.len() as u64) as usize;
                     let used: usize = model.iter().map(|b| cost(b.len())).sum();
                     let fits = used - model[index].len() + len <= CAPACITY;
-                    assert_eq!(replace(&mut page, index, &body, &mut scratch).unwrap(), fits);
+                    assert_eq!(
+                        replace(&mut page, index, &body, &mut scratch).unwrap(),
+                        fits
+                    );
                     if fits {
                         model[index] = body;
                     }
@@ -352,7 +352,8 @@ mod tests {
     fn search_finds_the_insertion_point() {
         let keys: Vec<u32> = (0..100).map(|k| k * 2).collect();
         for target in 0..201u32 {
-            let (at, found) = search(keys.len(), &mut |i| Ok(keys[i].cmp(&target))).unwrap();
+            let (at, found) =
+                search_entries(keys.len(), &mut |i| Ok(keys[i].cmp(&target))).unwrap();
             assert_eq!(found, target % 2 == 0 && target < 200);
             assert_eq!(at, keys.partition_point(|&k| k < target));
         }
@@ -377,12 +378,12 @@ mod tests {
     fn varints_round_trip_and_refuse_overlong_forms() {
         let mut buf = [0u8; 10];
         for value in [0u64, 1, 127, 128, 300, u64::from(u32::MAX), u64::MAX] {
-            let len = put_varint(&mut buf, value);
-            assert_eq!(varint(&buf[..len]).unwrap(), (value, len));
+            let len = write_varint(&mut buf, value);
+            assert_eq!(read_varint(&buf[..len]).unwrap(), (value, len));
         }
-        assert!(varint(&[0x80, 0x00]).is_err());
-        assert!(varint(&[0xff; 10]).is_err());
-        assert!(varint(&[0x80]).is_err());
+        assert!(read_varint(&[0x80, 0x00]).is_err());
+        assert!(read_varint(&[0xff; 10]).is_err());
+        assert!(read_varint(&[0x80]).is_err());
     }
 
     #[test]
