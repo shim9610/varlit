@@ -32,10 +32,12 @@ pub(crate) mod heap;
 #[path = "../verification/keyed_heap.rs"]
 mod heap_proofs;
 pub(crate) mod lookup;
+pub(crate) mod node;
 pub(crate) mod pages;
 pub(crate) mod radix;
 pub(crate) mod reader;
 pub(crate) mod sip;
+pub(crate) mod tree;
 #[cfg(test)]
 mod tests;
 

@@ -293,6 +293,83 @@ before the file grows; returning them to the filesystem is the end-of-file
 work. The ring and the bucket and directory pages the live keys need come on
 top.
 
+## Sorted pages: an index that holds only page boundaries
+
+The slot buckets above keep one 16-byte slot per key: the index grows with
+the number of keys, and the pages a table gives up when keys are deleted
+stay behind as bucket pages no other structure can use. Version 4 replaces
+them. The index holds one boundary per page of records, never one entry per
+key, and every page it uses comes from and returns to the shared page pool.
+
+**Declaration.** `KeyedStorage::with_key_index(KeyIndex::Sparse | KeyIndex::Off)`
+(DSL: `key_index = sparse | off`):
+
+- `Sparse` (default): records sorted by key in pages, found by key.
+- `Off`: no key index. A keyed block is addressed by its position in the
+  block (`put_at` / `get_at` / `remove_at`), and the position is the sort
+  key: the same tree, with an 8-byte big-endian ordinal in place of the key.
+  Nothing derived from user keys is stored.
+
+**Leaves.** A leaf is a 64 KiB pool page holding records in key order:
+
+- after the page link (16 bytes): a header (`magic b"VKLF" | count u16 |
+  low u16 | high u16 | zero`), then `count` 4-byte entries
+  (`offset u16 | length u16`) sorted by key, growing up; record bodies grow
+  down from the end of the page. Free space is the gap between them, plus
+  the bodies of removed records until the page is repacked.
+- a record body: `flags u8 | key length (varint) | key | value`, or, for a
+  record whose body would take more than a quarter of a page, `flags |
+  key length | key prefix (at most 256 bytes) | total length u64 | head item
+  u64`: the full key and the value live in a size-class item chain, as now.
+  Keys longer than 256 bytes are compared by reading the rest from the chain.
+
+**Interior pages.** The same page format with entries `child page u64 |
+separator`, where the separator is the shortest byte string `S` with
+`left maximum < S <= right minimum` (bytes compared lexicographically, the
+block id first). A separator longer than 256 bytes is stored in an item
+chain owned by the entry. The root and the height are in the state.
+
+**Lookups.** From the root, each page is searched by binary search over its
+entries, reading only the entry array and the keys the search probes (a
+handful of small reads per page, through the reader's snapshot). A page of
+fan-out about 1000 keeps a terabyte of records three levels deep; the index
+is the interior pages, about 0.1 % of the data, and none of it is per key.
+
+**Writes.** A tree page is changed through the ring in whole 4 KiB segments
+(the 64 page buffers the writer already has hold the segments being edited;
+a dirty segment is staged when evicted or at publication). A new page from
+the pool is written in place when no generation from the mark on uses it.
+A leaf that overflows is split by bytes (at the end for appends in key
+order) and its separator inserted in the parent; a parent that overflows
+splits the same way; a root split adds a level.
+
+**The space bound.** Free bytes inside leaves are counted in the state.
+While they exceed the declared ratio of live bytes (at least two pages),
+every operation also packs: a cursor walks the leaves in key order and
+moves records from the leaf after it into the free space of the leaf at it,
+removing a leaf that empties (its page to the pool, its separator from the
+parent, interior pages merging below a quarter full). Each operation packs
+at least as many bytes as it freed or left free, so the free bytes inside
+leaves stay within the ratio plus a constant, over the data held now. The
+cost is the price of the bound: with a ratio `r`, a freed byte costs about
+`1/r` bytes of repacking in the worst case. Interior pages, about 0.1 % of
+the data, are kept at least a quarter full instead.
+
+**What stays.** The ring, the mark, the freed-item log and the size classes
+(for records larger than a quarter of a page), the page pool and its link
+area, the change budget and rounds, readers' snapshots and expiry.
+
+**What goes.** Slot buckets, the bucket directory and its free list, linear
+hashing, the SipHash route (ordering replaces hashing: keys are compared,
+not hashed).
+
+**Proofs.** Kani covers the page and entry layouts, the binary search over
+an entry array of a bounded page, the separator choice (`left maximum < S <=
+right minimum` for keys up to a bound), and the varint. Splits, packing,
+crash atomicity and the space bound are covered by native tests that check
+every structure and the bound after every operation, and by the model fuzz
+target.
+
 ## Open questions
 
 1. Settled: slot buckets instead of section filters (filters need a newest-
