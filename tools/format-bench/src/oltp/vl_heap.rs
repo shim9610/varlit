@@ -41,6 +41,10 @@ pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
         blk: HeapGroup::empty(),
     }))
 }
+thread_local! {
+    static TXN_SPLIT: std::cell::RefCell<(f64, f64, f64, f64, u64, u64)> = const { std::cell::RefCell::new((0.0, 0.0, 0.0, 0.0, 0, 0)) };
+}
+
 impl Oltp for W {
     fn load(&mut self) -> Result<()> {
         let mut blk = HeapGroup {
@@ -68,19 +72,47 @@ impl Oltp for W {
         Ok(())
     }
     fn txn(&mut self, deltas: &[(u64, i64)]) -> Result<()> {
+        let t0 = std::time::Instant::now();
+        let mut get = std::time::Duration::ZERO;
+        let mut put = std::time::Duration::ZERO;
+        let mut groups = 0u32;
         for (g, ups) in by_group(deltas) {
+            groups += 1;
+            let t = std::time::Instant::now();
             if !self
                 .w
                 .get_heap_group(&(g as u32), &mut self.scratch, &mut self.blk)?
             {
                 return Err("missing group".into());
             }
+            get += t.elapsed();
             for (slot, d) in ups {
                 add_bal(&mut self.blk.data, slot, d);
             }
+            let t = std::time::Instant::now();
             self.w.put_heap_group(&self.blk)?;
+            put += t.elapsed();
         }
+        let t = std::time::Instant::now();
         self.w.sync()?;
+        let sync = t.elapsed();
+        if std::env::var_os("FB_TXN_SPLIT").is_some() {
+            TXN_SPLIT.with(|c| {
+                let mut c = c.borrow_mut();
+                c.0 += get.as_secs_f64();
+                c.1 += put.as_secs_f64();
+                c.2 += sync.as_secs_f64();
+                c.3 += t0.elapsed().as_secs_f64();
+                c.4 += u64::from(groups);
+                c.5 += 1;
+                if c.5 % 1000 == 0 {
+                    eprintln!(
+                        "txn split over {} txns: get {:.3}s put {:.3}s sync {:.3}s total {:.3}s, {} groups",
+                        c.5, c.0, c.1, c.2, c.3, c.4
+                    );
+                }
+            });
+        }
         Ok(())
     }
 }
