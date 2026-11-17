@@ -61,6 +61,8 @@ pub(crate) struct HeapStats {
     /// Holes filled by a class's last live item, items a class shrank by,
     /// and log entries that named an item already gone or reused.
     pub moves: u64,
+    /// Holes a put wrote its new item into.
+    pub taken: u64,
     pub shrinks: u64,
     pub stale: u64,
     pub pages_appended: u64,
@@ -77,12 +79,13 @@ pub(crate) struct HeapStats {
 /// that what builds up in a large file builds up in a small one.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Tuning {
-    /// Holes filled per item a put or delete frees, at least.
+    /// Logged bytes taken per byte a put or delete frees, at least (holes a
+    /// put writes into count). One keeps the log bounded.
     pub fills_per_free: u64,
 }
 
 impl Tuning {
-    pub(crate) const DEFAULT: Self = Self { fills_per_free: 2 };
+    pub(crate) const DEFAULT: Self = Self { fills_per_free: 1 };
 }
 
 pub(crate) struct KeyedHeap {
@@ -105,6 +108,8 @@ pub(crate) struct KeyedHeap {
     /// Per class, the largest end any generation from the mark on had:
     /// indexes below it may be read by a reader or a recovery.
     hi: [u64; MAX_CLASSES],
+    /// Bytes of logged items the open operation's puts took.
+    taken_bytes: u64,
     pub(crate) stats: HeapStats,
 }
 
@@ -195,6 +200,7 @@ impl KeyedHeap {
             holes_open: 0,
             holes_waiting: 0,
             hi: [0; MAX_CLASSES],
+            taken_bytes: 0,
             stats: HeapStats::default(),
         })
     }
@@ -219,11 +225,15 @@ impl KeyedHeap {
         self.state.hole_bytes + (2 * CLASSES as u64 + log_pages) * PAGE_BYTES
     }
 
-    /// What the logged items may reach: twice the patience (one batch
-    /// waiting for the mark, one being taken) and two rounds' worth.
+    /// What the logged items may reach. Freed items of the open round are
+    /// at most a round (the change budget and one record); those published
+    /// and waiting for the mark at most the patience, a round and a record,
+    /// since the mark is raised once they pass the patience; and those the
+    /// mark has passed never more than the largest such batch, since every
+    /// operation takes at least as many logged bytes as it frees.
     #[cfg(test)]
     pub(crate) fn logged_bound(&self, largest_record: u64) -> u64 {
-        2 * self.patience() + 2 * self.fixed.budget + largest_record
+        2 * self.patience() + 3 * (self.fixed.budget + largest_record)
     }
 
     /// Bytes freed items may wait before the writer raises the mark: the
@@ -422,17 +432,17 @@ impl KeyedHeap {
         let total = key.len() as u64 + payload.len() as u64;
         let (full, last) = chain_shape(total);
         let class_at = |index: u64| if index < full { CLASSES - 1 } else { last };
-        let head = self.append(store, class_at(0))?;
+        let (head, mut taken) = self.alloc(store, class_at(0))?;
         let mut item = head;
         let mut prev = NO_ITEM;
         let mut at = 0u64;
         for index in 0..=full {
             let class = ref_class(item);
             let len = (class_size(class) - ITEM_HEADER).min(total - at);
-            let next = if index < full {
-                self.append(store, class_at(index + 1))?
+            let (next, next_taken) = if index < full {
+                self.alloc(store, class_at(index + 1))?
             } else {
-                NO_ITEM
+                (NO_ITEM, false)
             };
             let mut header = Item {
                 len: crate::width::small32(crate::width::index(len)?),
@@ -448,8 +458,10 @@ impl KeyedHeap {
             crc.update(&header.crc_prefix());
             for_parts(key, payload, at, len, &mut |bytes| crc.update(bytes));
             header.crc = crc.finalize();
-            let in_place = self.in_place(item);
-            self.write_header(store, item, &header, in_place)?;
+            // A taken hole is written as a move writes it: its header through
+            // the ring, so a crash leaves it dead.
+            let in_place = taken || self.in_place(item);
+            self.write_header(store, item, &header, !taken && in_place)?;
             // In the units a move writes: STEP pieces from the header on.
             let mut step = [0u8; STEP];
             let mut done = 0u64;
@@ -466,6 +478,7 @@ impl KeyedHeap {
             at += len;
             prev = item;
             item = next;
+            taken = next_taken;
         }
         Ok(head)
     }
@@ -561,6 +574,25 @@ impl KeyedHeap {
         Ok(at)
     }
 
+    /// An item of `class` to write: the oldest logged item when it is of
+    /// this class and the mark has passed it (`true`: write it as a move
+    /// does), else a new item at the class's end. Taking the hole directly
+    /// spares appending and then moving.
+    fn alloc(&mut self, store: &mut dyn TileStore, class: usize) -> Result<(u64, bool)> {
+        if let Some((item, freed_by)) = self.log_peek(store)?
+            && freed_by <= self.ring.mark()
+            && ref_class(item) == class
+            && ref_index(item) < self.classes[class].end
+            && self.item(store, item)?.dead == freed_by
+        {
+            self.log_pop(store, item)?;
+            self.stats.taken += 1;
+            self.taken_bytes += class_size(class);
+            return Ok((item, true));
+        }
+        Ok((self.append(store, class)?, false))
+    }
+
     /// A new item at the end of `class`.
     fn append(&mut self, store: &mut dyn TileStore, class: usize) -> Result<u64> {
         let index = self.classes[class].end;
@@ -616,11 +648,12 @@ impl KeyedHeap {
 
     // ---- pages ----
 
-    /// A page for a class or the log: the pool's oldest once the
-    /// generation that pooled it is in place, else a new one. The pool's
-    /// oldest is put in place first when it is published: a page may go to
-    /// another class, whose items start at other offsets, so nothing the
-    /// ring holds may still cover it.
+    /// A page for a class or the log: the pool's oldest once the last
+    /// generation that staged its link is in place, else a new one. When
+    /// that generation is published and the pool holds more than the
+    /// patience, the ring is put in place first: a page may go to another
+    /// class, whose items start at other offsets, so nothing the ring holds
+    /// may still cover it.
     fn take_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
         let head = self.state.pool_head;
         if head != 0 {
@@ -628,7 +661,13 @@ impl KeyedHeap {
             self.read(store, head, &mut link)?;
             let next = u64::from_le_bytes(link[..8].try_into().expect("eight"));
             let pooled_by = u64::from_le_bytes(link[8..].try_into().expect("eight"));
-            if pooled_by > self.ring.checkpointed() && pooled_by <= self.ring.published() {
+            // Putting the ring in place costs two barriers: only once the
+            // pool holds more than the patience, else the file grows by a
+            // page instead.
+            if pooled_by > self.ring.checkpointed()
+                && pooled_by <= self.ring.published()
+                && self.state.pooled * PAGE_BYTES > self.patience()
+            {
                 self.ring.checkpoint(store, u64::MAX)?;
                 self.stats.checkpoints += 1;
             }
@@ -754,7 +793,8 @@ impl KeyedHeap {
     // ---- holes ----
 
     /// Takes logged items the mark has passed, at least the tuning's rate
-    /// in bytes per byte freed (and one item when nothing was): each fills
+    /// in bytes per byte freed, less what the operation's puts took (and one
+    /// item when nothing was freed or taken): each fills
     /// with its class's last live item, or the class shrinks past it.
     /// Raises the mark first when freed items have waited past the patience.
     ///
@@ -765,7 +805,13 @@ impl KeyedHeap {
         if self.holes_waiting > self.patience() {
             self.raise(store)?;
         }
-        let mut work = freed * self.tuning.fills_per_free + 1;
+        // Holes this operation's puts took count as taken.
+        let taken = std::mem::take(&mut self.taken_bytes);
+        let mut work = if freed == 0 && taken == 0 {
+            1
+        } else {
+            (freed * self.tuning.fills_per_free).saturating_sub(taken)
+        };
         while work > 0 {
             let Some((item, freed_by)) = self.log_peek(store)? else {
                 break;

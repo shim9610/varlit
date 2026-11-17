@@ -395,8 +395,9 @@ fn a_crash_after_any_write_keeps_the_last_publication() {
     }
 }
 
-/// Values written straight into holes, at every write of the generation
-/// and of its publication: a crash shows one of the two generations whole.
+/// Values written straight into holes (taken by puts or filled by moves),
+/// at every write of the generation and of its publication: a crash shows
+/// one of the two generations whole.
 #[test]
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn values_written_into_holes_survive_a_crash() {
@@ -416,14 +417,18 @@ fn values_written_into_holes_survive_a_crash() {
     }
     heap.publish(&mut store).unwrap();
     heap.ring.checkpoint(&mut store, u64::MAX).unwrap();
-    let moved = heap.stats.moves;
+    let moved = heap.stats.moves + heap.stats.taken;
     let mut next = model.clone();
     for key in (1..300u64).step_by(4) {
         let bytes = value(300, key ^ 0xabcd);
         heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
         next.insert((1, key.to_le_bytes().to_vec()), bytes);
     }
-    assert!(heap.stats.moves > moved, "{:?}", heap.stats);
+    assert!(
+        heap.stats.moves + heap.stats.taken > moved,
+        "{:?}",
+        heap.stats
+    );
     let pending = store.writes_since_sync();
     for keep in (0..pending).step_by((pending / 40).max(1)) {
         for torn in [0usize, 5] {

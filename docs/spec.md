@@ -513,7 +513,9 @@ blocks, nor keyed storage and `keyed_offset_chain`.
 
 ### Writing
 
-- A put writes the record's items at the ends of their classes; the slot,
+- A put writes each of the record's items into the oldest logged item when
+  that is of the item's class, the mark has passed it and it still names
+  it (its header through the ring), else at the end of its class; the slot,
   the class entries, the log pointers and the state go through the ring.
   The items it replaces get their `dead` set and are logged.
 - Item bytes are written straight to the file only where no generation a

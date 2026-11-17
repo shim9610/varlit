@@ -247,6 +247,9 @@ moved item. No search, no fragmentation, no compaction.
   shrinks by one; a dead item at the end just shrinks the class. Every item
   below a class's end is live or dead and logged, and nothing else, so
   there is nothing to search for and nothing to track besides the log.
+- **Taking a hole directly.** When the oldest logged item is of the class a
+  put needs and the mark has passed it, the put writes its item there (header
+  through the ring) instead of appending and moving later.
 - **The mark, not a checkpoint.** The writer raises the mark to its last
   publication (one header write) when freed items have waited past the
   free-space ratio, or at the end of a round. Older readers must follow.
@@ -278,10 +281,13 @@ designed separately.
 pages in use (all but pooled ones) hold the live items, the items the log
 names, a partial and a spare page per class (about 107 × 2 × 64 KiB) and the
 log's pages, and nothing else (`idle_bound`, checked after every operation of
-the tests). The log names at most twice the patience plus two rounds plus
-one record (`logged_bound`): each operation takes at least as many logged
-bytes as it frees, so what the mark has passed never outgrows the largest
-batch that waited for it. Both are bounds over the data held now, not the
+the tests). The log names at most twice the patience plus three rounds (a
+round being the change budget and one record) (`logged_bound`): the open
+round's frees, the published ones waiting for the mark (the mark is raised
+once they pass the patience), and those the mark has passed, which never
+outgrow the largest batch that waited for it because each operation takes
+at least as many logged bytes as it frees (a put that writes into a logged
+item counts). Both are bounds over the data held now, not the
 most ever held. Rounding adds at most 1/16 of live. Pooled pages are reused
 before the file grows; returning them to the filesystem is the end-of-file
 work. The ring and the bucket and directory pages the live keys need come on
