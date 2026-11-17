@@ -216,16 +216,16 @@ impl VarlitFile {
         let from = self.snapshot.len();
         // The object, not the pathname. A rename may have put a different file
         // at the path, and framing *that* file's bytes at this handle's offsets
-        // is the one thing this must never do.
-        let mut file = self.snapshot.try_clone_file()?;
-        let logical_len = file.len()?;
-        let file_len = logical_len;
+        // is the one thing this must never do. An idle poll reads the length
+        // through the handle it holds; the handle is duplicated only to scan.
+        let file_len = self.snapshot.file_len()?;
         if file_len < from {
             return Err(Error::InvalidMatrixLayout);
         }
         if file_len == from {
             return Ok(0);
         }
+        let mut file = self.snapshot.try_clone_file()?;
         let modified = file.raw().metadata()?.modified().ok();
         let mut pending = match self.follow_scan.take() {
             Some(pending) => pending,

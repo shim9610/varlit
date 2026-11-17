@@ -24,7 +24,9 @@ use super::wal::{
 use crate::{Error, Result};
 
 /// Writes of ranges into place go through one buffer of this size: adjacent
-/// ranges become one positional write.
+/// ranges become one positional write. Between checkpoints the same buffer
+/// holds the open frame's bytes not yet written, so a frame goes out in as
+/// few writes as fit.
 pub(crate) const COALESCE_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -263,8 +265,9 @@ impl Space {
     }
 }
 
-/// A ring frame being filled: its entries are written as they are staged,
-/// its header and checksum when it is closed.
+/// A ring frame being filled: its entries are buffered as they are staged
+/// (written whenever the buffer fills), its header and checksum added when it
+/// is closed, and what is still buffered written then.
 struct OpenFrame {
     /// Ring offset of the frame.
     at: u64,
@@ -342,6 +345,34 @@ impl Coalescer<'_> {
     }
 }
 
+/// A source that shows the file with the open frame's buffered bytes over it:
+/// the writer reading what it staged sees them before they are written.
+struct Buffered<'a> {
+    file: &'a dyn TileSource,
+    at: u64,
+    bytes: &'a [u8],
+}
+
+impl TileSource for Buffered<'_> {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        self.file.read_at(offset, buf)?;
+        let end = offset + buf.len() as u64;
+        let held_end = self.at + self.bytes.len() as u64;
+        let from = offset.max(self.at);
+        let to = end.min(held_end);
+        if from < to {
+            let n = crate::width::index(to - from)?;
+            let dst = crate::width::index(from - offset)?;
+            let src = crate::width::index(from - self.at)?;
+            buf[dst..dst + n].copy_from_slice(&self.bytes[src..src + n]);
+        }
+        Ok(())
+    }
+    fn len(&self) -> Result<u64> {
+        self.file.len()
+    }
+}
+
 /// What a staged range holds: bytes from the caller.
 #[derive(Clone, Copy)]
 enum Src<'a> {
@@ -371,7 +402,11 @@ pub(crate) struct RingStore {
     /// Index pages; behind a lock so `&self` reads can use it.
     cache: Mutex<PageCache>,
     scratch: Box<[u8]>,
+    /// The checkpoint's coalescing buffer, and between checkpoints the open
+    /// frame's bytes not yet written: `copy[..held]` belongs at `held_at`.
     copy: Box<[u8]>,
+    held_at: u64,
+    held: usize,
     frame: Option<OpenFrame>,
     /// The open generation's index, once it streams past the ring.
     building: Option<Building>,
@@ -448,6 +483,8 @@ impl RingStore {
             cache: Mutex::new(PageCache::with_pages(index::DEFAULT_CACHE_PAGES)?),
             scratch: scan_buffer()?,
             copy: copy.into_boxed_slice(),
+            held_at: 0,
+            held: 0,
             frame: None,
             building: None,
             spilled: false,
@@ -491,10 +528,15 @@ impl RingStore {
     pub(crate) fn read(&self, store: &dyn TileSource, offset: u64, buf: &mut [u8]) -> Result<()> {
         let open = self.building.map(|b| (b.generation, b.root));
         let mut cache = self.cache()?;
+        let buffered = Buffered {
+            file: store,
+            at: self.held_at,
+            bytes: &self.copy[..self.held],
+        };
         self.layers
             .fill(
                 &mut cache,
-                store,
+                &buffered,
                 offset,
                 buf,
                 self.header.checkpointed,
@@ -711,20 +753,11 @@ impl RingStore {
         frame.hasher.update(&entry);
         frame.len += need;
         frame.count += 1;
-        match src {
-            Src::Bytes(bytes) if header_len + bytes.len() <= self.copy.len() => {
-                self.copy[..header_len].copy_from_slice(&entry);
-                self.copy[header_len..header_len + bytes.len()].copy_from_slice(bytes);
-                store.write_at(at, &self.copy[..header_len + bytes.len()])?;
-                if let Some(frame) = self.frame.as_mut() {
-                    frame.hasher.update(bytes);
-                }
-            }
-            _ => {
-                store.write_at(at, &entry)?;
-                self.write_src(store, at + ENTRY_HEADER, src, true)?;
-            }
-        }
+        debug_assert_eq!(header_len as u64, ENTRY_HEADER);
+        let Src::Bytes(bytes) = src;
+        frame.hasher.update(bytes);
+        self.hold(store, at, &entry)?;
+        self.hold(store, at + ENTRY_HEADER, bytes)?;
         self.open_ring_bytes += need;
         let inserted = self.layers.overlay.insert(
             target,
@@ -736,6 +769,40 @@ impl RingStore {
         );
         debug_assert!(inserted, "room was made above");
         Ok(true)
+    }
+
+    /// Buffers `bytes` for `at`, after what is held when it follows on;
+    /// writes what is held first when it does not, and whenever the buffer
+    /// fills.
+    fn hold(&mut self, store: &mut dyn TileStore, at: u64, bytes: &[u8]) -> Result<()> {
+        let mut done = 0usize;
+        while done < bytes.len() {
+            let to = at + done as u64;
+            if self.held > 0 && self.held_at + self.held as u64 != to {
+                self.write_held(store)?;
+            }
+            if self.held == 0 {
+                self.held_at = to;
+            }
+            let n = (bytes.len() - done).min(self.copy.len() - self.held);
+            self.copy[self.held..self.held + n].copy_from_slice(&bytes[done..done + n]);
+            self.held += n;
+            done += n;
+            if self.held == self.copy.len() {
+                self.write_held(store)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes what the open frame holds in the buffer.
+    fn write_held(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        if self.held > 0 {
+            store.write_at(self.held_at, &self.copy[..self.held])?;
+            self.held_at += self.held as u64;
+            self.held = 0;
+        }
+        Ok(())
     }
 
     /// Opens a frame of at least `least` bytes at the next ring room.
@@ -775,8 +842,24 @@ impl RingStore {
         crc.combine(&frame.hasher);
         let mut tail = [0u8; 12];
         tail[pad..pad + 4].copy_from_slice(&crc.finalize().to_le_bytes());
-        store.write_at(self.ring.at(frame.at + frame.len), &tail[..pad + 4])?;
-        store.write_at(self.ring.at(frame.at), &header)?;
+        self.hold(store, self.ring.at(frame.at + frame.len), &tail[..pad + 4])?;
+        // The header goes in front of what is held when the whole frame is
+        // still in the buffer, so a small frame is one write.
+        let header_at = self.ring.at(frame.at);
+        if self.held > 0
+            && self.held_at == header_at + FRAME_HEADER
+            && self.held + header.len() <= self.copy.len()
+        {
+            self.held_at = header_at;
+            let hl = header.len();
+            self.copy.copy_within(..self.held, hl);
+            self.copy[..hl].copy_from_slice(&header);
+            self.held += hl;
+            self.write_held(store)?;
+        } else {
+            self.write_held(store)?;
+            store.write_at(header_at, &header)?;
+        }
         self.stats.frames += 1;
         self.open_ring_bytes += len - frame.len;
         self.cursor = frame.at + len;
@@ -955,6 +1038,7 @@ impl RingStore {
             cache.forget(open);
         }
         self.frame = None;
+        self.held = 0;
         self.building = None;
         self.spilled = false;
         self.cursor = self.header.head;
@@ -1121,6 +1205,8 @@ impl RingStore {
     /// through the copy buffer; a range a newer generation of the same
     /// checkpoint rewrites whole is skipped.
     pub(crate) fn checkpoint(&mut self, store: &mut dyn TileStore, need: u64) -> Result<()> {
+        // The copy buffer is about to coalesce the checkpoint's writes.
+        self.write_held(store)?;
         let header = self.header;
         let ring = self.ring;
         if header.published == header.checkpointed {

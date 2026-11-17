@@ -291,9 +291,12 @@ circularly.
   published generation in place, so at most one published generation has an
   index at a time.
 - Staged bytes reach the file as they are staged: into a record appended
-  since the last publication directly, else into the open ring frame (whose
-  header and CRC32 are written when it closes), else into overflow space for
-  the index. Nothing staged is held in memory.
+  since the last publication directly, else into the open ring frame, else
+  into overflow space for the index. The open frame's bytes collect in the
+  writer's fixed 64 KiB copy buffer and are written whenever it fills and
+  when the frame closes, with the header and CRC32 (in the same write when
+  the whole frame is still buffered). At most that buffer of staged bytes is
+  held in memory; the writer reads what it staged through it.
 - A scan reads frames from `tail` and stops at the first frame with a wrong
   magic, unknown flags, a `requires` past the file's current length, a length
   under 36, not a multiple of 8 or past the end of the ring, a generation
