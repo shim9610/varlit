@@ -27,6 +27,7 @@ mod sq;
 mod vl_append;
 mod vl_grouped;
 mod vl_heap;
+mod vl_rows;
 mod vl_packed;
 
 pub const TXNS: usize = 1000;
@@ -97,7 +98,7 @@ pub trait OltpRead {
 
 pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
-        "varlit" => &["grouped", "heap", "append", "packed-matrix"],
+        "varlit" => &["grouped", "heap", "rows", "append", "packed-matrix"],
         "sqlite" => sq::CANDIDATES,
         "hdf5" => h5::CANDIDATES,
         "parquet" => pq::CANDIDATES,
@@ -109,6 +110,7 @@ pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
     match (engine, cand) {
         ("varlit", "grouped") => "src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs",
         ("varlit", "heap") => "src/oltp/vl_heap.rs,src/oltp/pack.rs,src/oltp/csr.rs",
+        ("varlit", "rows") => "src/oltp/vl_rows.rs,src/oltp/csr.rs",
         ("varlit", "append") => {
             "src/oltp/vl_append.rs,src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs"
         }
@@ -123,6 +125,7 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
     match (engine, cand) {
         ("varlit", "grouped") => vl_grouped::create(p),
         ("varlit", "heap") => vl_heap::create(p),
+        ("varlit", "rows") => vl_rows::create(p),
         ("varlit", "append") => vl_append::create(p),
         ("varlit", "packed-matrix") => vl_packed::create(p),
         ("sqlite", c) => sq::create(p, c),
@@ -135,6 +138,7 @@ fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn OltpRead>> {
     match (engine, cand) {
         ("varlit", "grouped") => vl_grouped::open(p),
         ("varlit", "heap") => vl_heap::open(p),
+        ("varlit", "rows") => vl_rows::open(p),
         ("varlit", "append") => vl_append::open(p),
         ("varlit", "packed-matrix") => vl_packed::open(p),
         ("sqlite", c) => sq::open(p, c),
