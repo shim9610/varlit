@@ -36,14 +36,19 @@ pub const POINTS: usize = 20_000;
 pub const BRANCH_Q: usize = 200;
 pub const START: i64 = 1000;
 
+/// Read once: `initial_row` asks for every account, and reading the
+/// environment each time cost more than some engines' whole insert.
 pub fn accounts() -> u64 {
-    if std::env::var_os("FB_SMALL").is_some() {
-        1_000_000
-    } else if let Some(gb) = data_gb() {
-        (gb * 1e9 / 52.0) as u64 / 100 * 100
-    } else {
-        200_000_000
-    }
+    static ACCOUNTS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *ACCOUNTS.get_or_init(|| {
+        if std::env::var_os("FB_SMALL").is_some() {
+            1_000_000
+        } else if let Some(gb) = data_gb() {
+            (gb * 1e9 / 52.0) as u64 / 100 * 100
+        } else {
+            200_000_000
+        }
+    })
 }
 pub fn branches() -> u32 {
     (accounts() / 100) as u32

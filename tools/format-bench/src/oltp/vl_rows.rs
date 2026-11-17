@@ -62,6 +62,7 @@ pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
 }
 impl Oltp for W {
     fn load(&mut self) -> Result<()> {
+        let t0 = std::time::Instant::now();
         for id in 0..accounts() {
             let r = initial_row(id);
             self.w.put_account(&Account {
@@ -78,6 +79,7 @@ impl Oltp for W {
                 self.w.inner().file().keyed_storage_stats()?
             );
         }
+        let t1 = std::time::Instant::now();
         let w = &mut self.w;
         let mut br = RowBranch {
             branch: 0,
@@ -90,7 +92,16 @@ impl Oltp for W {
             w.put_row_branch(&br)?;
             Ok(())
         })?;
+        let t2 = std::time::Instant::now();
         self.w.sync()?;
+        if std::env::var_os("FB_LOAD_SPLIT").is_some() {
+            eprintln!(
+                "load split: accounts {:.3}s branches {:.3}s sync {:.3}s",
+                (t1 - t0).as_secs_f64(),
+                (t2 - t1).as_secs_f64(),
+                t2.elapsed().as_secs_f64()
+            );
+        }
         Ok(())
     }
     fn txn(&mut self, deltas: &[(u64, i64)]) -> Result<()> {
