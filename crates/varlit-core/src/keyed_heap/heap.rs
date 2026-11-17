@@ -395,10 +395,9 @@ impl KeyedHeap {
         at += 16;
         self.round_alloc += bytes;
         let leaf_free = self.state.leaf_free;
-        let path = self.find_path(store, &KeySrc::Parts(block, key))?;
+        let (path, old) = self.find_path_mut(store, &KeySrc::Parts(block, key))?;
         let mut freed = 0;
-        if path.found {
-            let old = self.body_at(store, path.pages[0], path.index[0], false)?;
+        if let Some(old) = old {
             if old.chained() {
                 freed = self.release(store, old.key.head)?;
             }
@@ -421,11 +420,10 @@ impl KeyedHeap {
         if self.round_alloc >= self.fixed.budget {
             self.end_round(store)?;
         }
-        let path = self.find_path(store, &KeySrc::Parts(block_id.to_be_bytes(), key))?;
-        if !path.found {
+        let (path, old) = self.find_path_mut(store, &KeySrc::Parts(block_id.to_be_bytes(), key))?;
+        let Some(old) = old else {
             return Ok(false);
-        }
-        let old = self.body_at(store, path.pages[0], path.index[0], false)?;
+        };
         let mut freed = 0;
         if old.chained() {
             freed = self.release(store, old.key.head)?;
@@ -1274,6 +1272,56 @@ impl KeyedHeap {
             + node::CAPACITY as u64
     }
 
+    /// Finds `key` through the page buffers: a page already held is
+    /// searched where it is, one not held is read whole once. Returns the
+    /// path and the leaf body when found.
+    fn find_path_mut(
+        &mut self,
+        store: &mut dyn TileStore,
+        key: &KeySrc<'_>,
+    ) -> Result<(Path, Option<Body>)> {
+        let height = crate::width::index(self.state.root.1)?;
+        let mut path = Path {
+            pages: [0; tree::MAX_HEIGHT],
+            index: [0; tree::MAX_HEIGHT],
+            counts: [0; tree::MAX_HEIGHT],
+            height,
+            found: false,
+        };
+        let mut at = self.state.root.0;
+        for level in (0..height).rev() {
+            let slot = self.nodes.load(&mut self.ring, store, at, &[])?;
+            let interior = level > 0;
+            let mut view = self.view();
+            let mut ctx = self.ctx(&mut view, &*store);
+            let page = self.nodes.page(slot);
+            let kind = node::kind(page)?;
+            let count = node::count(page);
+            if (kind == node::Kind::Interior) != interior || (interior && count == 0) {
+                return Err(corrupt("keyed tree page"));
+            }
+            path.pages[level] = at;
+            path.counts[level] = count;
+            let (index, found) = tree::search_held(&mut ctx, page, at, key, interior)?;
+            if interior {
+                let child = if found { index } else { index - 1 };
+                path.index[level] = child;
+                at = tree::held_body(page, at, child, true)?.child;
+                if at == 0 {
+                    return Err(corrupt("keyed tree child"));
+                }
+            } else {
+                path.index[0] = index;
+                path.found = found;
+                if found {
+                    let body = tree::held_body(page, at, index, false)?;
+                    return Ok((path, Some(body)));
+                }
+            }
+        }
+        Ok((path, None))
+    }
+
     fn find_path(&self, store: &dyn TileSource, key: &KeySrc<'_>) -> Result<Path> {
         let mut view = self.view();
         let mut ctx = self.ctx(&mut view, store);
@@ -1822,7 +1870,12 @@ impl KeyedHeap {
                     .load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
             let before = free_of(self.nodes.page(left_slot)) + free_of(self.nodes.page(right_slot));
             let mut moved = 0u64;
-            let limit = self.tuning.node_bytes;
+            // Pack to half the ratio short of full: inserts then find room
+            // in their leaf instead of splitting it, and the free bytes stay
+            // within the ratio.
+            let limit = self.tuning.node_bytes.min(
+                node::CAPACITY - node::CAPACITY * usize::from(self.fixed.ratio_permille) / 2000,
+            );
             {
                 let (left, right, scratch) = self.nodes.pair_with_scratch(left_slot, right_slot);
                 while node::count(right) > 0 {

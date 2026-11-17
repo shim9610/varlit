@@ -51,7 +51,19 @@ pub(crate) enum KeySrc<'a> {
     Mem(&'a [u8]),
     Parts([u8; 4], &'a [u8]),
     Loc(KeyLoc),
-    Item { block: [u8; 4], head: u64, len: u64 },
+    Item {
+        block: [u8; 4],
+        head: u64,
+        len: u64,
+    },
+    /// An entry's key in a page held in memory: its bytes there, then the
+    /// rest in a chain from record byte `chain_from`.
+    Held {
+        inline: &'a [u8],
+        len: u64,
+        head: u64,
+        chain_from: u64,
+    },
 }
 
 impl KeySrc<'_> {
@@ -60,7 +72,7 @@ impl KeySrc<'_> {
             Self::Mem(bytes) => bytes.len() as u64,
             Self::Parts(_, key) => 4 + key.len() as u64,
             Self::Loc(loc) => loc.len,
-            Self::Item { len, .. } => *len,
+            Self::Item { len, .. } | Self::Held { len, .. } => *len,
         }
     }
 
@@ -90,6 +102,23 @@ impl KeySrc<'_> {
                 Ok(())
             }
             Self::Item { head, .. } => read_record(ctx, *head, from - 4, buf),
+            Self::Held {
+                inline,
+                head,
+                chain_from,
+                ..
+            } => {
+                let from = crate::width::index(from)?;
+                let n = inline.len().saturating_sub(from).min(buf.len());
+                if n > 0 {
+                    buf[..n].copy_from_slice(&inline[from..from + n]);
+                }
+                if n < buf.len() {
+                    let start = (from + n - inline.len()) as u64 + chain_from;
+                    read_record(ctx, *head, start, &mut buf[n..])?;
+                }
+                Ok(())
+            }
             Self::Loc(loc) => {
                 let mut done = 0usize;
                 let inline = loc.inline as u64;
@@ -377,6 +406,97 @@ pub(crate) fn find(ctx: &mut Ctx<'_>, root: (u64, u64), key: &KeySrc<'_>) -> Res
         }
     }
     Ok(path)
+}
+
+/// Searches a page held in memory (its file offset `at`) for `key`:
+/// `(index, found)` as [`node::search_entries`] gives them. Only a key
+/// longer than its body keeps is read further, from its chain.
+pub(crate) fn search_held(
+    ctx: &mut Ctx<'_>,
+    page: &[u8],
+    at: u64,
+    key: &KeySrc<'_>,
+    interior: bool,
+) -> Result<(usize, bool)> {
+    let count = node::count(page);
+    node::search_entries(count, &mut |index| {
+        if interior && index == 0 {
+            return Ok(Ordering::Less);
+        }
+        let body = held_body(page, at, index, interior)?;
+        let start = crate::width::index(body.key.at - at)?;
+        let held = KeySrc::Held {
+            inline: &page[start..start + body.key.inline],
+            len: body.key.len,
+            head: body.key.head,
+            chain_from: body.key.chain_from,
+        };
+        compare(ctx, &held, key)
+    })
+}
+
+/// Entry `index` of a page held in memory at file offset `at`.
+pub(crate) fn held_body(page: &[u8], at: u64, index: usize, interior: bool) -> Result<Body> {
+    let (offset, len) = node::entry(page, index)?;
+    parse(
+        &page[offset..offset + len.min(HEAD_MAX)],
+        at + offset as u64,
+        len,
+        interior,
+    )
+}
+
+/// Finds `key` reading each page whole into `page` (a page-sized buffer)
+/// and searching it there: one read per level. Returns the path and, when
+/// found, the leaf body.
+pub(crate) fn find_held(
+    ctx: &mut Ctx<'_>,
+    root: (u64, u64),
+    key: &KeySrc<'_>,
+    page: &mut [u8],
+) -> Result<(Path, Option<Body>)> {
+    let height = crate::width::index(root.1)?;
+    if root.0 == 0 || height == 0 || height > MAX_HEIGHT {
+        return Err(corrupt("keyed tree root"));
+    }
+    let page = page
+        .get_mut(..NODE_BYTES)
+        .ok_or(corrupt("keyed tree page buffer"))?;
+    let mut path = Path {
+        pages: [0; MAX_HEIGHT],
+        index: [0; MAX_HEIGHT],
+        counts: [0; MAX_HEIGHT],
+        height,
+        found: false,
+    };
+    let mut at = root.0;
+    for level in (0..height).rev() {
+        ctx.read(at, page)?;
+        let kind = node::kind(page)?;
+        let interior = level > 0;
+        let count = node::count(page);
+        if (kind == node::Kind::Interior) != interior || (interior && count == 0) {
+            return Err(corrupt("keyed tree page"));
+        }
+        path.pages[level] = at;
+        path.counts[level] = count;
+        let (index, found) = search_held(ctx, page, at, key, interior)?;
+        if interior {
+            let child = if found { index } else { index - 1 };
+            path.index[level] = child;
+            at = held_body(page, at, child, true)?.child;
+            if at == 0 {
+                return Err(corrupt("keyed tree child"));
+            }
+        } else {
+            path.index[0] = index;
+            path.found = found;
+            if found {
+                return Ok((path, Some(held_body(page, at, index, false)?)));
+            }
+        }
+    }
+    Ok((path, None))
 }
 
 /// Reads the payload of the record `body` describes into `out`, which must

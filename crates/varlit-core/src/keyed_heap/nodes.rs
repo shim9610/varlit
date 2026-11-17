@@ -39,27 +39,44 @@ struct Tag {
     dirty: bool,
     mode: Mode,
     used: u64,
+    /// Checksums of the segments as the file and the ring show them; a
+    /// segment whose bytes no longer match is written back. `None` for a
+    /// new page: every segment is written.
+    shown: Option<[u32; SEGMENTS]>,
+}
+
+fn sums(page: &[u8]) -> [u32; SEGMENTS] {
+    let mut sums = [0u32; SEGMENTS];
+    for (segment, sum) in sums.iter_mut().enumerate() {
+        *sum = crc32fast::hash(&page[segment * SEGMENT..(segment + 1) * SEGMENT]);
+    }
+    sums
 }
 
 pub(crate) struct Nodes {
     bytes: Box<[u8]>,
+    /// A page-sized scratch buffer.
+    scratch: Box<[u8]>,
     tags: [Tag; SLOTS],
     clock: u64,
 }
 
 impl Nodes {
     pub(crate) fn new() -> Result<Self> {
-        let len = (SLOTS + 1) * NODE_BYTES;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(len)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "keyed tree page buffers",
-                requested: len as u64,
-            })?;
-        bytes.resize(len, 0);
+        let buffer = |len: usize| -> Result<Box<[u8]>> {
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(len)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "keyed tree page buffers",
+                    requested: len as u64,
+                })?;
+            bytes.resize(len, 0);
+            Ok(bytes.into_boxed_slice())
+        };
         Ok(Self {
-            bytes: bytes.into_boxed_slice(),
+            bytes: buffer(SLOTS * NODE_BYTES)?,
+            scratch: buffer(NODE_BYTES)?,
             tags: [Tag::default(); SLOTS],
             clock: 0,
         })
@@ -125,6 +142,7 @@ impl Nodes {
             dirty: false,
             mode: Mode::Staged,
             used: self.clock,
+            shown: None,
         };
         Ok((slot, false))
     }
@@ -139,9 +157,12 @@ impl Nodes {
         keep: &[usize],
     ) -> Result<usize> {
         let (slot, held) = self.take(ring, store, at, keep)?;
-        if !held && let Err(error) = ring.read(&*store, at, &mut self.bytes[Self::range(slot)]) {
-            self.tags[slot] = Tag::default();
-            return Err(error);
+        if !held {
+            if let Err(error) = ring.read(&*store, at, &mut self.bytes[Self::range(slot)]) {
+                self.tags[slot] = Tag::default();
+                return Err(error);
+            }
+            self.tags[slot].shown = Some(sums(&self.bytes[Self::range(slot)]));
         }
         Ok(slot)
     }
@@ -159,6 +180,7 @@ impl Nodes {
         self.bytes[Self::range(slot)].fill(0);
         self.tags[slot].dirty = true;
         self.tags[slot].mode = Mode::Unused { pooled };
+        self.tags[slot].shown = None;
         Ok(slot)
     }
 
@@ -178,8 +200,7 @@ impl Nodes {
     /// A buffer to change, and the scratch page.
     pub(crate) fn with_scratch(&mut self, slot: usize) -> (&mut [u8], &mut [u8]) {
         self.tags[slot].dirty = true;
-        let (pages, scratch) = self.bytes.split_at_mut(SLOTS * NODE_BYTES);
-        (&mut pages[Self::range(slot)], &mut scratch[..NODE_BYTES])
+        (&mut self.bytes[Self::range(slot)], &mut self.scratch)
     }
 
     /// Two buffers to change, and the scratch page.
@@ -191,12 +212,11 @@ impl Nodes {
         assert!(a != b && a < SLOTS && b < SLOTS);
         self.tags[a].dirty = true;
         self.tags[b].dirty = true;
-        let (pages, scratch) = self.bytes.split_at_mut(SLOTS * NODE_BYTES);
         let (low, high, swap) = if a < b { (a, b, false) } else { (b, a, true) };
-        let (first, second) = pages.split_at_mut(high * NODE_BYTES);
+        let (first, second) = self.bytes.split_at_mut(high * NODE_BYTES);
         let low_page = &mut first[low * NODE_BYTES..(low + 1) * NODE_BYTES];
         let high_page = &mut second[..NODE_BYTES];
-        let scratch = &mut scratch[..NODE_BYTES];
+        let scratch = &mut self.scratch[..];
         if swap {
             (high_page, low_page, scratch)
         } else {
@@ -212,7 +232,8 @@ impl Nodes {
     }
 
     /// Writes back the segments of a changed buffer whose bytes differ from
-    /// what the file and the ring show.
+    /// what the file and the ring show (by the checksums taken when they
+    /// were read or last written back).
     fn write_back(
         &mut self,
         ring: &mut RingStore,
@@ -223,14 +244,15 @@ impl Nodes {
         if tag.at == 0 || !tag.dirty {
             return Ok(());
         }
-        let (pages, scratch) = self.bytes.split_at_mut(SLOTS * NODE_BYTES);
-        let page = &pages[Self::range(slot)];
-        let shown = &mut scratch[..SEGMENT];
+        let page = &self.bytes[Self::range(slot)];
+        let now = sums(page);
         for segment in 0..SEGMENTS {
             let bytes = &page[segment * SEGMENT..(segment + 1) * SEGMENT];
             let at = tag.at + (segment * SEGMENT) as u64;
-            ring.read(&*store, at, shown)?;
-            if shown == bytes {
+            if tag
+                .shown
+                .is_some_and(|shown| shown[segment] == now[segment])
+            {
                 continue;
             }
             let in_place = match tag.mode {
@@ -242,6 +264,7 @@ impl Nodes {
             }
         }
         self.tags[slot].dirty = false;
+        self.tags[slot].shown = Some(now);
         Ok(())
     }
 

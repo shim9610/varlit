@@ -874,3 +874,30 @@ fn profile_scattered() {
     }
     eprintln!("done {:?} {:?}", t.elapsed(), heap.state());
 }
+
+#[test]
+#[ignore = "profiling"]
+fn profile_load() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
+    let t = std::time::Instant::now();
+    for key in 0..40_000u32 {
+        heap.put(
+            &mut store,
+            1,
+            &key.to_le_bytes(),
+            &value(11_264, u64::from(key)),
+        )
+        .unwrap();
+        if key % 10_000 == 0 {
+            eprintln!(
+                "key {key} {:?} {:?} ring {:?}",
+                t.elapsed(),
+                heap.stats,
+                heap.ring.stats
+            );
+        }
+    }
+    heap.publish(&mut store).unwrap();
+    eprintln!("done {:?} {:?} {:?}", t.elapsed(), heap.stats, heap.state());
+}

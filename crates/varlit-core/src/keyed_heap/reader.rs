@@ -4,6 +4,7 @@
 //! answer.
 
 use super::lookup::{Ctx, View};
+use super::node::NODE_BYTES;
 use super::tree::{self, KeySrc};
 use super::{Fixed, META_FIXED_LEN, META_STATE_AT, State};
 use crate::matrix_tiles::store::TileSource;
@@ -118,26 +119,28 @@ fn attempt(
     encode: &mut dyn FnMut(&mut Vec<u8>) -> Result<()>,
 ) -> Result<bool> {
     // The tree key is the block id, big-endian, then the key: it goes
-    // into `buf` before the key the caller encodes.
+    // into `buf` before the key the caller encodes, and a page-sized
+    // buffer after it, where each page of the path is read whole.
     buf.clear();
     encode(buf)?;
     let key_at = key_at.min(buf.len());
     buf.splice(key_at..key_at, block_id.to_be_bytes());
-    let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
+    let key_end = buf.len();
+    buf.try_reserve(NODE_BYTES)
+        .map_err(|_| Error::AllocationFailed {
+            resource: "keyed lookup page",
+            requested: NODE_BYTES as u64,
+        })?;
+    buf.resize(key_end + NODE_BYTES, 0);
+    let (head, page) = buf.split_at_mut(key_end);
+    let key = head.get(key_at..).ok_or(Error::InvalidFormatSpec(
         "keyed lookup key starts past its buffer",
     ))?;
     let mut ctx = Ctx::new(view, source, meta, None);
-    let path = tree::find(&mut ctx, state.root, &KeySrc::Mem(key))?;
-    if !path.found {
+    let (_, found) = tree::find_held(&mut ctx, state.root, &KeySrc::Mem(key), page)?;
+    let Some(body) = found else {
         return Ok(false);
-    }
-    let body = tree::read_body(
-        &mut ctx,
-        path.pages[0],
-        path.counts[0],
-        path.index[0],
-        false,
-    )?;
+    };
     let len = tree::value_len(&body);
     if len > max_payload {
         return Err(Error::LimitExceeded {

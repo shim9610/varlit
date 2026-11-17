@@ -73,7 +73,6 @@ fn set_high(page: &mut [u8], high: usize) {
 }
 
 /// Checks a page's header and returns its kind.
-#[cfg(test)]
 pub(crate) fn kind(page: &[u8]) -> Result<Kind> {
     if page.len() != NODE_BYTES {
         return Err(corrupt("keyed tree page"));
