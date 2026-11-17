@@ -108,6 +108,29 @@ pub trait VarlitKeyedBlock: VarlitBlock {
     fn key_eq(&self, other: &Self::Key) -> bool {
         &self.key() == other
     }
+
+    /// Encodes what keyed storage keeps as the value of this record: every
+    /// field but the key fields, which the record's key already holds.
+    ///
+    /// The default encodes the whole block, for hand-written
+    /// implementations; it must match [`Self::__varlit_decode_value_into`].
+    /// `varlit_format!` generates both, leaving the key fields out.
+    #[doc(hidden)]
+    fn __varlit_encode_value(&self, encoder: &mut crate::Encoder) -> Result<()> {
+        self.encode_varlit(encoder)
+    }
+
+    /// Decodes a value written by [`Self::__varlit_encode_value`] into `out`,
+    /// taking the key fields from `key`.
+    #[doc(hidden)]
+    fn __varlit_decode_value_into(
+        key: &Self::Key,
+        out: &mut Self,
+        decoder: &mut crate::Decoder<'_>,
+    ) -> Result<()> {
+        let _ = key;
+        decoder.decode_value_into(out)
+    }
 }
 
 pub trait VarlitMatrixBlock: VarlitBlock {

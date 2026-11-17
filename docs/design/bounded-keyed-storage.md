@@ -303,7 +303,7 @@ than the record. Keyed storage is now laid out the way SQLite lays out a
 table, inside varlit blocks.
 
 - **Pages.** 4 KiB, carved from blocks the writer appends as it needs them
-  (16 pages, then twice the last, up to 16 MiB). Freed pages go on a free
+  (16 pages, then twice the last, up to 1 MiB). Freed pages go on a free
   list and are taken again once the ring's mark reaches the generation that
   freed them.
 - **Leaves hold the records.** A record of up to 1024 bytes is held whole

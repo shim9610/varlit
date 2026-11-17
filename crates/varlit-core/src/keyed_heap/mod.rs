@@ -48,8 +48,11 @@ pub(crate) const META_LEN: u64 = META_STATE_AT + META_STATE_LEN;
 
 /// Every page of keyed storage: tree, overflow and free pages.
 pub(crate) const PAGE_BYTES: u64 = node::NODE_BYTES as u64;
-/// The first and the largest block, in pages.
+/// The first block, the largest a writer appends (1 MiB: the most a file
+/// carries in pages not used yet), and the largest a file may hold, in
+/// pages.
 pub(crate) const FIRST_BLOCK_PAGES: u64 = 16;
+pub(crate) const NEW_BLOCK_PAGES: u64 = 256;
 pub(crate) const MAX_BLOCK_PAGES: u64 = 4096;
 /// The change budget's bounds and default.
 pub(crate) const MIN_BUDGET: u64 = 1 << 20;

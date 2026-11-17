@@ -24,7 +24,7 @@
 //! and taken again once the ring's mark reaches that generation: no reader
 //! and no recovery can show a generation that used it. When the free list
 //! has none to give, pages are carved from the last block; when it is
-//! used up, a new block (twice the last, up to 16 MiB) is appended. Pages
+//! used up, a new block (twice the last, up to 1 MiB) is appended. Pages
 //! freed by deleting most keys stay in the file, for new keys to take; a
 //! file that shrank for good is rebuilt.
 
@@ -33,8 +33,8 @@ use super::node;
 use super::nodes::{HeapView, Nodes};
 use super::tree::{self, Body, KeyLoc, KeySrc, Path};
 use super::{
-    FIRST_BLOCK_PAGES, Fixed, MAX_BLOCK_PAGES, MAX_BUDGET, META_FIXED_LEN, META_LEN,
-    META_OVERFLOW_HEAD_AT, META_STATE_AT, MIN_BUDGET, NO_PAGE, PAGE_BYTES, RESERVED_BLOCK, State,
+    FIRST_BLOCK_PAGES, Fixed, MAX_BUDGET, META_FIXED_LEN, META_LEN, META_OVERFLOW_HEAD_AT,
+    META_STATE_AT, MIN_BUDGET, NEW_BLOCK_PAGES, NO_PAGE, PAGE_BYTES, RESERVED_BLOCK, State,
     corrupt,
 };
 use crate::matrix_tiles::RecordKind;
@@ -566,7 +566,7 @@ impl KeyedHeap {
             let pages = if self.state.block_pages == 0 {
                 FIRST_BLOCK_PAGES
             } else {
-                (self.state.block_pages * 2).min(MAX_BLOCK_PAGES)
+                (self.state.block_pages * 2).min(NEW_BLOCK_PAGES)
             };
             let at = self
                 .ring

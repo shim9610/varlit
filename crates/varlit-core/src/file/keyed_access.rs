@@ -129,7 +129,7 @@ impl VarlitFile {
         let result = (|| {
             encode_keyed_storage_key_into::<T>(self.spec, &block.key(), &mut buffer)?;
             let key_end = buffer.len();
-            encode_logical_payload_limited_after(self.spec, block, endian, &mut buffer)?;
+            encode_keyed_value_after(self.spec, block, endian, &mut buffer)?;
             let (key, payload) = buffer.split_at(key_end);
             let key = &key[KEY_ENVELOPE..];
             self.with_keyed_writer(|heap, store| heap.put(store, T::ID, key, payload))
@@ -199,7 +199,7 @@ impl VarlitFile {
         }
         let endian = T::ENDIAN.unwrap_or(self.spec.endian);
         crate::collections::MaterializationBudget::new(self.spec)
-            .decode_into(scratch, endian, out)?;
+            .decode_keyed_value_into(scratch, endian, key, out)?;
         Ok(true)
     }
 
@@ -245,6 +245,30 @@ impl VarlitFile {
 
 /// The envelope in front of an encoded internal key: block id and length.
 const KEY_ENVELOPE: usize = 12;
+
+/// Appends to `buffer` the value keyed storage keeps for `block`: its
+/// fields but the key fields, bounded like a logical payload.
+fn encode_keyed_value_after<T: VarlitKeyedBlock>(
+    spec: FormatSpec,
+    block: &T,
+    endian: Endian,
+    buffer: &mut Vec<u8>,
+) -> Result<()> {
+    let logical_limit = spec
+        .read_limits
+        .require(ReadLimitKey::LogicalPayloadLen)?
+        .unwrap_or(u64::MAX);
+    let mut encoder = crate::codec::Encoder::new_limited_appending(
+        endian,
+        logical_limit,
+        ReadLimitKey::LogicalPayloadLen.resource(),
+        std::mem::take(buffer),
+    );
+    let encoded = block.__varlit_encode_value(&mut encoder);
+    let (output, finished) = encoder.into_buffer_and_result();
+    *buffer = output;
+    encoded.and(finished)
+}
 
 /// Sizes `scratch` to a payload of `len` bytes and fills it with `read`.
 fn read_into(

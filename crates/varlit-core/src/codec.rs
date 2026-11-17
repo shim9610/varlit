@@ -889,6 +889,29 @@ impl<'a> Decoder<'a> {
         result
     }
 
+    /// [`Self::decode_from_slice_accounted_into`] for a keyed-storage
+    /// value: the record's fields but its key fields, which come from `key`.
+    pub(crate) fn decode_keyed_value_accounted_into<T: crate::VarlitKeyedBlock>(
+        input: &'a [u8],
+        endian: Endian,
+        materialization_remaining: &mut u64,
+        key: &T::Key,
+        out: &mut T,
+    ) -> Result<()> {
+        let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
+        *materialization_remaining = 0;
+        let result = T::__varlit_decode_value_into(key, out, &mut decoder).and_then(|()| {
+            if decoder.remaining() != 0 {
+                return Err(Error::TrailingBytes {
+                    remaining: decoder.remaining(),
+                });
+            }
+            Ok(())
+        });
+        *materialization_remaining = decoder.materialization_remaining;
+        result
+    }
+
     pub fn endian(&self) -> Endian {
         self.endian
     }

@@ -466,7 +466,8 @@ and `keyed_offset_chain`.
 ### Blocks And Pages
 
 - A block is a record of block version 7 holding whole 4096-byte pages: 16
-  for the first, twice the last after that, at most 4096 (16 MiB). Pages are
+  for the first, twice the last after that up to 256 (1 MiB); a reader
+  accepts blocks of up to 4096 pages (16 MiB). Pages are
   carved from the last block in order; a new block is appended when it is
   used up and the free list has none to give.
 - A page's first 16 bytes are its link while it is free (`next free page
@@ -488,6 +489,10 @@ and `keyed_offset_chain`.
   (block, key) order for unsigned key fields, so keys put in increasing
   order fill pages in order. A signed key field orders negative values
   after positive ones.
+- A record's value is the block encoded without its key fields (a fixed
+  block: the other fields in order; a variable block: the other fields
+  with their headers). A read takes the key fields from the key it looked
+  up.
 - A tree page: link (16) | header (`magic b"VKLF"` for a leaf or `b"VKIN"`
   for an interior page `| count u16 | high u16 | garbage u16 | six zero
   bytes`) | `count` entries (`offset u16 | length u16`, sorted by key) from

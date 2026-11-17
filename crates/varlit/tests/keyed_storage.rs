@@ -273,3 +273,56 @@ fn keyed_blocks_of_an_in_place_format_cannot_be_appended_to_the_log() -> varlit:
     ));
     Ok(())
 }
+
+varlit_format! {
+    pub format Cells {
+        magic: b"KEYCELLS";
+        version: 1;
+        schema_hash: computed;
+        integrity: crc32;
+        keyed_storage: in_place;
+        blocks {
+            fixed Cell(id = 1, key = [row, col]) { row: u32, value: u64, col: u16, }
+        }
+    }
+}
+
+#[test]
+fn key_fields_are_stored_once_and_come_back_from_the_key() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("cells.varlit");
+    let mut writer = Cells::create_writer(&path)?;
+    for row in 0..100u32 {
+        for col in 0..10u16 {
+            writer.put_cell(&Cell {
+                row,
+                value: u64::from(row) * 1000 + u64::from(col),
+                col,
+            })?;
+        }
+    }
+    writer.sync()?;
+    // A record is its key (block id, row, col: 10 bytes) and its value (the
+    // one field that is not a key field: 8 bytes), the key fields not
+    // repeated in the value.
+    let stats = writer.inner().file().keyed_storage_stats()?;
+    assert_eq!(stats.keys, 1000);
+    assert_eq!(stats.live_bytes, 1000 * (4 + 4 + 2 + 8));
+    drop(writer);
+    let reader = Cells::open_reader(&path)?;
+    let mut scratch = Vec::new();
+    let mut out = Cell::empty();
+    for (row, col) in [(0u32, 0u16), (7, 3), (99, 9)] {
+        assert!(reader.get_cell(&(row, col), &mut scratch, &mut out)?);
+        assert_eq!(
+            out,
+            Cell {
+                row,
+                value: u64::from(row) * 1000 + u64::from(col),
+                col,
+            }
+        );
+    }
+    assert!(!reader.get_cell(&(100, 0), &mut scratch, &mut out)?);
+    Ok(())
+}

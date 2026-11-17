@@ -1845,7 +1845,7 @@ pub struct KeyedStorage {
     /// thousandths of live bytes: 10 to 50 (1 to 5 %).
     pub free_space_permille: u16,
     /// Bytes of write-ahead ring a new file reserves; `None` for the default
-    /// (16 MiB). A reader may fall behind by as many publications as fit.
+    /// (2 MiB). A reader may fall behind by as many publications as fit.
     pub ring_bytes: Option<u64>,
     /// Bytes one round of changes may allocate before the writer publishes
     /// it; `None` for the default (64 MiB). A `sync` that changes more is
