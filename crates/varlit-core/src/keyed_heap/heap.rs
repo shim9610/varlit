@@ -53,8 +53,8 @@ use crate::matrix_tiles::{DIR_PAGE_BYTES, RecordKind};
 use crate::{Error, Result};
 
 const STEP: usize = lookup::STEP;
-/// The most record bytes a leaf body holds inline (the ratio caps it lower).
-const INLINE_MAX: usize = 4096;
+/// The most a leaf body takes: flags, length, key prefix, total and head.
+const LEAF_BODY_MAX: usize = 1 + 10 + tree::LEAF_PREFIX + 16;
 /// The most a separator body (without its child) takes.
 const SEP_MAX: usize = 1 + 10 + tree::KEY_PREFIX + 16;
 
@@ -84,13 +84,19 @@ pub(crate) struct HeapStats {
 /// that what builds up in a large file builds up in a small one.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Tuning {
+    /// Bytes a tree page may use: all of it, but tests use less to grow
+    /// deep trees from few keys.
+    pub node_bytes: usize,
     /// Logged bytes taken per byte a put or delete frees, at least (holes a
     /// put writes into count). One keeps the log bounded.
     pub fills_per_free: u64,
 }
 
 impl Tuning {
-    pub(crate) const DEFAULT: Self = Self { fills_per_free: 1 };
+    pub(crate) const DEFAULT: Self = Self {
+        node_bytes: node::CAPACITY,
+        fills_per_free: 1,
+    };
 }
 
 pub(crate) struct KeyedHeap {
@@ -358,9 +364,7 @@ impl KeyedHeap {
         let total = key.len() as u64 + payload.len() as u64;
         let mut varint = [0u8; 10];
         let varint_len = node::put_varint(&mut varint, tree_key);
-        let inline_len = 1 + varint_len as u64 + tree_key + payload.len() as u64;
-        let chained = inline_len > self.inline_cap() as u64;
-        let bytes = if chained { chain_bytes(total) } else { inline_len };
+        let bytes = chain_bytes(total);
         // A round changes at most the change budget (bytes written, moved
         // and freed): past it, the round so far is published and the mark
         // raised to it.
@@ -368,27 +372,22 @@ impl KeyedHeap {
             self.end_round(store)?;
         }
         let block = block_id.to_be_bytes();
-        let mut body = [0u8; INLINE_MAX];
+        // The leaf entry: the key's first bytes and where the record is.
+        // The record (key then payload) is an item chain, so a new value of
+        // any size leaves the entry's length as it was.
+        let mut body = [0u8; LEAF_BODY_MAX];
+        body[0] = tree::FLAG_CHAIN;
         body[1..1 + varint_len].copy_from_slice(&varint[..varint_len]);
         let mut at = 1 + varint_len;
-        if chained {
-            body[0] = tree::FLAG_CHAIN;
-            let head = self.write_chain(store, block_id, key_len, false, &RecSrc::Parts(key, payload))?;
-            self.state.live += bytes;
-            let inline = crate::width::bounded(tree_key, tree::KEY_PREFIX);
-            body[at..at + 4].copy_from_slice(&block);
-            body[at + 4..at + inline].copy_from_slice(&key[..inline - 4]);
-            at += inline;
-            body[at..at + 8].copy_from_slice(&total.to_le_bytes());
-            body[at + 8..at + 16].copy_from_slice(&head.to_le_bytes());
-            at += 16;
-        } else {
-            body[at..at + 4].copy_from_slice(&block);
-            body[at + 4..at + 4 + key.len()].copy_from_slice(key);
-            at += 4 + key.len();
-            body[at..at + payload.len()].copy_from_slice(payload);
-            at += payload.len();
-        }
+        let head = self.write_chain(store, block_id, key_len, false, &RecSrc::Parts(key, payload))?;
+        self.state.live += bytes;
+        let inline = crate::width::bounded(tree_key, tree::LEAF_PREFIX);
+        body[at..at + 4].copy_from_slice(&block);
+        body[at + 4..at + inline].copy_from_slice(&key[..inline - 4]);
+        at += inline;
+        body[at..at + 8].copy_from_slice(&total.to_le_bytes());
+        body[at + 8..at + 16].copy_from_slice(&head.to_le_bytes());
+        at += 16;
         self.round_alloc += bytes;
         let leaf_free = self.state.leaf_free;
         let path = self.find_path(store, &KeySrc::Parts(block, key))?;
@@ -1252,13 +1251,6 @@ impl KeyedHeap {
 
     // ---- the tree ----
 
-    /// Record bytes a leaf may hold inline: half the free-space ratio of a
-    /// page, so a leaf packed record by record leaves at most that much
-    /// free.
-    fn inline_cap(&self) -> usize {
-        (NODE_BYTES * usize::from(self.fixed.ratio_permille) / 2000).clamp(256, INLINE_MAX)
-    }
-
     /// Packing owed for `opened` bytes left free in leaves: a pass over the
     /// leaves moves about everything they hold and gathers the free bytes
     /// into whole pages, so keeping them within half the ratio takes twice
@@ -1333,9 +1325,14 @@ impl KeyedHeap {
         let index = path.index[0];
         let slot = self.nodes.load(&mut self.ring, store, leaf, &[])?;
         let before = free_of(self.nodes.page(slot));
+        let limit = self.tuning.node_bytes;
         let fitted = {
             let (page, scratch) = self.nodes.with_scratch(slot);
-            if replace {
+            let old = if replace { node::entry(page, index)?.1 } else { 0 };
+            let cost = if replace { body.len() } else { node::cost(body.len()) };
+            if used(page) - old + cost > limit {
+                false
+            } else if replace {
                 node::replace(page, index, body, scratch)?
             } else {
                 node::insert(page, index, body, scratch)
@@ -1498,8 +1495,9 @@ impl KeyedHeap {
             return Ok(());
         }
         let slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let limit = self.tuning.node_bytes;
         let (page, scratch) = self.nodes.with_scratch(slot);
-        if node::insert(page, index, body, scratch) {
+        if used(page) + node::cost(body.len()) <= limit && node::insert(page, index, body, scratch) {
             return Ok(());
         }
         self.split_interior(store, path, level, index, body)
@@ -1578,15 +1576,38 @@ impl KeyedHeap {
             None
         };
         if let Some(next) = next_sep {
-            // The next child becomes the first: it loses its lower bound.
-            if next.chained() {
-                self.release(store, next.key.head)?;
-            }
+            // The next child becomes the first: its separator becomes the
+            // lower bound of the whole page, which lives in the lowest
+            // ancestor where the path does not take the first child. Keys
+            // the removed child held went to the leaf before it (packing)
+            // or are gone (deletes), so that bound may rise to it.
+            let ancestor = (parent + 1..path.height).find(|&level| path.index[level] > 0);
+            let raw = {
+                let page = self.nodes.page(slot);
+                let (offset, len) = node::entry(page, 1)?;
+                let mut sep = SepBody::default();
+                sep.len = len - 8;
+                sep.bytes[..sep.len].copy_from_slice(&page[offset + 8..offset + len]);
+                sep
+            };
             let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
             let mut first = [0u8; 10];
             first[..8].copy_from_slice(&next.child.to_le_bytes());
-            let (page, scratch) = self.nodes.with_scratch(slot);
-            node::replace(page, 1, &first, scratch)?;
+            {
+                let (page, scratch) = self.nodes.with_scratch(slot);
+                node::replace(page, 1, &first, scratch)?;
+            }
+            match ancestor {
+                Some(level) => {
+                    let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+                    node::remove(self.nodes.page_mut(slot), index)?;
+                    self.set_separator(store, path, level, path.index[level], &raw)?;
+                    return Ok(());
+                }
+                // The leftmost page of the tree: no lower bound.
+                None if next.chained() => self.release(store, next.key.head)?,
+                None => 0,
+            };
         }
         let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
         node::remove(self.nodes.page_mut(slot), index)?;
@@ -1703,12 +1724,15 @@ impl KeyedHeap {
             let right_slot = self.nodes.load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
             let before = free_of(self.nodes.page(left_slot)) + free_of(self.nodes.page(right_slot));
             let mut moved = 0u64;
+            let limit = self.tuning.node_bytes;
             {
                 let (left, right, scratch) = self.nodes.pair_with_scratch(left_slot, right_slot);
                 while node::count(right) > 0 {
                     let (offset, len) = node::entry(right, 0)?;
                     let end = node::count(left);
-                    if !node::insert(left, end, &right[offset..offset + len], scratch) {
+                    if used(left) + node::cost(len) > limit
+                        || !node::insert(left, end, &right[offset..offset + len], scratch)
+                    {
                         break;
                     }
                     node::remove(right, 0)?;
@@ -1859,4 +1883,9 @@ fn split_point(page: &[u8]) -> usize {
 /// A page's free bytes, as the state counts them.
 fn free_of(page: &[u8]) -> u64 {
     node::free(page) as u64
+}
+
+/// Bytes a tree page's entries and bodies use.
+fn used(page: &[u8]) -> usize {
+    node::CAPACITY - node::free(page)
 }

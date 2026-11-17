@@ -75,10 +75,9 @@ pub(crate) enum RecordKind {
     /// The bytes and table of an external ring frame: ranges of a
     /// publication larger than the ring.
     Overflow,
-    /// Keyed storage: its metadata, a heap region, a slot bucket page.
+    /// Keyed storage: its metadata and a 64 KiB page.
     KeyedMeta,
     Heap,
-    Bucket,
 }
 
 impl RecordKind {
@@ -92,7 +91,6 @@ impl RecordKind {
             Self::Overflow => 5,
             Self::KeyedMeta => 6,
             Self::Heap => 7,
-            Self::Bucket => 8,
         }
     }
 }

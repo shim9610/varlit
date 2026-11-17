@@ -1195,7 +1195,7 @@ fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
             | SEGMENT_BLOCK_ID
             | MATRIX_CHUNK_BLOCK_ID
             | OPEN_DIGEST_BLOCK_ID => entry.block_version == 1,
-            MATRIX_TILE_BLOCK_ID => (1..=8).contains(&entry.block_version),
+            MATRIX_TILE_BLOCK_ID => (1..=7).contains(&entry.block_version),
             _ => true, // Preserve unknown internal extensions without interpreting them.
         };
         if !supported {

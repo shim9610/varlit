@@ -310,18 +310,28 @@ key, and every page it uses comes from and returns to the shared page pool.
   key: the same tree, with an 8-byte big-endian ordinal in place of the key.
   Nothing derived from user keys is stored.
 
-**Leaves.** A leaf is a 64 KiB pool page holding records in key order:
+**Leaves.** A leaf is a 64 KiB pool page holding one entry per record, in
+key order:
 
 - after the page link (16 bytes): a header (`magic b"VKLF" | count u16 |
-  low u16 | high u16 | zero`), then `count` 4-byte entries
-  (`offset u16 | length u16`) sorted by key, growing up; record bodies grow
-  down from the end of the page. Free space is the gap between them, plus
-  the bodies of removed records until the page is repacked.
-- a record body: `flags u8 | key length (varint) | key | value`, or, for a
-  record whose body would take more than a quarter of a page, `flags |
-  key length | key prefix (at most 256 bytes) | total length u64 | head item
-  u64`: the full key and the value live in a size-class item chain, as now.
-  Keys longer than 256 bytes are compared by reading the rest from the chain.
+  high u16 | garbage u16 | zero`), then `count` 4-byte entries
+  (`offset u16 | length u16`) sorted by key, growing up; bodies grow down
+  from the end of the page. Free space is the gap between them, plus the
+  bodies of removed entries until the page is repacked.
+- an entry's body: `flags u8 | key length (varint) | the key's first 32
+  bytes | total length u64 | head item u64`. The record itself, its key
+  then its payload, is a size-class item chain, as before.
+- Values never live in leaves. A first version kept small values inline;
+  then a value whose size changed changed its leaf, and keeping leaves
+  within the ratio cost about `1/ratio` bytes of repacking per byte changed
+  (measured: about 50 times the bytes written, 5 ms per update). With the
+  value in a chain, an update writes the new chain and rewrites the entry
+  in place at the same length: the leaves do not change size, and only
+  inserts and deletes of keys pay for packing, on entries of a few dozen
+  bytes.
+- Keys longer than 32 bytes are compared by reading the rest from the
+  chain. The key is stored once in the chain and its first bytes again in
+  the entry, at most 32 bytes per record.
 
 **Interior pages.** The same page format with entries `child page u64 |
 separator`, where the separator is the shortest byte string `S` with
@@ -356,7 +366,7 @@ cost is the price of the bound: with a ratio `r`, a freed byte costs about
 the data, are kept at least a quarter full instead.
 
 **What stays.** The ring, the mark, the freed-item log and the size classes
-(for records larger than a quarter of a page), the page pool and its link
+(every record's key and value), the page pool and its link
 area, the change budget and rounds, readers' snapshots and expiry.
 
 **What goes.** Slot buckets, the bucket directory and its free list, linear

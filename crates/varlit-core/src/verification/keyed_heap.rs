@@ -1,79 +1,70 @@
-//! Keyed storage arithmetic and layouts: where linear hashing routes a key
-//! and that a split moves exactly the keys `heap::split` moves, which size
-//! class an item goes to and how a record splits into items, and that every
-//! stored structure decodes to what was encoded. I/O, the ring and checksums
-//! are outside these harnesses.
+//! Keyed storage arithmetic and layouts: the binary search over a page's
+//! entries, the separator a split puts between two keys, the varints in
+//! entry bodies, which size class an item goes to and how a record splits
+//! into items, and that every stored structure decodes to what was encoded.
+//! I/O, the ring and checksums are outside these harnesses.
+use super::node::{self, put_varint, search, separator_len, varint};
 use super::{
-    CLASSES, ClassEntry, ITEM_HEADER, Item, MAX_ITEM, Slot, State, chain_bytes, chain_shape,
-    class_of, class_size, item_ref, ref_class, ref_index,
+    CLASSES, ClassEntry, ITEM_HEADER, Item, MAX_ITEM, chain_bytes, chain_shape, class_of,
+    class_size, item_ref, ref_class, ref_index,
 };
+use core::cmp::Ordering;
 
-/// A table shape a writer can reach: up to 2^31 primary buckets, the split
-/// pointer inside the current level.
-fn any_table() -> State {
-    let level: u64 = kani::any();
-    let split: u64 = kani::any();
-    kani::assume(level < 32);
-    kani::assume(split < 1u64 << level);
-    State {
-        level,
-        split,
-        ..State::default()
+/// Over every sorted array of up to eight entries and every target, the
+/// search returns the first entry not less than the target, and says
+/// whether it is equal: what `tree::find` relies on in each page.
+#[kani::proof]
+#[kani::unwind(10)]
+fn the_entry_search_finds_the_insertion_point() {
+    let n: usize = kani::any();
+    kani::assume(n <= 8);
+    let mut keys = [0u8; 8];
+    for index in 0..8 {
+        keys[index] = kani::any();
+        if index > 0 && index < n {
+            kani::assume(keys[index - 1] < keys[index]);
+        }
     }
-}
-
-/// Every key routes to a bucket the table has.
-#[kani::proof]
-fn every_route_lands_in_a_bucket_of_the_table() {
-    let table = any_table();
-    let route: u32 = kani::any();
-    assert!(table.bucket_of(route) < table.buckets());
-}
-
-/// A split changes the bucket of no key outside the split bucket, and sends
-/// each key of the split bucket to the old bucket or to `split + 2^level`
-/// by routing bit `level` alone: what `heap::split` does with the slots.
-#[kani::proof]
-fn a_split_moves_exactly_the_keys_whose_routing_bit_is_set() {
-    let table = any_table();
-    kani::assume(!(table.level == 31 && table.split + 1 == 1u64 << 31));
-    let next = table.after_split();
-    assert_eq!(next.buckets(), table.buckets() + 1);
-    let route: u32 = kani::any();
-    let before = table.bucket_of(route);
-    let after = next.bucket_of(route);
-    if before == table.split {
-        let moves = u64::from(route) & (1u64 << table.level) != 0;
-        let target = if moves {
-            table.split + (1u64 << table.level)
-        } else {
-            table.split
-        };
-        assert_eq!(after, target);
+    let target: u8 = kani::any();
+    let (at, found) = search(n, &mut |index| Ok(keys[index].cmp(&target))).expect("no errors");
+    assert!(at <= n);
+    assert!(keys[..at].iter().all(|&key| key < target));
+    if at < n {
+        assert!(keys[at] >= target);
+        assert_eq!(found, keys[at] == target);
     } else {
-        assert_eq!(after, before);
+        assert!(!found);
     }
 }
 
-/// A merge undoes a split exactly, and changes the bucket of no key outside
-/// the merged bucket, which all go to the bucket it was split from: what
-/// `heap::merge` does with the slots.
+/// For every pair of keys of up to four bytes with `low < high`, the
+/// separator a split chooses lies between them: `low < S <= high`.
 #[kani::proof]
-fn a_merge_undoes_a_split_and_moves_only_the_merged_keys() {
-    let table = any_table();
-    kani::assume(table.buckets() > 1);
-    let next = table.after_merge();
-    assert_eq!(next.buckets() + 1, table.buckets());
-    assert_eq!(next.after_split(), table);
-    let from = next.split + (1u64 << next.level);
-    let route: u32 = kani::any();
-    let before = table.bucket_of(route);
-    let after = next.bucket_of(route);
-    if before == from {
-        assert_eq!(after, next.split);
-    } else {
-        assert_eq!(after, before);
-    }
+#[kani::unwind(6)]
+fn a_separator_lies_between_its_keys() {
+    let low_len: usize = kani::any();
+    let high_len: usize = kani::any();
+    kani::assume(low_len <= 4 && high_len <= 4);
+    let low: [u8; 4] = kani::any();
+    let high: [u8; 4] = kani::any();
+    let (low, high) = (&low[..low_len], &high[..high_len]);
+    kani::assume(low.cmp(high) == Ordering::Less);
+    let separator = &high[..separator_len(low, high)];
+    assert!(low < separator && separator <= high);
+}
+
+/// Every u64 round-trips through a varint, and no other encoding of it
+/// reads back.
+#[kani::proof]
+#[kani::unwind(12)]
+fn varints_round_trip() {
+    let value: u64 = kani::any();
+    let mut bytes = [0u8; 10];
+    let len = put_varint(&mut bytes, value);
+    let read = varint(&bytes[..len]);
+    assert!(matches!(read, Ok((read, used)) if read == value && used == len));
+    core::mem::forget(read);
+    let _ = node::NODE_BYTES;
 }
 
 /// An item of any length up to the largest goes to the smallest class that
@@ -125,17 +116,13 @@ fn item_references_round_trip() {
     assert_eq!(ref_index(item), index);
 }
 
-/// Slots, item headers and class entries decode to what was encoded.
+/// Item headers decode to what was encoded.
 #[kani::proof]
 fn layouts_round_trip() {
-    let slot = Slot {
-        route: kani::any(),
-        item: kani::any(),
-    };
-    assert_eq!(Slot::decode(&slot.encode()), slot);
     let item = Item {
         len: kani::any(),
         head: kani::any(),
+        separator: kani::any(),
         block_or_route: kani::any(),
         key_len: kani::any(),
         crc: kani::any(),
@@ -143,11 +130,11 @@ fn layouts_round_trip() {
         next: kani::any(),
         total_or_prev: kani::any(),
     };
-    kani::assume(item.len < 1 << 31);
+    kani::assume(item.len < 1 << 30);
     assert_eq!(Item::decode(&item.encode()), item);
 }
 
-/// Class entries decode to what was encoded. Apart from the slot and item
+/// Class entries decode to what was encoded. Apart from the item header
 /// harness: together they take more of the verifier's memory than needed.
 #[kani::proof]
 fn class_entries_round_trip() {

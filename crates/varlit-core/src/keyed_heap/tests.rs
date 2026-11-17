@@ -10,7 +10,15 @@ use crate::matrix_tiles::store::memory::MemStore;
 const RING: u64 = 1 << 20;
 const BUDGET: u64 = super::DEFAULT_BUDGET;
 /// The writer's own work turned down: holes build up as in a large file.
-const SLOW: Tuning = Tuning { fills_per_free: 1 };
+const SLOW: Tuning = Tuning {
+    node_bytes: super::node::CAPACITY,
+    fills_per_free: 1,
+};
+/// Small tree pages: deep trees from a few thousand keys.
+const SMALL_PAGES: Tuning = Tuning {
+    node_bytes: 1024,
+    fills_per_free: 1,
+};
 
 type Model = BTreeMap<(u32, Vec<u8>), Vec<u8>>;
 
@@ -153,7 +161,7 @@ fn records_split_into_full_items_and_one_that_fits() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn puts_deletes_and_reopens_match_a_model_across_splits() {
     let mut store = MemStore::new();
-    let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
+    let mut heap = create(&mut store, BUDGET, SMALL_PAGES);
     let mut model = Model::new();
     let mut state = 1u64;
     // Enough keys to split leaves and interior pages, values of every size
@@ -174,12 +182,12 @@ fn puts_deletes_and_reopens_match_a_model_across_splits() {
         }
         heap.publish(&mut store).unwrap();
         if round % 2 == 1 {
-            heap = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
+            heap = KeyedHeap::open(&mut store, heap.meta, SMALL_PAGES).unwrap();
         }
         check(&heap, &store, &model);
         consistent(&heap, &store, &format!("round {round}"));
     }
-    assert!(heap.state().leaves > 4, "{:?}", heap.state());
+    assert!(heap.state().root.1 >= 3, "{:?}", heap.state());
 }
 
 #[test]
@@ -787,7 +795,7 @@ fn rewriting_every_key_each_round_settles() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn deletes_shrink_the_tree() {
     let mut store = MemStore::new();
-    let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
+    let mut heap = create(&mut store, BUDGET, SMALL_PAGES);
     let mut model = Model::new();
     for key in 0..20_000u64 {
         let bytes = value(20, key);
@@ -813,12 +821,12 @@ fn deletes_shrink_the_tree() {
     let pending = store.writes_since_sync();
     for keep in (0..pending).step_by((pending / 40).max(1)) {
         let mut crashed = store.crashed(keep, 3);
-        let reopened = KeyedHeap::open(&mut crashed, heap.meta, Tuning::DEFAULT).unwrap();
+        let reopened = KeyedHeap::open(&mut crashed, heap.meta, SMALL_PAGES).unwrap();
         check(&reopened, &crashed, &published);
         consistent(&reopened, &crashed, &format!("crash at write {keep}"));
     }
     heap.publish(&mut store).unwrap();
-    let reopened = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
+    let reopened = KeyedHeap::open(&mut store, heap.meta, SMALL_PAGES).unwrap();
     check(&reopened, &store, &model);
     let mut heap = reopened;
     for key in 0..20_000u64 {
@@ -855,3 +863,4 @@ fn profile_scattered() {
     }
     eprintln!("done {:?} {:?}", t.elapsed(), heap.state());
 }
+

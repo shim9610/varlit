@@ -14,8 +14,12 @@ use super::{ITEM_HEADER, NO_ITEM, corrupt};
 use crate::Result;
 use core::cmp::Ordering;
 
-/// Key bytes a body keeps in its page.
+/// Key bytes an interior body keeps in its page.
 pub(crate) const KEY_PREFIX: usize = 256;
+/// Key bytes a leaf body keeps in its page: the rest, and the value, are in
+/// the record's item chain, so a leaf entry is a few dozen bytes whatever
+/// the record's size, and changing a value rewrites it in place.
+pub(crate) const LEAF_PREFIX: usize = 32;
 /// The deepest tree: a fan-out of at least 128 entries (separators of at
 /// most `KEY_PREFIX` bytes) reaches every u64 count of leaves well before.
 pub(crate) const MAX_HEIGHT: usize = 16;
@@ -234,7 +238,7 @@ pub(crate) fn parse(head: &[u8], at: u64, len: usize, interior: bool) -> Result<
             total: 0,
         });
     }
-    let inline = crate::width::bounded(key_len, KEY_PREFIX);
+    let inline = crate::width::bounded(key_len, if interior { KEY_PREFIX } else { LEAF_PREFIX });
     if key_len < 4 || pos + inline + 16 != len {
         return Err(bad());
     }

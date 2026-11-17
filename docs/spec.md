@@ -96,8 +96,7 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   | 4 | tile | one `VTIL` tile |
   | 5 | overflow | one `VOVF` overflow region (see Overflow Regions) |
   | 6 | keyed metadata | the `VKMT` record (see Keyed Storage Wire Contract) |
-  | 7 | keyed page | a 64 KiB page of keyed storage: items, freed item log, or pooled |
-  | 8 | bucket page | one `VBKT` slot bucket page |
+  | 7 | keyed page | a 64 KiB page of keyed storage: a tree page, items, freed item log, or pooled |
 
 - Each record is appended once and its payload is then rewritten in place. For
   a record with `RECORD_FLAG_IN_PLACE` the record checksum leaves the payload
@@ -106,7 +105,7 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   (`checksum_record_fields` in `file.rs`). The record validator refuses
   `RECORD_FLAG_IN_PLACE` on any other block id, and `RECORD_FLAG_IN_PLACE`
   missing on `0xFFFF_FFF3`, with `InvalidCanonicalEncoding("in-place record
-  flag disagrees with block id")`, and a block version outside `1..=8` with
+  flag disagrees with block id")`, and a block version outside `1..=7` with
   `InvalidCanonicalEncoding("unsupported internal record version")`.
 - Creation appends the metadata record, then the ring record, and syncs. In a
   native file the metadata record is the first record of the append log: its
@@ -426,15 +425,15 @@ circularly.
 
 A format that declares keyed storage (`keyed_storage: in_place` in
 `varlit_format!`, `FormatSpec::with_keyed_storage`) stores its keyed blocks
-once per key in a record heap inside the file instead of appending them to
-the log. The engine is `crates/varlit-core/src/keyed_heap`; it shares the
+once per key, in pages sorted by key inside the file, instead of appending
+them to the log. The engine is `crates/varlit-core/src/keyed_heap`; it shares the
 write-ahead ring, publication indexes, overflow regions and snapshots of the
 matrix engine (`matrix_tiles/ring_store.rs`, `matrix_tiles/view.rs`), so
 everything under Write-Ahead Ring, Overflow Regions, Publication Indexes and
 Snapshots And Overlay applies unchanged. All integers are little-endian.
-Its records have block id `0xFFFF_FFF3` and block versions 6 to 8 (see the
-table under Records): metadata, 64 KiB pages (items, the log and the
-pool), and bucket pages. The schema hash folds `keyed-storage-v1` and the
+Its records have block id `0xFFFF_FFF3` and block versions 6 and 7 (see the
+table under Records): metadata and 64 KiB pages (tree pages, items, the
+log and the pool). The schema hash folds `keyed-storage-v1` and the
 free-space ratio. A format cannot declare both keyed storage and matrix
 blocks, nor keyed storage and `keyed_offset_chain`.
 
@@ -446,9 +445,9 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   | Bytes | Field |
   | --- | --- |
   | 0..4 | magic `b"VKMT"` |
-  | 4..6 | version, 3 |
+  | 4..6 | version, 4 |
   | 6..8 | free-space ratio in thousandths of live bytes, 10 to 50 |
-  | 8..24 | the SipHash-1-3 key: two `u64`, random per file |
+  | 8..24 | zero |
   | 24..40 | ring payload offset and length |
   | 40..48 | change budget: bytes one round may write, move and free, 1 MiB to 1 TiB |
   | 48..56 | zero |
@@ -458,11 +457,11 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   | 72..224 | the state: 19 `u64` fields, changed through the ring |
   | 224..4320 | 128 class entries of 32 bytes, changed through the ring |
 
-- The state fields, in order: bucket directory root page and height; linear
-  hashing level and split pointer; live keys; live item bytes; pages; the
-  page pool's head, tail and length; the free bucket page list; the freed
-  item log's head page and entry, tail page and entry count there, and
-  entries; bytes of the items the log names; two zeros.
+- The state fields, in order: the tree's root page and height (1: the root
+  is a leaf); live keys; live item bytes; pages; the page pool's head, tail
+  and length; the freed item log's head page and entry, tail page and entry
+  count there, and entries; bytes of the items the log names; leaf pages;
+  interior pages; zero; free bytes in leaves; zero.
 - A class entry: its end (items `[0, end)`), its page directory root and
   height, zero.
 
@@ -478,17 +477,20 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   page `b div 65520`, so an item may continue on the next page.
 - A record's bytes are its key then its payload. It is a chain of items:
   full 64 KiB items, then one item of the smallest class holding the rest.
-- An item starts with a 40-byte header (`len u32 | block id or route u32 |
-  key length u32 | crc32 | dead u64 | next item u64 | total length or
-  previous item u64`). `len`'s top bit marks a continuation. A head carries
-  the block id, key length and the record's total length; a continuation
-  carries the key's route and the item before it. `dead` is 0 while the
+  A separator longer than 256 bytes is a chain too, of its bytes past the
+  ones its entry keeps.
+- An item starts with a 40-byte header (`len u32 | block id u32 | key
+  length u32 | crc32 | dead u64 | next item u64 | total length or previous
+  item u64`). `len`'s top bit marks a continuation, the next bit a
+  separator's chain. A head carries the block id, key length and the
+  record's total length; a continuation carries zero and the item before
+  it. `dead` is 0 while the
   item is live and the generation that freed it after. The CRC32 covers the
   header's first eight bytes and the item's record bytes.
 - An item reference is the class in the top byte and the index below;
   `u64::MAX` is none.
-- Every item below a class's end is live (`dead` 0: its slot, for a head,
-  or the item before it points at it) or dead and named by the log. Free
+- Every item below a class's end is live (`dead` 0: a tree entry, for a
+  head, or the item before it points at it) or dead and named by the log. Free
   space is only past a class's end. A class keeps at most one page past the
   pages its items need.
 - The freed item log: 64 KiB pages of a 16-byte link then 16-byte entries
@@ -498,32 +500,47 @@ blocks, nor keyed storage and `keyed_offset_chain`.
 - Free pages: a pool, oldest first; a pooled page's first 16 bytes hold the
   next pooled page and the last generation that staged that link.
 
-### Slot Buckets (`VBKT`)
+### The Tree (`VKLF`, `VKIN`)
 
-- A key's route is the low 32 bits of SipHash-1-3, keyed with the metadata's
-  seed, of `block_id (u32) || key`. With `level` and `split` from the state
-  the table has `2^level + split` buckets and the key's bucket is
-  `route mod 2^level`, or `route mod 2^(level+1)` when that is below `split`.
-- A bucket page is 4096 bytes: `magic b"VBKT" | count u32 | next page u64`
-  then 255 slots of 16 bytes (`route u32 | zero u32 | head item u64`).
-  Slots `0..count` are in use; a bucket's pages chain through `next`.
-- Bucket numbers map to first pages through a radix directory of 4096-byte
-  pages (512 entries, 9 bits per level); class pages are mapped the same
-  way.
-- A put that leaves more than three quarters of `buckets × 255` slots in
-  use splits the bucket at `split` (its slots whose route has bit `level`
-  set move to bucket `split + 2^level`) and advances `split`; a delete that
-  leaves fewer than a quarter merges the last bucket back into the one it
-  was split from (its chain linked after that bucket's and packed into the
-  fewest pages) and steps `split` back. Bucket pages left over go to the
-  free bucket page list.
+- A tree key is the block id (big-endian `u32`) then the record's key, so
+  byte order is (block, key) order.
+- A tree page is a 64 KiB pool page: the pool link (16 bytes, never used by
+  the tree), a header (`magic b"VKLF"` for a leaf or `b"VKIN"` for an
+  interior page `| count u16 | high u16 | garbage u16 | six zero bytes`),
+  then `count` entries (`offset u16 | length u16`, sorted by key) from byte
+  32 up, and bodies from the end of the page down to `high` (0 stands for
+  65536). `garbage` counts the bytes of removed bodies not yet reclaimed.
+- A leaf body is `flags u8 = 1 | key length (LEB128) | the first
+  min(length, 32) key bytes | total record length u64 | head item u64`: the
+  record, key and payload, is the item chain.
+- An interior body is `child page u64 | flags u8 | separator length
+  (LEB128) | separator`, or, for a separator longer than 256 bytes, `child
+  | flags = 1 | length | its first 256 bytes | length u64 | head item u64`.
+  The first entry's separator is empty. A child holds the keys from its
+  separator (included) up to the next entry's (excluded), within the
+  page's own bounds.
+- A split moves the upper half of a full page (by bytes; a leaf that a key
+  past all of its keys overflows moves nothing but that key) to a new page,
+  and inserts in the parent the shortest prefix of the right page's first
+  key that is greater than the left page's last key. An interior split
+  moves the separator of the first entry it moves up to the parent. A root
+  split adds a level; a root left with one child is replaced by it.
+- A leaf left empty is removed with its parent entry. When that entry is a
+  page's first, the next entry's separator moves up to the lowest ancestor
+  where the path does not take the first child.
+- Free bytes in leaves are counted in the state. While they exceed the
+  free-space ratio of the bytes leaves use (and two pages), each operation
+  packs: a cursor walks the leaves in key order, moving entries from the
+  leaf after it into its free space and updating the separator between
+  them, or removing that leaf when it empties.
 
 ### Writing
 
 - A put writes each of the record's items into the oldest logged item when
   that is of the item's class, the mark has passed it and it still names
-  it (its header through the ring), else at the end of its class; the slot,
-  the class entries, the log pointers and the state go through the ring.
+  it (its header through the ring), else at the end of its class; the leaf
+  entry (the same length for a key already there), the class entries, the
+  log pointers and the state go through the ring.
   The items it replaces get their `dead` set and are logged.
 - Item bytes are written straight to the file only where no generation a
   reader or a recovery may show uses them and nothing staged covers them:
@@ -535,13 +552,17 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   item the class shrinks by one; otherwise the class's last item, if dead,
   is shrunk away first (its own entry then names nothing), and if live it
   is written into the dead one (its bytes straight to the file, its header
-  through the ring, so a crash leaves the dead item dead), its slot or the
-  item before and after it repointed, and the class shrinks by one. Each
+  through the ring, so a crash leaves the dead item dead), its tree entry
+  or the item before and after it repointed, and the class shrinks by one. Each
   operation takes at least as many logged bytes as it freed.
 - When freed items wait longer than the declared ratio of live bytes
   allows (at least 1 MiB, at most half the change budget), the writer
   raises the ring's `mark` to the last publication without putting
   anything in place.
+- Tree pages change in 4 KiB segments, each staged whole, and only those
+  whose bytes changed; a page appended or taken from the pool in the open
+  generation is written in place, but for its first segment when it came
+  from the pool.
 - Pages left empty go to the pool and are taken again once the last
   generation that staged their link is in place; the writer puts the ring
   in place first when that generation is published. Log positions are
