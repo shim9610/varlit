@@ -3,9 +3,9 @@
 //! differ.
 
 use super::{
-    BUCKET_HEADER, BUCKET_PAGE, ClassEntry, ITEM_HEADER, Item, NO_ITEM, PAGE_BYTES, SLOT_LEN, Slot,
-    State, checked_ref, class_entry_at, class_size, corrupt, page_header, radix, ref_class,
-    ref_index, sip,
+    BUCKET_HEADER, BUCKET_PAGE, ClassEntry, ITEM_HEADER, ITEM_SPACE, Item, NO_ITEM, PAGE_BYTES,
+    PAGE_LINK, SLOT_LEN, Slot, State, checked_ref, class_entry_at, class_size, corrupt,
+    page_header, radix, ref_class, ref_index, sip,
 };
 use crate::matrix_tiles::store::TileSource;
 use crate::matrix_tiles::view::RingReader;
@@ -90,7 +90,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Reads `buf.len()` bytes of item `item` from byte `from` of it. An
-    /// item may straddle two pages.
+    /// item may continue on the class's next page, past its link.
     pub(crate) fn read_item(&mut self, item: u64, from: u64, buf: &mut [u8]) -> Result<()> {
         let item = checked_ref(item)?;
         let class = ref_class(item);
@@ -102,8 +102,8 @@ impl<'a> Ctx<'a> {
         let mut at = ref_index(item) * size + from;
         let mut done = 0usize;
         while done < buf.len() {
-            let page = self.page(class, &entry, at / PAGE_BYTES)?;
-            let within = at % PAGE_BYTES;
+            let page = self.page(class, &entry, at / ITEM_SPACE)?;
+            let within = PAGE_LINK + at % ITEM_SPACE;
             let n = crate::width::bounded(PAGE_BYTES - within, buf.len() - done);
             self.read(page + within, &mut buf[done..done + n])?;
             done += n;

@@ -55,13 +55,25 @@ fn consistent(heap: &KeyedHeap, store: &MemStore, when: &str) {
     }
 }
 
-fn bounded(heap: &KeyedHeap, most_live: u64, when: &str) {
-    let pages = heap.state().pages * PAGE_BYTES;
+/// The pages in use (all but pooled ones) hold the live bytes, the logged
+/// items, a partial page per class and the log, nothing more; and the
+/// logged items stay within their bound. `largest` is the most bytes one
+/// record of the test takes.
+fn bounded(heap: &KeyedHeap, largest: u64, when: &str) {
+    let state = heap.state();
+    let used = (state.pages - state.pooled) * PAGE_BYTES;
     assert!(
-        pages <= most_live + heap.idle_bound(),
-        "{when}: {pages} bytes of pages for at most {most_live} live (bound {}, idle {}): {:?}",
+        used <= state.live + heap.idle_bound(),
+        "{when}: {used} bytes of pages in use for {} live (bound {}): {:?}",
+        state.live,
         heap.idle_bound(),
-        heap.idle(),
+        heap.stats
+    );
+    assert!(
+        state.hole_bytes <= heap.logged_bound(largest),
+        "{when}: {} bytes logged (bound {}): {:?}",
+        state.hole_bytes,
+        heap.logged_bound(largest),
         heap.stats
     );
 }
@@ -204,13 +216,11 @@ fn values_of_any_length_round_trip_as_chains() {
 fn bulk_rewrites_stay_within_the_bound() {
     let mut store = MemStore::new();
     let mut heap = create(&mut store, MIN_BUDGET, SLOW);
-    let mut most_live = 0;
     for round in 0..8u64 {
         for key in 0..20_000u64 {
             heap.put(&mut store, 1, &key.to_le_bytes(), &value(500, key ^ round))
                 .unwrap();
-            most_live = most_live.max(heap.state().live);
-            bounded(&heap, most_live, &format!("round {round} key {key}"));
+            bounded(&heap, chain_bytes(508), &format!("round {round} key {key}"));
         }
         heap.publish(&mut store).unwrap();
     }
@@ -226,7 +236,6 @@ fn scattered_updates_stay_within_the_bound() {
     let mut store = MemStore::new();
     let mut heap = create(&mut store, MIN_BUDGET, SLOW);
     let mut state = 7u64;
-    let mut most_live = 0;
     for key in 0..20_000u64 {
         let len = 64 + (random(&mut state) % 2000) as usize;
         heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, key))
@@ -238,8 +247,7 @@ fn scattered_updates_stay_within_the_bound() {
         let len = 64 + (random(&mut state) % 2000) as usize;
         heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, step))
             .unwrap();
-        most_live = most_live.max(heap.state().live);
-        bounded(&heap, most_live, &format!("step {step}"));
+        bounded(&heap, chain_bytes(2072), &format!("step {step}"));
         if step % 500 == 0 {
             heap.publish(&mut store).unwrap();
         }
@@ -254,15 +262,17 @@ fn scattered_updates_stay_within_the_bound() {
 fn space_moves_between_classes() {
     let mut store = MemStore::new();
     let mut heap = create(&mut store, MIN_BUDGET, Tuning::DEFAULT);
-    let mut most_live = 0;
     for round in 0..12u64 {
         // Every round, every value in a different size class.
         let len = 100 + (round as usize % 6) * 700;
         for key in 0..4000u64 {
             heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, round))
                 .unwrap();
-            most_live = most_live.max(heap.state().live);
-            bounded(&heap, most_live, &format!("round {round} key {key}"));
+            bounded(
+                &heap,
+                chain_bytes(3608),
+                &format!("round {round} key {key}"),
+            );
         }
         heap.publish(&mut store).unwrap();
     }
@@ -270,8 +280,8 @@ fn space_moves_between_classes() {
     consistent(&heap, &store, "after the rounds");
 }
 
-/// Deleting every key shrinks every class to nothing once the deletes are
-/// in place; their pages wait in the pool.
+/// Deleting every key shrinks every class to nothing once the mark passes
+/// the deletes; their pages wait in the pool.
 #[test]
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn deleting_everything_empties_every_class() {
@@ -286,20 +296,66 @@ fn deleting_everything_empties_every_class() {
         assert!(heap.delete(&mut store, 1, &key.to_le_bytes()).unwrap());
     }
     heap.publish(&mut store).unwrap();
-    // Fills wait for the deletes to be in place; more operations drive them.
-    for round in 0..40u64 {
-        heap.ring.checkpoint(&mut store, u64::MAX).unwrap();
+    // Each operation takes a little more than it frees; more operations
+    // drive the rest.
+    for round in 0..20_000u64 {
         heap.put(&mut store, 2, b"drive", &value(10, round))
             .unwrap();
-        heap.publish(&mut store).unwrap();
-        if heap.state().hole_bytes <= 256 {
+        if round % 100 == 0 {
+            heap.publish(&mut store).unwrap();
+        }
+        if heap.class_end(class_of(ITEM_HEADER + 708).unwrap()) == 0 {
             break;
         }
     }
-    assert!(heap.state().hole_bytes <= 256, "{:?}", heap.stats);
+    assert_eq!(
+        heap.class_end(class_of(ITEM_HEADER + 708).unwrap()),
+        0,
+        "{:?}",
+        heap.stats
+    );
     assert_eq!(heap.state().keys, 1);
     assert!(heap.state().pooled > 0);
     consistent(&heap, &store, "after deleting");
+}
+
+/// The space follows the data held now, not the most it ever held: one
+/// class filled, nearly all of it deleted, another class filled. The pages
+/// in use stay within the bound over the current data at every step, and
+/// the second class takes the first's pages from the pool.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn space_follows_the_data_held_now_not_its_peak() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, MIN_BUDGET, SLOW);
+    // 40 000 items of the smallest class: many pages of one class.
+    for key in 0..40_000u64 {
+        heap.put(&mut store, 1, &key.to_le_bytes(), b"").unwrap();
+        bounded(&heap, chain_bytes(8), &format!("fill key {key}"));
+    }
+    heap.publish(&mut store).unwrap();
+    let peak = heap.state().pages;
+    for key in 0..40_000u64 {
+        if key % 100 != 0 {
+            assert!(heap.delete(&mut store, 1, &key.to_le_bytes()).unwrap());
+        }
+        bounded(&heap, chain_bytes(8), &format!("delete key {key}"));
+    }
+    heap.publish(&mut store).unwrap();
+    // Another class, as much data as the first held.
+    for key in 0..1000u64 {
+        heap.put(&mut store, 2, &key.to_le_bytes(), &value(2000, key))
+            .unwrap();
+        bounded(&heap, chain_bytes(2008), &format!("refill key {key}"));
+    }
+    heap.publish(&mut store).unwrap();
+    assert!(heap.stats.pages_reused > 0, "{:?}", heap.stats);
+    assert!(
+        heap.state().pages <= peak + 40,
+        "{} pages, peak {peak}",
+        heap.state().pages
+    );
+    consistent(&heap, &store, "after the refill");
 }
 
 /// A crash at any write after a publication leaves exactly the published
@@ -360,14 +416,14 @@ fn values_written_into_holes_survive_a_crash() {
     }
     heap.publish(&mut store).unwrap();
     heap.ring.checkpoint(&mut store, u64::MAX).unwrap();
-    let reused = heap.stats.holes_reused;
+    let moved = heap.stats.moves;
     let mut next = model.clone();
     for key in (1..300u64).step_by(4) {
         let bytes = value(300, key ^ 0xabcd);
         heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
         next.insert((1, key.to_le_bytes().to_vec()), bytes);
     }
-    assert!(heap.stats.holes_reused > reused, "{:?}", heap.stats);
+    assert!(heap.stats.moves > moved, "{:?}", heap.stats);
     let pending = store.writes_since_sync();
     for keep in (0..pending).step_by((pending / 40).max(1)) {
         for torn in [0usize, 5] {
@@ -498,7 +554,7 @@ fn a_reader_never_sees_values_moved_into_space_it_points_at() {
         heap.ring.checkpoint(&mut store, u64::MAX).unwrap();
     }
     assert!(
-        heap.stats.holes_reused > 0 || heap.stats.shrinks > 0,
+        heap.stats.moves > 0 || heap.stats.shrinks > 0,
         "{:?}",
         heap.stats
     );
@@ -531,7 +587,7 @@ fn layouts_are_the_same_bytes_on_every_platform() {
         block_or_route: 0x0a0b_0c0d,
         key_len: 0,
         crc: 0x1122_3344,
-        chain: 7,
+        dead: 7,
         next: super::NO_ITEM,
         total_or_prev: item_ref(1, 3),
     };
@@ -546,9 +602,6 @@ fn layouts_are_the_same_bytes_on_every_platform() {
     let entry = ClassEntry {
         end: 5,
         dir: (0x1000, 1),
-        holes: 2,
-        bits: (0x2000, 1),
-        pending: (0x3000, 2),
     };
     assert_eq!(&entry.encode()[..8], &5u64.to_le_bytes());
     assert_eq!(ClassEntry::decode(&entry.encode()).unwrap(), entry);
@@ -565,10 +618,9 @@ fn layouts_are_the_same_bytes_on_every_platform() {
 }
 
 /// Random puts, deletes, publications and reopens over a few hundred keys,
-/// with the writer's own work turned down: after every operation the heap
-/// is consistent, every key reads back, and the pages stay within the
-/// bound over the most data the heap ever held (returning pages to the
-/// file system after deletes is not done yet).
+/// with the writer's own work turned down: the heap is consistent, every key
+/// reads back, and after every operation the pages in use stay within the
+/// bound over the data the heap holds now.
 #[test]
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn random_histories_stay_consistent_and_bounded() {
@@ -579,7 +631,6 @@ fn random_histories_stay_consistent_and_bounded() {
         let mut model = Model::new();
         let mut published = Model::new();
         let mut state = seed;
-        let mut most_live = 0u64;
         for step in 0..3000u32 {
             let roll = random(&mut state) % 100;
             let key = (random(&mut state) % 300).to_le_bytes().to_vec();
@@ -613,11 +664,14 @@ fn random_histories_stay_consistent_and_bounded() {
                 heap = KeyedHeap::open(&mut store, meta, SLOW).unwrap();
                 model = published.clone();
             }
-            most_live = most_live.max(heap.state().live);
             if step % 10 == 0 {
                 consistent(&heap, &store, &format!("seed {seed} step {step}"));
             }
-            bounded(&heap, most_live, &format!("seed {seed} step {step}"));
+            bounded(
+                &heap,
+                chain_bytes(100_008),
+                &format!("seed {seed} step {step}"),
+            );
         }
         check(&heap, &store, &model);
     }
@@ -640,4 +694,75 @@ fn a_few_puts_and_deletes_match_a_model() {
     check(&heap, &store, &model);
     let reopened = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
     check(&reopened, &store, &model);
+}
+
+/// The writer raises the mark, without putting anything in place, to fill
+/// holes a reader's snapshot still points at: the reader expires instead
+/// of reading the values moved into them.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn a_reader_older_than_a_raised_mark_expires() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
+    for key in 0..4000u64 {
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(600, key))
+            .unwrap();
+    }
+    heap.publish(&mut store).unwrap();
+    let mut reader = super::reader::KeyedReader::open(&store, heap.meta).unwrap();
+    let checkpointed = heap.ring.checkpointed();
+    // More than the patience freed, published, then more operations.
+    for key in (0..4000u64).step_by(2) {
+        heap.delete(&mut store, 1, &key.to_le_bytes()).unwrap();
+    }
+    heap.publish(&mut store).unwrap();
+    for key in 0..200u64 {
+        heap.put(&mut store, 2, &key.to_le_bytes(), b"x").unwrap();
+    }
+    heap.publish(&mut store).unwrap();
+    assert!(heap.stats.moves > 0, "{:?}", heap.stats);
+    assert!(heap.ring.mark() > reader.snapshot());
+    assert_eq!(heap.ring.checkpointed(), checkpointed, "{:?}", heap.stats);
+    match read(&mut reader, &store, &1u64.to_le_bytes()) {
+        Err(crate::Error::MatrixSnapshotExpired { .. }) => {}
+        other => panic!("a reader older than the mark must expire: {other:?}"),
+    }
+    reader.follow(&store).unwrap();
+    for key in (1..4000u64).step_by(2) {
+        assert_eq!(
+            read(&mut reader, &store, &key.to_le_bytes()).unwrap(),
+            Some(value(600, key))
+        );
+    }
+}
+
+/// Every key rewritten each round with a value of a new random size, one
+/// publication per round, on a small ring: the pool chain stays intact and
+/// the pages settle.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn rewriting_every_key_each_round_settles() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
+    let mut state = 11u64;
+    let mut settled = 0;
+    for round in 0..40u64 {
+        for id in 0..2000u64 {
+            let len = 64 + (random(&mut state) % 2000) as usize;
+            heap.put(&mut store, 1, &id.to_le_bytes(), &value(len, round))
+                .unwrap();
+            bounded(&heap, chain_bytes(2072), &format!("round {round} id {id}"));
+        }
+        heap.publish(&mut store).unwrap();
+        consistent(&heap, &store, &format!("round {round}"));
+        if round == 10 {
+            settled = heap.state().pages;
+        }
+    }
+    assert!(
+        heap.state().pages <= settled + 4,
+        "{} pages, {settled} at round 10: {:?}",
+        heap.state().pages,
+        heap.stats
+    );
 }

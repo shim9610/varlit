@@ -2,37 +2,45 @@
 //! keeps free space at the ends of the size classes.
 //!
 //! Memory is fixed when the writer is opened: the ring's buffers, 64 bucket
-//! page buffers and one entry per size class. Records are read and written
+//! page buffers and two numbers per size class. Records are read and written
 //! through stack buffers; puts, deletes, splits and hole filling allocate
 //! nothing.
 //!
-//! **New values go to the end of their class.** A put appends its items at
-//! the ends of their classes (indexes no generation uses), writes them
-//! straight to the file, and changes only the slot and class entries through
-//! the ring. The items it replaces are logged as holes.
+//! **New items go to the end of their class.** Items `[0, end)` of a class
+//! are live, or dead and logged; nothing else. A put appends its items at
+//! the ends of their classes and changes the slot and class entries through
+//! the ring. The items it replaces are marked dead and logged.
 //!
-//! **Holes are filled from the end.** A hole is filled once the generation
-//! that freed it is in place: the class's last item moves into it (and its
-//! old place is logged as a hole in turn), or, when the hole is the last
-//! item, the class shrinks by one. A class only shrinks by the hole being
-//! filled, so the log never names an index past a class's end, and an index
-//! is reused only after it was dead in every generation a reader or a
-//! recovery may use.
+//! **Holes are filled from the end, once.** A logged item is taken once the
+//! ring's mark reaches the generation that freed it: no reader and no
+//! recovery shows an older generation, so none uses it. The class's last
+//! live item is written into it in place (its header through the ring, so
+//! that a crash leaves the hole marked dead), its referrer is repointed, and
+//! the class shrinks by one; dead items at the end shrink the class with no
+//! write at all. When freed items wait longer than the free-space ratio
+//! allows, the writer raises the mark: older readers must follow.
+//!
+//! **Where items are written in place.** An index below `hi` (the largest
+//! end any generation from the mark on had) may still be read by a reader
+//! or a recovery: it changes through the ring. Indexes from `hi` on, and
+//! holes the mark has passed, are written in place when nothing staged
+//! covers them.
 //!
 //! **Staging units.** A reader's overlay keeps one range per start offset
 //! and lays overlapping ranges in offset order, so every byte this writer
 //! stages is staged in the same units each time: a bucket page whole (from
-//! the page buffers, once per publication), an item's header and its bytes
-//! (split at page boundaries), a class entry, an eight-byte directory entry,
-//! a page's first sixteen bytes when it joins the pool.
+//! the page buffers, once per publication), an item's header, its bytes in
+//! [`STEP`] pieces from the header on (all split at page boundaries), a class
+//! entry, an eight-byte directory entry, a page's first sixteen bytes when
+//! it joins the pool.
 
 use super::lookup::{self, Ctx, Located, View, slot_at};
 use super::pages::{HeapView, Pages};
 use super::sip::Sip;
 use super::{
-    BITS_PER_PAGE, BUCKET_HEADER, BUCKET_PAGE, CLASSES, ClassEntry, Fixed, ITEM_HEADER, Item,
+    BUCKET_HEADER, BUCKET_PAGE, CLASSES, ClassEntry, Fixed, ITEM_HEADER, ITEM_SPACE, Item,
     LOG_ENTRIES, LOG_ENTRY, LOG_HEADER, MAX_BUDGET, MAX_CLASSES, MAX_INDEX, META_FIXED_LEN,
-    META_LEN, META_OVERFLOW_HEAD_AT, META_STATE_AT, MIN_BUDGET, NO_ITEM, PAGE_BYTES,
+    META_LEN, META_OVERFLOW_HEAD_AT, META_STATE_AT, MIN_BUDGET, NO_ITEM, PAGE_BYTES, PAGE_LINK,
     RESERVED_BLOCK, SLOT_LEN, SLOTS_PER_PAGE, Slot, State, chain_bytes, chain_shape, checked_ref,
     class_entry_at, class_size, corrupt, item_ref, page_header, radix, ref_class, ref_index,
     set_page_header,
@@ -50,14 +58,16 @@ const STEP: usize = lookup::STEP;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeapStats {
     pub splits: u64,
-    /// Holes taken by new items, filled by moving a class's last item, and
-    /// removed by shrinking a class.
-    pub holes_reused: u64,
+    /// Holes filled by a class's last live item, items a class shrank by,
+    /// and log entries that named an item already gone or reused.
     pub moves: u64,
     pub shrinks: u64,
+    pub stale: u64,
     pub pages_appended: u64,
     pub pages_reused: u64,
-    /// Checkpoints run so logged holes could be filled.
+    /// Times the writer raised the mark so freed items could be taken, and
+    /// put the ring in place so a pooled page could be taken.
+    pub marks: u64,
     pub checkpoints: u64,
     /// Rounds the writer published by itself: the change budget was spent.
     pub rounds: u64,
@@ -88,14 +98,13 @@ pub(crate) struct KeyedHeap {
     tuning: Tuning,
     /// Bytes allocated by the open round, against the change budget.
     round_alloc: u64,
-    /// Bytes of holes logged by the open generation, and by published
-    /// generations not yet in place: not fillable before a checkpoint.
+    /// Bytes of items freed by the open generation, and by published
+    /// generations the mark has not reached: not to be taken yet.
     holes_open: u64,
     holes_waiting: u64,
-    /// Where each class's next search for a bitmap hole starts.
-    cursors: [u64; MAX_CLASSES],
-    /// The class compaction looks at next.
-    compact_class: usize,
+    /// Per class, the largest end any generation from the mark on had:
+    /// indexes below it may be read by a reader or a recovery.
+    hi: [u64; MAX_CLASSES],
     pub(crate) stats: HeapStats,
 }
 
@@ -159,13 +168,9 @@ impl KeyedHeap {
             heap.classes[class] = ClassEntry::decode(&raw)?;
         }
         heap.staged_classes = heap.classes;
-        // Holes the published state logged wait for its checkpoint.
-        let in_bitmaps: u64 = heap.classes[..CLASSES]
-            .iter()
-            .enumerate()
-            .map(|(class, entry)| entry.holes * class_size(class))
-            .sum();
-        heap.holes_waiting = state.hole_bytes.saturating_sub(in_bitmaps);
+        // What generations before the last publication used is unknown
+        // here: no reader may keep one.
+        heap.raise(store)?;
         Ok(heap)
     }
 
@@ -189,8 +194,7 @@ impl KeyedHeap {
             round_alloc: 0,
             holes_open: 0,
             holes_waiting: 0,
-            cursors: [0; MAX_CLASSES],
-            compact_class: 0,
+            hi: [0; MAX_CLASSES],
             stats: HeapStats::default(),
         })
     }
@@ -199,31 +203,50 @@ impl KeyedHeap {
         &self.state
     }
 
-    /// Heap bytes that hold no live item: holes, the unused ends of class
-    /// pages, log pages and pooled pages.
+    /// The end of class `class`.
     #[cfg(test)]
-    pub(crate) const fn idle(&self) -> u64 {
-        (self.state.pages * PAGE_BYTES).saturating_sub(self.state.live)
+    pub(crate) const fn class_end(&self, class: usize) -> u64 {
+        self.classes[class].end
     }
 
-    /// What [`Self::idle`] may reach at any point: two rounds of the change
-    /// budget (holes not yet fillable), one partial page per class, the
-    /// pages the hole log takes, and a few pages of slack.
+    /// What the pages in use (all but pooled ones) may hold beyond the
+    /// live bytes, at any point: the logged items, a partial and a spare
+    /// page per class, and the log's pages. Exact, not a slack: dead items
+    /// below a class's end are all logged.
     #[cfg(test)]
     pub(crate) fn idle_bound(&self) -> u64 {
-        let log_pages = self.state.logged / LOG_ENTRIES + 2;
-        // A bitmap page per class in use, at most.
-        let bitmap_pages = CLASSES as u64;
-        self.allowance()
-            + 2 * self.fixed.budget
-            + (CLASSES as u64 + log_pages + bitmap_pages + 8) * PAGE_BYTES
+        let log_pages = self.state.logged.div_ceil(LOG_ENTRIES) + 1;
+        self.state.hole_bytes + (2 * CLASSES as u64 + log_pages) * PAGE_BYTES
     }
 
-    /// Idle bytes in reusable holes the ratio allows before compaction
-    /// moves items to return pages: the declared ratio of live bytes, at
-    /// least a page.
-    fn allowance(&self) -> u64 {
-        (self.state.live / 1000 * u64::from(self.fixed.ratio_permille)).max(PAGE_BYTES)
+    /// What the logged items may reach: twice the patience (one batch
+    /// waiting for the mark, one being taken) and two rounds' worth.
+    #[cfg(test)]
+    pub(crate) fn logged_bound(&self, largest_record: u64) -> u64 {
+        2 * self.patience() + 2 * self.fixed.budget + largest_record
+    }
+
+    /// Bytes freed items may wait before the writer raises the mark: the
+    /// free-space ratio of the live bytes, at least 1 MiB, at most half the
+    /// change budget.
+    fn patience(&self) -> u64 {
+        (self.state.live / 1000 * u64::from(self.fixed.ratio_permille))
+            .max(1 << 20)
+            .min(self.fixed.budget / 2)
+    }
+
+    /// Raises the ring's mark to the last publication: what it freed may be
+    /// taken, and only what it uses must change through the ring.
+    fn raise(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        if self.ring.mark() < self.ring.published() {
+            self.ring.raise_mark(store)?;
+            self.stats.marks += 1;
+        }
+        self.holes_waiting = 0;
+        for class in 0..CLASSES {
+            self.hi[class] = self.staged_classes[class].end;
+        }
+        Ok(())
     }
 
     /// Whether anything changed since the last publication.
@@ -254,6 +277,9 @@ impl KeyedHeap {
         let generation = self.ring.publish(store)?;
         self.round_alloc = 0;
         self.holes_waiting += std::mem::take(&mut self.holes_open);
+        for class in 0..CLASSES {
+            self.hi[class] = self.hi[class].max(self.classes[class].end);
+        }
         Ok(generation)
     }
 
@@ -329,8 +355,9 @@ impl KeyedHeap {
         })?;
         let total = key.len() as u64 + payload.len() as u64;
         let bytes = chain_bytes(total);
-        // A round allocates at most the change budget: past it, the round
-        // so far is published and put in place, and its holes filled.
+        // A round changes at most the change budget (bytes written, moved
+        // and freed): past it, the round so far is published and the mark
+        // raised to it.
         if self.round_alloc > 0 && self.round_alloc + bytes > self.fixed.budget {
             self.end_round(store)?;
         }
@@ -368,6 +395,9 @@ impl KeyedHeap {
         block_id: u32,
         key: &[u8],
     ) -> Result<bool> {
+        if self.round_alloc >= self.fixed.budget {
+            self.end_round(store)?;
+        }
         let Some(found) = self.find(store, block_id, key)? else {
             return Ok(false);
         };
@@ -379,7 +409,7 @@ impl KeyedHeap {
     }
 
     /// Writes a record's items at the ends of their classes and returns the
-    /// head. The items are new: nothing a published generation uses.
+    /// head.
     fn write_record(
         &mut self,
         store: &mut dyn TileStore,
@@ -391,10 +421,8 @@ impl KeyedHeap {
     ) -> Result<u64> {
         let total = key.len() as u64 + payload.len() as u64;
         let (full, last) = chain_shape(total);
-        let chain = self.state.next_chain;
-        self.state.next_chain += 1;
         let class_at = |index: u64| if index < full { CLASSES - 1 } else { last };
-        let head = self.alloc(store, class_at(0))?;
+        let head = self.append(store, class_at(0))?;
         let mut item = head;
         let mut prev = NO_ITEM;
         let mut at = 0u64;
@@ -402,7 +430,7 @@ impl KeyedHeap {
             let class = ref_class(item);
             let len = (class_size(class) - ITEM_HEADER).min(total - at);
             let next = if index < full {
-                self.alloc(store, class_at(index + 1))?
+                self.append(store, class_at(index + 1))?
             } else {
                 NO_ITEM
             };
@@ -412,7 +440,7 @@ impl KeyedHeap {
                 block_or_route: if index == 0 { block_id } else { route },
                 key_len: if index == 0 { key_len } else { 0 },
                 crc: 0,
-                chain,
+                dead: 0,
                 next,
                 total_or_prev: if index == 0 { total } else { prev },
             };
@@ -420,19 +448,20 @@ impl KeyedHeap {
             crc.update(&header.crc_prefix());
             for_parts(key, payload, at, len, &mut |bytes| crc.update(bytes));
             header.crc = crc.finalize();
-            self.write_item(store, item, 0, &header.encode())?;
+            let in_place = self.in_place(item);
+            self.write_header(store, item, &header, in_place)?;
+            // In the units a move writes: STEP pieces from the header on.
+            let mut step = [0u8; STEP];
             let mut done = 0u64;
-            let mut failed = None;
-            for_parts(key, payload, at, len, &mut |bytes| {
-                if failed.is_none()
-                    && let Err(error) = self.write_item(store, item, ITEM_HEADER + done, bytes)
-                {
-                    failed = Some(error);
-                }
-                done += bytes.len() as u64;
-            });
-            if let Some(error) = failed {
-                return Err(error);
+            while done < len {
+                let n = crate::width::bounded(len - done, STEP);
+                let mut filled = 0usize;
+                for_parts(key, payload, at + done, n as u64, &mut |bytes| {
+                    step[filled..filled + bytes.len()].copy_from_slice(bytes);
+                    filled += bytes.len();
+                });
+                self.write_bytes(store, item, ITEM_HEADER + done, &step[..n], in_place)?;
+                done += n as u64;
             }
             at += len;
             prev = item;
@@ -441,64 +470,69 @@ impl KeyedHeap {
         Ok(head)
     }
 
-    /// Logs every item of the record headed by `head` as a hole. Returns
-    /// the items freed.
+    /// Whether item `item`, about to be written, may be written in place:
+    /// no generation from the mark on had it below its class's end.
+    fn in_place(&self, item: u64) -> bool {
+        ref_index(item) >= self.hi[ref_class(item)]
+    }
+
+    /// Marks every item of the record headed by `head` dead and logs it.
+    /// Returns the bytes freed, which count against the round.
     fn release(&mut self, store: &mut dyn TileStore, head: u64) -> Result<u64> {
         let mut item = head;
         let mut freed = 0u64;
+        let freeing = self.ring.published() + 1;
         while item != NO_ITEM {
-            let next = self.item(store, item)?.next;
+            let mut header = self.item(store, item)?;
+            let next = header.next;
             let size = class_size(ref_class(item));
             self.state.live = self
                 .state
                 .live
                 .checked_sub(size)
                 .ok_or(corrupt("keyed heap accounting"))?;
+            header.dead = freeing;
+            let in_place = self.in_place(item);
+            self.write_header(store, item, &header, in_place)?;
             self.log_hole(store, item)?;
-            freed += 1;
+            freed += size;
             item = next;
         }
+        self.round_alloc += freed;
         Ok(freed)
     }
 
-    /// Publishes the open round and puts it in place.
+    /// Publishes the open round and raises the mark to it.
     fn end_round(&mut self, store: &mut dyn TileStore) -> Result<()> {
         if self.is_dirty() {
             self.publish(store)?;
             self.stats.rounds += 1;
         }
-        self.put_in_place(store)
-    }
-
-    fn put_in_place(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        if self.ring.published() > self.ring.checkpointed() {
-            self.ring.checkpoint(store, u64::MAX)?;
-            self.stats.checkpoints += 1;
-        }
-        self.holes_waiting = 0;
-        Ok(())
+        self.raise(store)
     }
 
     // ---- items ----
 
-    /// Writes `bytes` at byte `from` of item `item`, straight to the file
-    /// where nothing staged covers them, split at page boundaries.
-    fn write_item(
+    /// Writes `bytes` at byte `from` of item `item`, split at page
+    /// boundaries: in place when `in_place` and nothing staged covers them,
+    /// else through the ring.
+    fn write_bytes(
         &mut self,
         store: &mut dyn TileStore,
         item: u64,
         from: u64,
         bytes: &[u8],
+        in_place: bool,
     ) -> Result<()> {
         let class = ref_class(item);
         let mut at = ref_index(item) * class_size(class) + from;
         let mut done = 0usize;
         while done < bytes.len() {
-            let page = self.page_of(store, class, at / PAGE_BYTES)?;
-            let within = at % PAGE_BYTES;
+            let page = self.page_of(store, class, at / ITEM_SPACE)?;
+            let within = PAGE_LINK + at % ITEM_SPACE;
             let n = crate::width::bounded(PAGE_BYTES - within, bytes.len() - done);
             let piece = &bytes[done..done + n];
-            if !self.ring.write_unreferenced(store, page + within, piece)? {
+            if !(in_place && self.ring.write_unreferenced(store, page + within, piece)?) {
                 self.ring.stage(store, page + within, piece)?;
             }
             done += n;
@@ -507,28 +541,15 @@ impl KeyedHeap {
         Ok(())
     }
 
-    /// Changes the header of a live item: through the ring, with the
-    /// publication.
-    fn rewrite_header(
+    /// Writes item `item`'s header: the one unit every header write uses.
+    fn write_header(
         &mut self,
         store: &mut dyn TileStore,
         item: u64,
         header: &Item,
+        in_place: bool,
     ) -> Result<()> {
-        let class = ref_class(item);
-        let at = ref_index(item) * class_size(class);
-        let bytes = header.encode();
-        let mut done = 0usize;
-        while done < bytes.len() {
-            let offset = at + done as u64;
-            let page = self.page_of(store, class, offset / PAGE_BYTES)?;
-            let within = offset % PAGE_BYTES;
-            let n = crate::width::bounded(PAGE_BYTES - within, bytes.len() - done);
-            self.ring
-                .stage(store, page + within, &bytes[done..done + n])?;
-            done += n;
-        }
-        Ok(())
+        self.write_bytes(store, item, 0, &header.encode(), in_place)
     }
 
     fn page_of(&self, store: &dyn TileSource, class: usize, page: u64) -> Result<u64> {
@@ -540,21 +561,7 @@ impl KeyedHeap {
         Ok(at)
     }
 
-    /// An item of `class` no generation uses: a hole of the class's bitmap
-    /// when it has one, else a new item at its end.
-    fn alloc(&mut self, store: &mut dyn TileStore, class: usize) -> Result<u64> {
-        if self.classes[class].holes > 0 {
-            let index = self.next_hole(store, class)?;
-            self.set_bit(store, class, Bitmap::Holes, index, false)?;
-            self.classes[class].holes -= 1;
-            self.state.hole_bytes -= class_size(class);
-            self.stats.holes_reused += 1;
-            return Ok(item_ref(class, index));
-        }
-        self.append(store, class)
-    }
-
-    /// A new item at the end of `class`: an index no generation uses.
+    /// A new item at the end of `class`.
     fn append(&mut self, store: &mut dyn TileStore, class: usize) -> Result<u64> {
         let index = self.classes[class].end;
         if index >= MAX_INDEX {
@@ -565,9 +572,14 @@ impl KeyedHeap {
             });
         }
         let size = class_size(class);
-        let mapped = (index * size).div_ceil(PAGE_BYTES);
-        let needed = ((index + 1) * size).div_ceil(PAGE_BYTES);
+        let mapped = (index * size).div_ceil(ITEM_SPACE);
+        let needed = ((index + 1) * size).div_ceil(ITEM_SPACE);
         for page in mapped..needed {
+            // The spare page past the end, if the class kept one.
+            let mut view = self.view();
+            if radix::get(&mut view, store, self.classes[class].dir, page)? != 0 {
+                continue;
+            }
             let at = self.take_page(store)?;
             let root = self.classes[class].dir;
             self.classes[class].dir = self.dir_set(store, root, page, at)?;
@@ -576,18 +588,26 @@ impl KeyedHeap {
         Ok(item_ref(class, index))
     }
 
-    /// Shrinks `class` by its last item, which is a hole no generation uses,
-    /// returning pages left empty to the pool.
+    /// Shrinks `class` by its last item, which is dead. A class keeps one
+    /// spare page past the pages its items need, so that a class shrinking
+    /// and growing across a page boundary does not take a page each time:
+    /// when it needs one page fewer, that page becomes the spare and the
+    /// old spare goes to the pool. Nothing is written: a generation may
+    /// still use the item, and the pool keeps a page until it is in place.
     fn shrink(&mut self, store: &mut dyn TileStore, class: usize) -> Result<()> {
         let end = self.classes[class].end;
         let size = class_size(class);
-        let needed = ((end - 1) * size).div_ceil(PAGE_BYTES);
-        let mapped = (end * size).div_ceil(PAGE_BYTES);
-        for page in needed..mapped {
-            let at = self.page_of(store, class, page)?;
-            let root = self.classes[class].dir;
-            self.classes[class].dir = self.dir_set(store, root, page, 0)?;
-            self.pool_page(store, at)?;
+        let needed = ((end - 1) * size).div_ceil(ITEM_SPACE);
+        let mapped = (end * size).div_ceil(ITEM_SPACE);
+        if needed < mapped {
+            let spare = mapped;
+            let mut view = self.view();
+            let at = radix::get(&mut view, store, self.classes[class].dir, spare)?;
+            if at != 0 {
+                let root = self.classes[class].dir;
+                self.classes[class].dir = self.dir_set(store, root, spare, 0)?;
+                self.pool_page(store, at)?;
+            }
         }
         self.classes[class].end = end - 1;
         self.stats.shrinks += 1;
@@ -596,8 +616,11 @@ impl KeyedHeap {
 
     // ---- pages ----
 
-    /// A page for a class or the log: the pool's oldest, once the
-    /// generation that pooled it is in place, else a new one.
+    /// A page for a class or the log: the pool's oldest once the
+    /// generation that pooled it is in place, else a new one. The pool's
+    /// oldest is put in place first when it is published: a page may go to
+    /// another class, whose items start at other offsets, so nothing the
+    /// ring holds may still cover it.
     fn take_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
         let head = self.state.pool_head;
         if head != 0 {
@@ -605,6 +628,10 @@ impl KeyedHeap {
             self.read(store, head, &mut link)?;
             let next = u64::from_le_bytes(link[..8].try_into().expect("eight"));
             let pooled_by = u64::from_le_bytes(link[8..].try_into().expect("eight"));
+            if pooled_by > self.ring.checkpointed() && pooled_by <= self.ring.published() {
+                self.ring.checkpoint(store, u64::MAX)?;
+                self.stats.checkpoints += 1;
+            }
             if pooled_by <= self.ring.checkpointed() {
                 self.state.pool_head =
                     directory_offset(next).map_err(|_| corrupt("keyed page pool"))?;
@@ -623,7 +650,8 @@ impl KeyedHeap {
     }
 
     /// Puts `page` at the end of the pool. Its first sixteen bytes change
-    /// through the ring: a published generation may still read them.
+    /// through the ring: a published generation may still read them. A
+    /// pooled page's link names the last generation that staged it.
     fn pool_page(&mut self, store: &mut dyn TileStore, page: u64) -> Result<()> {
         let mut link = [0u8; 16];
         link[8..].copy_from_slice(&(self.ring.published() + 1).to_le_bytes());
@@ -632,9 +660,12 @@ impl KeyedHeap {
         if tail == 0 {
             self.state.pool_head = page;
         } else {
+            // The old tail's link changes too: it now waits for this
+            // generation as well, so nothing the ring holds covers a page
+            // when it leaves the pool.
             let mut old = [0u8; 16];
-            self.read(store, tail, &mut old)?;
             old[..8].copy_from_slice(&page.to_le_bytes());
+            old[8..].copy_from_slice(&(self.ring.published() + 1).to_le_bytes());
             self.ring.stage(store, tail, &old)?;
         }
         self.state.pool_tail = page;
@@ -679,13 +710,6 @@ impl KeyedHeap {
             self.ring.stage(store, at, &entry)?;
         }
         self.state.log_tail_at += 1;
-        self.set_bit(
-            store,
-            ref_class(item),
-            Bitmap::Pending,
-            ref_index(item),
-            true,
-        )?;
         let size = class_size(ref_class(item));
         self.state.logged += 1;
         self.state.hole_bytes += size;
@@ -706,10 +730,10 @@ impl KeyedHeap {
         Ok(Some((item, freed)))
     }
 
-    /// Takes the oldest entry off the log; the hole it names stays a hole
-    /// (it moves to its class's bitmap).
-    fn log_pop(&mut self, store: &mut dyn TileStore) -> Result<()> {
+    /// Takes the oldest entry, naming `item`, off the log.
+    fn log_pop(&mut self, store: &mut dyn TileStore, item: u64) -> Result<()> {
         self.state.logged -= 1;
+        self.state.hole_bytes -= class_size(ref_class(item));
         self.state.log_head_at += 1;
         if self.state.log_head_at == LOG_ENTRIES && self.state.log_head != self.state.log_tail {
             let mut link = [0u8; 16];
@@ -729,216 +753,62 @@ impl KeyedHeap {
 
     // ---- holes ----
 
-    /// Moves logged holes whose freeing generation is in place to their
-    /// classes' bitmaps, shrinks classes whose last items are holes, and
-    /// when reusable holes pass the allowance, moves classes' last items
-    /// into their holes (at least the tuning's rate per item freed).
+    /// Takes logged items the mark has passed, at least the tuning's rate
+    /// in bytes per byte freed (and one item when nothing was): each fills
+    /// with its class's last live item, or the class shrinks past it.
+    /// Raises the mark first when freed items have waited past the patience.
+    ///
+    /// Taking at least as many bytes as are freed keeps what the log holds
+    /// bounded: the items the mark has passed never outgrow the largest
+    /// batch that waited for it.
     fn fill(&mut self, store: &mut dyn TileStore, freed: u64) -> Result<()> {
-        if self.ring.published() == self.ring.checkpointed() {
-            self.holes_waiting = 0;
-        }
-        // Freed items wait for a checkpoint before they are reusable: once
-        // more wait than the ratio allows (at least 1 MiB, at most half a
-        // budget), run it.
-        let patience = self.allowance().max(1 << 20).min(self.fixed.budget / 2);
-        if self.holes_waiting > patience {
-            self.put_in_place(store)?;
-        }
-        while let Some((item, freed_by)) = self.log_peek(store)? {
-            if freed_by > self.ring.checkpointed() {
-                break;
-            }
-            self.log_pop(store)?;
-            let class = ref_class(item);
-            if ref_index(item) >= self.classes[class].end {
-                return Err(corrupt("keyed hole past its class"));
-            }
-            self.set_bit(store, class, Bitmap::Pending, ref_index(item), false)?;
-            self.set_bit(store, class, Bitmap::Holes, ref_index(item), true)?;
-            self.classes[class].holes += 1;
-            self.shrink_holes(store, class)?;
+        if self.holes_waiting > self.patience() {
+            self.raise(store)?;
         }
         let mut work = freed * self.tuning.fills_per_free + 1;
-        while work > 0 && self.reusable_hole_bytes() > self.allowance() {
-            if !self.compact_one(store)? {
+        while work > 0 {
+            let Some((item, freed_by)) = self.log_peek(store)? else {
+                break;
+            };
+            if freed_by > self.ring.mark() {
                 break;
             }
-            work -= 1;
-        }
-        Ok(())
-    }
-
-    fn reusable_hole_bytes(&self) -> u64 {
-        self.classes[..CLASSES]
-            .iter()
-            .enumerate()
-            .map(|(class, entry)| entry.holes * class_size(class))
-            .sum()
-    }
-
-    /// Shrinks `class` while its last item is a bitmap hole.
-    fn shrink_holes(&mut self, store: &mut dyn TileStore, class: usize) -> Result<()> {
-        while self.classes[class].end > 0 {
-            let last = self.classes[class].end - 1;
-            if !self.bit(store, class, Bitmap::Holes, last)? {
-                break;
-            }
-            self.set_bit(store, class, Bitmap::Holes, last, false)?;
-            self.classes[class].holes -= 1;
-            self.state.hole_bytes -= class_size(class);
-            self.shrink(store, class)?;
-        }
-        Ok(())
-    }
-
-    /// Moves the last item of a class with reusable holes into its lowest
-    /// hole; `false` when no class can do so now.
-    fn compact_one(&mut self, store: &mut dyn TileStore) -> Result<bool> {
-        for _ in 0..CLASSES {
-            let class = self.compact_class;
-            self.compact_class = (class + 1) % CLASSES;
-            if self.classes[class].holes == 0 {
+            let class = ref_class(item);
+            let index = ref_index(item);
+            work = work.saturating_sub(class_size(class));
+            // An entry names its item until the class shrinks past it; past
+            // that the index may hold another item, live or freed later.
+            if index >= self.classes[class].end || self.item(store, item)?.dead != freed_by {
+                self.log_pop(store, item)?;
+                self.stats.stale += 1;
                 continue;
             }
-            let index = self.classes[class].end - 1;
-            let last = item_ref(class, index);
-            // Holes at the end were shrunk; a freed item still logged is
-            // not moved: it becomes a hole when its turn comes.
-            if self.bit(store, class, Bitmap::Pending, index)? {
+            let last = self.classes[class].end - 1;
+            if last == index {
+                self.shrink(store, class)?;
+                self.log_pop(store, item)?;
+                continue;
+            }
+            let tail = item_ref(class, last);
+            if self.item(store, tail)?.dead != 0 {
+                // A dead item at the end: its own entry finds it gone.
+                self.shrink(store, class)?;
                 continue;
             }
             let referrer = self
-                .referrer(store, last)?
+                .referrer(store, tail)?
                 .ok_or(corrupt("keyed item without a referrer"))?;
-            let target = self.next_hole(store, class)?;
-            self.set_bit(store, class, Bitmap::Holes, target, false)?;
-            self.classes[class].holes -= 1;
-            let hole = item_ref(class, target);
-            self.move_item(store, last, hole, referrer)?;
-            // The old place is a hole a published generation still uses.
-            self.state.hole_bytes -= class_size(class);
-            self.log_hole(store, last)?;
+            self.move_item(store, tail, item, referrer)?;
+            self.shrink(store, class)?;
+            self.log_pop(store, item)?;
+            self.round_alloc += class_size(class);
             self.stats.moves += 1;
-            return Ok(true);
         }
-        Ok(false)
-    }
-
-    fn map_root(&self, class: usize, map: Bitmap) -> (u64, u64) {
-        match map {
-            Bitmap::Holes => self.classes[class].bits,
-            Bitmap::Pending => self.classes[class].pending,
-        }
-    }
-
-    /// Where bit `index` of one of `class`'s bitmaps is: `(page, byte)`;
-    /// page `0` when the bitmap has no page there.
-    fn bit_at(
-        &self,
-        store: &dyn TileSource,
-        class: usize,
-        map: Bitmap,
-        index: u64,
-    ) -> Result<(u64, u64)> {
-        let mut view = self.view();
-        let root = self.map_root(class, map);
-        let page = radix::get(&mut view, store, root, index / BITS_PER_PAGE)?;
-        Ok((page, (index % BITS_PER_PAGE) / 64 * 8))
-    }
-
-    fn bit(&self, store: &dyn TileSource, class: usize, map: Bitmap, index: u64) -> Result<bool> {
-        let (page, at) = self.bit_at(store, class, map, index)?;
-        if page == 0 {
-            return Ok(false);
-        }
-        let mut word = [0u8; 8];
-        self.read(store, page + at, &mut word)?;
-        Ok(u64::from_le_bytes(word) >> (index % 64) & 1 == 1)
-    }
-
-    fn set_bit(
-        &mut self,
-        store: &mut dyn TileStore,
-        class: usize,
-        map: Bitmap,
-        index: u64,
-        value: bool,
-    ) -> Result<()> {
-        let (mut page, at) = self.bit_at(store, class, map, index)?;
-        if page == 0 {
-            if !value {
-                return Ok(());
-            }
-            page = self.take_page(store)?;
-            // A page from the pool holds old bytes: clear it, in the units
-            // its words are staged in.
-            let zero = [0u8; 8];
-            for word in 0..PAGE_BYTES / 8 {
-                if !self
-                    .ring
-                    .write_unreferenced(store, page + word * 8, &zero)?
-                {
-                    self.ring.stage(store, page + word * 8, &zero)?;
-                }
-            }
-            let root = self.map_root(class, map);
-            let root = self.dir_set(store, root, index / BITS_PER_PAGE, page)?;
-            match map {
-                Bitmap::Holes => self.classes[class].bits = root,
-                Bitmap::Pending => self.classes[class].pending = root,
-            }
-        }
-        let mut word = [0u8; 8];
-        self.read(store, page + at, &mut word)?;
-        let mut bits = u64::from_le_bytes(word);
-        if value {
-            bits |= 1 << (index % 64);
-        } else {
-            bits &= !(1 << (index % 64));
-        }
-        // The bitmap is part of the published state: through the ring.
-        self.ring.stage(store, page + at, &bits.to_le_bytes())
-    }
-
-    /// The first bitmap hole of `class` from its cursor on, wrapping once.
-    fn next_hole(&mut self, store: &dyn TileSource, class: usize) -> Result<u64> {
-        let end = self.classes[class].end;
-        let start = self.cursors[class].min(end) / 64 * 64;
-        let mut index = start;
-        let mut wrapped = false;
-        loop {
-            if index >= end {
-                if wrapped {
-                    return Err(corrupt("keyed hole bitmap"));
-                }
-                wrapped = true;
-                index = 0;
-            }
-            let (page, at) = self.bit_at(store, class, Bitmap::Holes, index)?;
-            if page != 0 {
-                let mut word = [0u8; 8];
-                self.read(store, page + at, &mut word)?;
-                let bits = u64::from_le_bytes(word) >> (index % 64);
-                if bits != 0 {
-                    let found = index + u64::from(bits.trailing_zeros());
-                    if found < end {
-                        self.cursors[class] = found;
-                        return Ok(found);
-                    }
-                }
-                index = (index / 64 + 1) * 64;
-            } else {
-                // A page without bits: skip to the next.
-                index = (index / BITS_PER_PAGE + 1) * BITS_PER_PAGE;
-            }
-            if wrapped && index >= start {
-                return Err(corrupt("keyed hole bitmap"));
-            }
-        }
+        Ok(())
     }
 
     /// What points at live item `item`: its slot (a head) or the item
-    /// before it. Only for items the bitmaps show live.
+    /// before it. Only for items not marked dead.
     fn referrer(&self, store: &dyn TileSource, item: u64) -> Result<Option<Referrer>> {
         let header = self.item(store, item)?;
         if header.head {
@@ -998,8 +868,11 @@ impl KeyedHeap {
         Ok(None)
     }
 
-    /// Moves live item `from` to hole `to` of the same class and points its
-    /// referrer and the item after it there.
+    /// Writes live item `from` into dead item `to` of the same class, which
+    /// no generation from the mark on uses, and points its referrer and the
+    /// item after it there. The bytes go in place where nothing staged
+    /// covers them; the header goes through the ring, so a crash before the
+    /// publication leaves `to` marked dead.
     fn move_item(
         &mut self,
         store: &mut dyn TileStore,
@@ -1008,8 +881,6 @@ impl KeyedHeap {
         referrer: Referrer,
     ) -> Result<()> {
         let header = self.item(store, from)?;
-        // In the units a put writes: the header, then the bytes.
-        self.write_item(store, to, 0, &header.encode())?;
         let len = u64::from(header.len);
         let mut step = [0u8; STEP];
         let mut done = 0u64;
@@ -1020,9 +891,10 @@ impl KeyedHeap {
                 self.ctx(&mut view, store)
                     .read_item(from, ITEM_HEADER + done, &mut step[..n])?;
             }
-            self.write_item(store, to, ITEM_HEADER + done, &step[..n])?;
+            self.write_bytes(store, to, ITEM_HEADER + done, &step[..n], true)?;
             done += n as u64;
         }
+        self.write_header(store, to, &header, false)?;
         match referrer {
             Referrer::Slot(page, index, route) => {
                 self.set_slot(store, page, index, Slot { route, item: to })?;
@@ -1030,22 +902,22 @@ impl KeyedHeap {
             Referrer::Prev(prev) => {
                 let mut before = self.item(store, prev)?;
                 before.next = to;
-                self.rewrite_header(store, prev, &before)?;
+                self.write_header(store, prev, &before, false)?;
             }
         }
         if header.next != NO_ITEM {
             let mut after = self.item(store, header.next)?;
             after.total_or_prev = to;
-            self.rewrite_header(store, header.next, &after)?;
+            self.write_header(store, header.next, &after, false)?;
         }
         Ok(())
     }
 
     // ---- consistency (tests) ----
 
-    /// Checks that every index below each class's end is live or logged
-    /// once, that live items add up to the state's, and that no hole is
-    /// past its class.
+    /// Checks that every item below each class's end is live (a record
+    /// reaches it) or marked dead and logged, that live items add up to the
+    /// state's, and that the log's bytes are the state's.
     #[cfg(test)]
     pub(crate) fn check_consistency(
         &self,
@@ -1053,6 +925,7 @@ impl KeyedHeap {
     ) -> std::result::Result<(), String> {
         let text = |error: Error| format!("{error}");
         let mut logged = std::collections::HashSet::new();
+        let mut logged_bytes = 0u64;
         let mut at_page = self.state.log_head;
         let mut at = self.state.log_head_at;
         for _ in 0..self.state.logged {
@@ -1066,49 +939,68 @@ impl KeyedHeap {
             self.read(store, at_page + LOG_HEADER + at * LOG_ENTRY, &mut entry)
                 .map_err(text)?;
             let item = u64::from_le_bytes(entry[..8].try_into().expect("eight"));
-            if !logged.insert(item) {
-                return Err(format!("hole {item:x} logged twice"));
-            }
+            logged_bytes += class_size(ref_class(item));
+            logged.insert(item);
             at += 1;
         }
-        if logged
-            .iter()
-            .any(|&item| ref_index(item) >= self.classes[ref_class(item)].end)
-        {
-            return Err("a hole past its class".into());
-        }
-        let (mut live, mut hole_bytes) = (0u64, 0u64);
+        // The pool: a chain of `pooled` pages, none mapped by a class.
+        let mut mapped = std::collections::HashSet::new();
         for class in 0..CLASSES {
-            let mut holes = 0u64;
+            let size = class_size(class);
+            let pages = (self.classes[class].end * size).div_ceil(ITEM_SPACE) + 1;
+            let mut view = self.view();
+            for page in 0..pages {
+                let at =
+                    radix::get(&mut view, store, self.classes[class].dir, page).map_err(text)?;
+                if at != 0 && !mapped.insert(at) {
+                    return Err(format!("page {at} mapped twice"));
+                }
+            }
+        }
+        let mut at = self.state.pool_head;
+        let mut pooled = 0u64;
+        while at != 0 {
+            if mapped.contains(&at) {
+                return Err(format!("pooled page {at} is mapped"));
+            }
+            let mut link = [0u8; 16];
+            self.read(store, at, &mut link).map_err(text)?;
+            let by = u64::from_le_bytes(link[8..].try_into().expect("eight"));
+            if by > self.ring.published() + 1 {
+                return Err(format!("pooled page {at} by generation {by}"));
+            }
+            pooled += 1;
+            if pooled > self.state.pooled {
+                return Err("pool longer than counted".into());
+            }
+            at = u64::from_le_bytes(link[..8].try_into().expect("eight"));
+        }
+        if pooled != self.state.pooled {
+            return Err(format!(
+                "pool holds {pooled}, state says {}",
+                self.state.pooled
+            ));
+        }
+        if logged_bytes != self.state.hole_bytes {
+            return Err(format!(
+                "log holds {logged_bytes} bytes, state says {}",
+                self.state.hole_bytes
+            ));
+        }
+        let mut live = 0u64;
+        for class in 0..CLASSES {
             for index in 0..self.classes[class].end {
                 let item = item_ref(class, index);
-                let hole = self.bit(store, class, Bitmap::Holes, index).map_err(text)?;
-                let pending = self
-                    .bit(store, class, Bitmap::Pending, index)
-                    .map_err(text)?;
-                if pending != logged.contains(&item) {
-                    return Err(format!(
-                        "item {item:x}: pending {pending}, logged {}",
-                        !pending
-                    ));
-                }
-                if hole && pending {
-                    return Err(format!("item {item:x} both a hole and pending"));
-                }
-                holes += u64::from(hole);
-                if hole || pending {
-                    hole_bytes += class_size(class);
+                let header = self.item(store, item).map_err(text)?;
+                if header.dead != 0 {
+                    if !logged.contains(&item) {
+                        return Err(format!("dead item {item:x} not logged"));
+                    }
                 } else if self.referrer(store, item).map_err(text)?.is_some() {
                     live += class_size(class);
                 } else {
                     return Err(format!("live item {item:x} without a referrer"));
                 }
-            }
-            if holes != self.classes[class].holes {
-                return Err(format!(
-                    "class {class}: {holes} holes, entry says {}",
-                    self.classes[class].holes
-                ));
             }
         }
         // Every record a slot reaches is made of live items.
@@ -1124,12 +1016,7 @@ impl KeyedHeap {
                     while item != NO_ITEM {
                         let (class, at_index) = (ref_class(item), ref_index(item));
                         if at_index >= self.classes[class].end
-                            || self
-                                .bit(store, class, Bitmap::Holes, at_index)
-                                .map_err(text)?
-                            || self
-                                .bit(store, class, Bitmap::Pending, at_index)
-                                .map_err(text)?
+                            || self.item(store, item).map_err(text)?.dead != 0
                         {
                             return Err(format!("a record reaches dead item {item:x}"));
                         }
@@ -1140,13 +1027,10 @@ impl KeyedHeap {
                 at = next;
             }
         }
-        if reached != live {
-            return Err(format!("records reach {reached} bytes, {live} live"));
-        }
-        if live != self.state.live || hole_bytes != self.state.hole_bytes {
+        if reached != live || live != self.state.live {
             return Err(format!(
-                "live {live}/{} holes {hole_bytes}/{}",
-                self.state.live, self.state.hole_bytes
+                "records reach {reached} bytes, {live} live, state says {}",
+                self.state.live
             ));
         }
         Ok(())
@@ -1368,15 +1252,6 @@ impl KeyedHeap {
         self.ring
             .place_record(store, RecordKind::Directory, &[], DIR_PAGE_BYTES)
     }
-}
-
-/// One of a class's two bitmaps.
-#[derive(Clone, Copy, Debug)]
-enum Bitmap {
-    /// Items no generation since the last checkpoint freed: reusable.
-    Holes,
-    /// Items freed and logged, waiting to become holes.
-    Pending,
 }
 
 /// What points at a live item.

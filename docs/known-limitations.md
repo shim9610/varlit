@@ -78,11 +78,18 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
   implemented.
 - **Not with matrices.** A format cannot declare both keyed storage and
   matrix blocks yet: each keeps its metadata as the first record.
-- **Constant slack.** Beyond the live data a file holds one partial 64 KiB
-  page per size class in use and up to two bitmap pages per class, the ring
-  (16 MiB by default), and freed values not yet reusable (at most about two
-  change budgets; the writer checkpoints once they pass the ratio, at least
-  1 MiB). These do not grow with updates, but they dominate a small file.
+- **Constant slack.** Beyond the live data a file holds one partial and one
+  spare 64 KiB page per size class in use, the ring (16 MiB by default), and
+  freed values not yet reused (at most about two change budgets and twice
+  the ratio, at least 1 MiB). These do not grow with updates, but they
+  dominate a small file.
+- **Readers expire more often.** To reuse freed space without putting the
+  ring in place, the writer raises the ring's mark to its last publication
+  once freed values wait past the ratio, and at the end of every round:
+  a reader older than that gets `MatrixSnapshotExpired` and must `follow`.
+- **Deletes leave pages in the file.** Pages a class gives up go to a pool
+  that other classes take from before the file grows; the file itself does
+  not shrink yet.
 - **Rounding to a class.** A record takes whole items of its size class: at
   most a sixteenth more than it needs (16 bytes below 256 bytes), plus a
   40-byte header per 64 KiB.

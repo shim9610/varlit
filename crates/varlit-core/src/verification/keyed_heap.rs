@@ -118,7 +118,7 @@ fn layouts_round_trip() {
         block_or_route: kani::any(),
         key_len: kani::any(),
         crc: kani::any(),
-        chain: kani::any(),
+        dead: kani::any(),
         next: kani::any(),
         total_or_prev: kani::any(),
     };
@@ -133,14 +133,9 @@ fn class_entries_round_trip() {
     let entry = ClassEntry {
         end: kani::any(),
         dir: (kani::any(), kani::any()),
-        holes: kani::any(),
-        bits: (kani::any(), kani::any()),
-        pending: (kani::any(), kani::any()),
     };
-    kani::assume(entry.end < 1 << 56 && entry.holes <= entry.end);
-    for (page, height) in [entry.dir, entry.bits, entry.pending] {
-        kani::assume(height <= 8 && (page == 0) == (height == 0));
-    }
+    kani::assume(entry.end < 1 << 56);
+    kani::assume(entry.dir.1 <= 8 && (entry.dir.0 == 0) == (entry.dir.1 == 0));
     let read = ClassEntry::decode(&entry.encode());
     assert!(matches!(&read, Ok(read) if *read == entry));
     core::mem::forget(read);

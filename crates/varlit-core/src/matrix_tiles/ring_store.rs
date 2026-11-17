@@ -535,18 +535,38 @@ impl RingStore {
         self.header.checkpointed
     }
 
+    /// The oldest generation a reader may still show: a reader whose
+    /// snapshot is older expires. A checkpoint raises it to the generation it
+    /// put in place; [`Self::raise_mark`] raises it further.
+    pub(crate) const fn mark(&self) -> u64 {
+        self.header.mark
+    }
+
+    /// Expires every reader older than the last publication. Afterwards no
+    /// reader and no recovery shows a generation older than it, so space
+    /// that generation no longer points at may be written in place.
+    pub(crate) fn raise_mark(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        if self.header.mark < self.header.published {
+            let mut marked = self.header;
+            marked.mark = marked.published;
+            self.write_header(store, marked)?;
+        }
+        Ok(())
+    }
+
     /// Writes `bytes` at `target` straight to the file instead of through
     /// the ring, when nothing the ring holds covers any of them: no range
     /// staged since the last checkpoint (published or not) and no index.
     /// Returns `false`, writing nothing, otherwise.
     ///
-    /// Only for space the caller knows no generation since the last
-    /// checkpoint points at, such as space freed by a generation already in
-    /// place. A reader whose snapshot is older than that checkpoint expires
-    /// (the checkpoint raised the mark past it), and newer snapshots do not
-    /// point at the space, so no reader can see these bytes before the
-    /// publication that points at them; that publication makes them durable
-    /// before its commit frame, as it does appended records.
+    /// Only for space the caller knows no generation from the mark on points
+    /// at, such as space freed by a generation the mark has reached. A
+    /// reader whose snapshot is older than the mark expires, and newer
+    /// snapshots do not point at the space, so no reader can see these bytes
+    /// before the publication that points at them; that publication makes
+    /// them durable before its commit frame, as it does appended records. A
+    /// recovery shows the last publication, which does not point at them
+    /// either.
     pub(crate) fn write_unreferenced(
         &mut self,
         store: &mut dyn TileStore,
@@ -1062,7 +1082,7 @@ impl RingStore {
 
         // Readers must see the mark before anything in place changes.
         let mut marked = self.header;
-        marked.mark = target;
+        marked.mark = marked.mark.max(target);
         self.write_header(store, marked)?;
         {
             let cache = self

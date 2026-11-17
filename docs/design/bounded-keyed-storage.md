@@ -236,18 +236,36 @@ moved item. No search, no fragmentation, no compaction.
   64 KiB records, all the same size: a page left empty at a class's tail
   goes on a free page list shared by every class.
 - **Atomicity.** An item freed in a round may still be read through a
-  published generation, so its place is reused only after that generation
-  is in place. A freed item is logged (16 bytes, appended to log pages) and
-  marked in the class's pending bitmap; once the generation that freed it is
-  in place it moves to the class's hole bitmap. A new item takes a hole of
-  its class from the bitmap (all items of a class have one size: no search
-  for one that fits) or the class's end. Trailing holes shrink the class;
-  when reusable holes exceed the ratio, the class's last items move into
-  them. An item in neither bitmap is live, so liveness never depends on
-  heuristics. (An earlier version filled holes only by moving the last
-  item; appends then buried the vacated places, and a class whose last item
-  was itself waiting could not make progress. Tests with every structure
-  checked after every step found both.)
+  published generation (by a reader, or by a recovery after a crash), so it
+  is written again only once no generation that uses it can be shown. A
+  freed item gets the generation that freed it in its header (`dead`) and
+  is logged (16 bytes, appended to log pages). Once the ring's mark reaches
+  that generation, readers older than it expire and the last publication no
+  longer uses the item: the class's last live item is written into it once
+  (its bytes straight to the file, its header through the ring so a crash
+  leaves the hole marked dead) and its referrer repointed, and the class
+  shrinks by one; a dead item at the end just shrinks the class. Every item
+  below a class's end is live or dead and logged, and nothing else, so
+  there is nothing to search for and nothing to track besides the log.
+- **The mark, not a checkpoint.** The writer raises the mark to its last
+  publication (one header write) when freed items have waited past the
+  free-space ratio, or at the end of a round. Older readers must follow.
+  Nothing has to be put in place for freed space to be reused.
+- **Where bytes go straight to the file.** An index below the largest end
+  any generation from the mark on had may still be read: it changes
+  through the ring. Past it, and in dead items the mark has passed, bytes
+  are written in place when nothing staged covers them.
+- **Units.** A reader's overlay keeps one range per start offset, so every
+  structure is staged in the same pieces every time. A class page's first
+  16 bytes belong to the pool link and never to an item, and a pooled page
+  is taken again only after the last generation that staged its link is in
+  place: pages pass between classes whose items start at other offsets.
+- History: an earlier version kept up to the ratio of holes inside the
+  classes, tracked by per-class bitmaps, so that holes could be reused
+  without moving items. The bitmaps never shrank below the most a class
+  ever held, which broke the bound over the data held now; filling every
+  hole from the end once the mark passes it costs the same single write per
+  move and needs no bitmaps.
 
 **Shrinking.** Deletes merge buckets (linear hashing in reverse, with a gap
 between the split and merge thresholds so alternating inserts and deletes do
@@ -257,11 +275,17 @@ to cut trailing records safely (commit markers, anchors and digests); it is
 designed separately.
 
 **The bound.** Apart from the end-of-file question above, at every point the
-heap space not holding live data is at most: rounding (1/16 of live), one
-partial page per class (about 130 × 64 KiB), the pending holes and the gap of
-at most two rounds (`2B`), and free pages left by deletes (reused before the
-file grows; returned to the filesystem by the end-of-file work). The ring and
-the bucket and directory pages the live keys need come on top.
+pages in use (all but pooled ones) hold the live items, the items the log
+names, a partial and a spare page per class (about 107 × 2 × 64 KiB) and the
+log's pages, and nothing else (`idle_bound`, checked after every operation of
+the tests). The log names at most twice the patience plus two rounds plus
+one record (`logged_bound`): each operation takes at least as many logged
+bytes as it frees, so what the mark has passed never outgrows the largest
+batch that waited for it. Both are bounds over the data held now, not the
+most ever held. Rounding adds at most 1/16 of live. Pooled pages are reused
+before the file grows; returning them to the filesystem is the end-of-file
+work. The ring and the bucket and directory pages the live keys need come on
+top.
 
 ## Open questions
 

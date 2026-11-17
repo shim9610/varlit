@@ -21,8 +21,11 @@
 //!   one at a time by linear hashing.
 //!
 //! A slot is the only thing that makes a record live. An item freed is
-//! logged as a hole; once the generation that freed it is in place, the
-//! class's last item moves into it, or the class shrinks when it is the last.
+//! marked dead in its header and logged. Once every reader and recovery
+//! shows a generation that no longer uses it (the ring's mark has reached
+//! the generation that freed it), the class's last live item is written into
+//! it once and its referrer repointed, and the class shrinks by one: the
+//! items below a class's end are live, or dead and logged, and nothing else.
 
 pub(crate) mod heap;
 #[cfg(kani)]
@@ -39,7 +42,7 @@ mod tests;
 use crate::{Error, Result};
 
 pub(crate) const META_MAGIC: &[u8; 4] = b"VKMT";
-pub(crate) const META_VERSION: u16 = 2;
+pub(crate) const META_VERSION: u16 = 3;
 /// The fixed, checksummed part of the metadata record.
 pub(crate) const META_FIXED_LEN: u64 = 64;
 /// Where the ring keeps its overflow list head: the first mutable field.
@@ -49,12 +52,17 @@ pub(crate) const META_STATE_AT: u64 = META_OVERFLOW_HEAD_AT + 8;
 pub(crate) const META_STATE_LEN: u64 = State::FIELDS as u64 * 8;
 /// One [`ClassEntry`] per possible class, changed through the ring.
 pub(crate) const META_CLASSES_AT: u64 = META_STATE_AT + META_STATE_LEN;
-pub(crate) const CLASS_ENTRY_LEN: u64 = 64;
+pub(crate) const CLASS_ENTRY_LEN: u64 = 32;
 pub(crate) const MAX_CLASSES: usize = 128;
 pub(crate) const META_LEN: u64 = META_CLASSES_AT + MAX_CLASSES as u64 * CLASS_ENTRY_LEN;
 
 /// Item pages, log pages and pooled pages: one size for all.
 pub(crate) const PAGE_BYTES: u64 = 64 << 10;
+/// A class page's first bytes: its link while it is pooled, never an
+/// item's. Item bytes fill the rest of each page, and an item may continue
+/// on the class's next page.
+pub(crate) const PAGE_LINK: u64 = 16;
+pub(crate) const ITEM_SPACE: u64 = PAGE_BYTES - PAGE_LINK;
 /// The largest item; longer records are chains.
 pub(crate) const MAX_ITEM: u64 = PAGE_BYTES;
 /// Every item starts with a header of this length.
@@ -237,18 +245,15 @@ pub(crate) struct State {
     /// Free bucket pages.
     pub free_buckets: u64,
     /// The log of items freed, oldest first: its first page and entry, its
-    /// last page and entry count there, and its entries. An entry moves to
-    /// its class's hole bitmap once the generation that freed it is in
-    /// place.
+    /// last page and entry count there, and its entries. An entry is taken
+    /// once the ring's mark reaches the generation that freed it.
     pub log_head: u64,
     pub log_head_at: u64,
     pub log_tail: u64,
     pub log_tail_at: u64,
     pub logged: u64,
-    /// Bytes of every hole: logged or in a bitmap.
+    /// Bytes of the items the log names.
     pub hole_bytes: u64,
-    /// The next record chain's id.
-    pub next_chain: u64,
 }
 
 impl State {
@@ -273,7 +278,7 @@ impl State {
             self.log_tail_at,
             self.logged,
             self.hole_bytes,
-            self.next_chain,
+            0,
             0,
         ]
     }
@@ -307,7 +312,6 @@ impl State {
             log_tail_at: word(14),
             logged: word(15),
             hole_bytes: word(16),
-            next_chain: word(17),
         };
         if state.level >= 32
             || state.split >= 1u64 << state.level
@@ -356,21 +360,13 @@ impl State {
     }
 }
 
-/// One size class: its items `[0, end)`, each live, logged as freed, or a
-/// hole in the class's bitmap; the radix directory of its pages; the
-/// bitmap's directory and how many holes it marks.
+/// One size class: its items `[0, end)`, each live or dead and logged, and
+/// the radix directory of its pages. Free space is only past `end`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ClassEntry {
     pub end: u64,
     /// Directory root page and height (`0, 0` for none).
     pub dir: (u64, u64),
-    /// Holes no generation since the last checkpoint freed: reusable.
-    pub holes: u64,
-    /// Directory of the hole bitmap's pages.
-    pub bits: (u64, u64),
-    /// Directory of the bitmap of items freed and logged, not yet holes:
-    /// an item in neither bitmap is live.
-    pub pending: (u64, u64),
 }
 
 impl ClassEntry {
@@ -379,11 +375,6 @@ impl ClassEntry {
         out[0..8].copy_from_slice(&self.end.to_le_bytes());
         out[8..16].copy_from_slice(&self.dir.0.to_le_bytes());
         out[16..24].copy_from_slice(&self.dir.1.to_le_bytes());
-        out[24..32].copy_from_slice(&self.holes.to_le_bytes());
-        out[32..40].copy_from_slice(&self.bits.0.to_le_bytes());
-        out[40..48].copy_from_slice(&self.bits.1.to_le_bytes());
-        out[48..56].copy_from_slice(&self.pending.0.to_le_bytes());
-        out[56..64].copy_from_slice(&self.pending.1.to_le_bytes());
         out
     }
 
@@ -392,19 +383,11 @@ impl ClassEntry {
         let entry = Self {
             end: word(0),
             dir: (word(8), word(16)),
-            holes: word(24),
-            bits: (word(32), word(40)),
-            pending: (word(48), word(56)),
         };
-        let height = crate::matrix_tiles::view::DIR_MAX_HEIGHT;
         if entry.end > MAX_INDEX
-            || entry.holes > entry.end
-            || entry.dir.1 > height
-            || entry.bits.1 > height
+            || entry.dir.1 > crate::matrix_tiles::view::DIR_MAX_HEIGHT
             || (entry.dir.0 == 0) != (entry.dir.1 == 0)
-            || entry.pending.1 > height
-            || (entry.bits.0 == 0) != (entry.bits.1 == 0)
-            || (entry.pending.0 == 0) != (entry.pending.1 == 0)
+            || word(24) != 0
         {
             return Err(corrupt("keyed size class"));
         }
@@ -421,8 +404,7 @@ pub(crate) const fn class_entry_at(meta: u64, class: usize) -> u64 {
 
 /// An item's header. A head item starts a record (`block_id`, `key_len`,
 /// the record's `total` length); a continuation item names its record's
-/// key `route` and its `prev` item. Both carry the record's `chain` id and
-/// the `next` item.
+/// key `route` and its `prev` item. Both carry the `next` item and `dead`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Item {
     /// Record bytes in this item.
@@ -434,7 +416,9 @@ pub(crate) struct Item {
     pub key_len: u32,
     /// CRC32 of the header's first eight bytes and this item's bytes.
     pub crc: u32,
-    pub chain: u64,
+    /// `0` while the item is live; once freed, the generation that freed
+    /// it. Outside the checksum: it changes on its own.
+    pub dead: u64,
     pub next: u64,
     /// A head: the record's total length; a continuation: the item before.
     pub total_or_prev: u64,
@@ -455,7 +439,7 @@ impl Item {
         out[4..8].copy_from_slice(&self.block_or_route.to_le_bytes());
         out[8..12].copy_from_slice(&self.key_len.to_le_bytes());
         out[12..16].copy_from_slice(&self.crc.to_le_bytes());
-        out[16..24].copy_from_slice(&self.chain.to_le_bytes());
+        out[16..24].copy_from_slice(&self.dead.to_le_bytes());
         out[24..32].copy_from_slice(&self.next.to_le_bytes());
         out[32..40].copy_from_slice(&self.total_or_prev.to_le_bytes());
         out
@@ -471,7 +455,7 @@ impl Item {
             block_or_route: half(4),
             key_len: half(8),
             crc: half(12),
-            chain: word(16),
+            dead: word(16),
             next: word(24),
             total_or_prev: word(32),
         }
@@ -513,9 +497,6 @@ pub(crate) const fn chain_bytes(total: u64) -> u64 {
 }
 
 // ---- the hole log ----
-
-/// Hole bitmap bits per page.
-pub(crate) const BITS_PER_PAGE: u64 = PAGE_BYTES * 8;
 
 /// A log page: its next page, then entries `item | generation freed`.
 pub(crate) const LOG_HEADER: u64 = 16;

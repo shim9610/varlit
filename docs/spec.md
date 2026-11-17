@@ -96,7 +96,7 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   | 4 | tile | one `VTIL` tile |
   | 5 | overflow | one `VOVF` overflow region (see Overflow Regions) |
   | 6 | keyed metadata | the `VKMT` record (see Keyed Storage Wire Contract) |
-  | 7 | keyed page | a 64 KiB page of keyed storage: items, freed item log, bitmap, or pooled |
+  | 7 | keyed page | a 64 KiB page of keyed storage: items, freed item log, or pooled |
   | 8 | bucket page | one `VBKT` slot bucket page |
 
 - Each record is appended once and its payload is then rewritten in place. For
@@ -393,6 +393,10 @@ circularly.
 
 ### Snapshots And Overlay
 
+- A writer may also raise `mark` to its last publication without putting
+  anything in place, by writing a header; readers older than it then expire.
+  Keyed storage does this before it writes space a published generation
+  freed straight to the file.
 - A reader's snapshot is the `published` generation it last adopted. On open
   it scans the ring from `tail` and keeps an overlay: for every range written
   by a generation after `checkpointed`, where its newest bytes are in the
@@ -429,39 +433,38 @@ matrix engine (`matrix_tiles/ring_store.rs`, `matrix_tiles/view.rs`), so
 everything under Write-Ahead Ring, Overflow Regions, Publication Indexes and
 Snapshots And Overlay applies unchanged. All integers are little-endian.
 Its records have block id `0xFFFF_FFF3` and block versions 6 to 8 (see the
-table under Records): metadata, 64 KiB pages (items, the log, bitmaps and
-the pool), and bucket pages. The schema hash folds `keyed-storage-v1` and the
+table under Records): metadata, 64 KiB pages (items, the log and the
+pool), and bucket pages. The schema hash folds `keyed-storage-v1` and the
 free-space ratio. A format cannot declare both keyed storage and matrix
 blocks, nor keyed storage and `keyed_offset_chain`.
 
 ### Metadata Record (`VKMT`)
 
 - The first record of the log, appended at create; its payload is read at
-  `append_log_start + 32`. 8416 bytes:
+  `append_log_start + 32`. 4320 bytes:
 
   | Bytes | Field |
   | --- | --- |
   | 0..4 | magic `b"VKMT"` |
-  | 4..6 | version, 2 |
+  | 4..6 | version, 3 |
   | 6..8 | free-space ratio in thousandths of live bytes, 10 to 50 |
   | 8..24 | the SipHash-1-3 key: two `u64`, random per file |
   | 24..40 | ring payload offset and length |
-  | 40..48 | change budget: bytes one round may allocate, 1 MiB to 1 TiB |
+  | 40..48 | change budget: bytes one round may write, move and free, 1 MiB to 1 TiB |
   | 48..56 | zero |
   | 56..60 | CRC32 of bytes 0..56 |
   | 60..64 | zero |
   | 64..72 | overflow region list head (as the matrix metadata's bytes 72..80) |
   | 72..224 | the state: 19 `u64` fields, changed through the ring |
-  | 224..8416 | 128 class entries of 64 bytes, changed through the ring |
+  | 224..4320 | 128 class entries of 32 bytes, changed through the ring |
 
 - The state fields, in order: bucket directory root page and height; linear
   hashing level and split pointer; live keys; live item bytes; pages; the
   page pool's head, tail and length; the free bucket page list; the freed
   item log's head page and entry, tail page and entry count there, and
-  entries; bytes of every hole; the next record chain id; zero.
+  entries; bytes of the items the log names; two zeros.
 - A class entry: its end (items `[0, end)`), its page directory root and
-  height, its hole count, its hole bitmap's directory root and height, its
-  pending bitmap's directory root and height.
+  height, zero.
 
 ### Size Classes, Items And Records
 
@@ -469,26 +472,31 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   1/16 larger than the last (rounded up to 16 bytes) up to 65536. A class is
   an array of items of its size; item `i` is at byte `i × size` of the
   class's space, which 64 KiB pages hold through the class's radix
-  directory (pages are records of block version 7, 65536 bytes). An item may
-  straddle two pages.
+  directory (pages are records of block version 7, 65536 bytes). A page's
+  first 16 bytes are never an item's (they are its link while it is
+  pooled); byte `b` of the class's space is at byte `16 + b mod 65520` of
+  page `b div 65520`, so an item may continue on the next page.
 - A record's bytes are its key then its payload. It is a chain of items:
   full 64 KiB items, then one item of the smallest class holding the rest.
 - An item starts with a 40-byte header (`len u32 | block id or route u32 |
-  key length u32 | crc32 | chain id u64 | next item u64 | total length or
+  key length u32 | crc32 | dead u64 | next item u64 | total length or
   previous item u64`). `len`'s top bit marks a continuation. A head carries
   the block id, key length and the record's total length; a continuation
-  carries the key's route and the item before it. The CRC32 covers the
+  carries the key's route and the item before it. `dead` is 0 while the
+  item is live and the generation that freed it after. The CRC32 covers the
   header's first eight bytes and the item's record bytes.
 - An item reference is the class in the top byte and the index below;
   `u64::MAX` is none.
-- Every item below a class's end is live, logged as freed (its pending
-  bit set), or a hole (its hole bit set). An item in neither bitmap is
-  live; its slot (a head) or the item before it (a continuation) points
-  at it.
+- Every item below a class's end is live (`dead` 0: its slot, for a head,
+  or the item before it points at it) or dead and named by the log. Free
+  space is only past a class's end. A class keeps at most one page past the
+  pages its items need.
 - The freed item log: 64 KiB pages of a 16-byte link then 16-byte entries
-  (`item | generation that freed it`), oldest first.
+  (`item | generation that freed it`), oldest first. An entry whose item is
+  past its class's end, or whose `dead` differs from the entry's
+  generation, names nothing any more.
 - Free pages: a pool, oldest first; a pooled page's first 16 bytes hold the
-  next pooled page and the generation that pooled it.
+  next pooled page and the last generation that staged that link.
 
 ### Slot Buckets (`VBKT`)
 
@@ -500,31 +508,38 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   then 255 slots of 16 bytes (`route u32 | zero u32 | head item u64`).
   Slots `0..count` are in use; a bucket's pages chain through `next`.
 - Bucket numbers map to first pages through a radix directory of 4096-byte
-  pages (512 entries, 9 bits per level); class pages and bitmap pages are
-  mapped the same way.
+  pages (512 entries, 9 bits per level); class pages are mapped the same
+  way.
 
 ### Writing
 
-- A put writes the record's items into holes of their classes (from the
-  hole bitmap) or at the classes' ends, straight to the file when nothing
-  staged covers them; the slot, the class entries, the bitmaps, the log
-  pointers and the state go through the ring. The items it replaces are
-  logged as freed (pending bit set).
-- A logged item becomes a hole once the generation that freed it is in
-  place (at or below the ring's `checkpointed`): its pending bit is cleared
-  and its hole bit set. A class whose last items are holes shrinks; pages
-  left empty go to the pool, reusable once the generation that pooled them
-  is in place. Log positions are never rewritten while a published log may
-  name them.
-- When reusable holes exceed the declared ratio of live bytes (at least a
-  page), the writer moves classes' last live items into their holes,
-  repointing the slot or the item before and after, and logs the old
-  places.
-- A round allocates at most the change budget: past it the writer publishes
-  the round and puts it in place before the next allocation, so a `sync`
-  that changes more is several publications, each atomic. The writer also
-  puts what is published in place once more freed items wait than the
-  ratio allows (at least 1 MiB, at most half the budget).
+- A put writes the record's items at the ends of their classes; the slot,
+  the class entries, the log pointers and the state go through the ring.
+  The items it replaces get their `dead` set and are logged.
+- Item bytes are written straight to the file only where no generation a
+  reader or a recovery may show uses them and nothing staged covers them:
+  indexes at or past the largest end any generation from the ring's `mark`
+  on had, and dead items the mark has passed. Everything else goes through
+  the ring.
+- A logged item is taken once the ring's `mark` reaches the generation that
+  freed it (readers older than the mark expire). If it is its class's last
+  item the class shrinks by one; otherwise the class's last item, if dead,
+  is shrunk away first (its own entry then names nothing), and if live it
+  is written into the dead one (its bytes straight to the file, its header
+  through the ring, so a crash leaves the dead item dead), its slot or the
+  item before and after it repointed, and the class shrinks by one. Each
+  operation takes at least as many logged bytes as it freed.
+- When freed items wait longer than the declared ratio of live bytes
+  allows (at least 1 MiB, at most half the change budget), the writer
+  raises the ring's `mark` to the last publication without putting
+  anything in place.
+- Pages left empty go to the pool and are taken again once the last
+  generation that staged their link is in place; the writer puts the ring
+  in place first when that generation is published. Log positions are
+  never rewritten while a published log may name them.
+- A round writes, moves and frees at most the change budget: past it the
+  writer publishes the round and raises the mark to it, so a `sync` that
+  changes more is several publications, each atomic.
 - `sync` publishes the staged changes as one generation; a writer that stops
   without one publishes nothing.
 

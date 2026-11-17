@@ -2753,12 +2753,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:cead2e0439115ab8]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:ebc6f68a4e7f3706]",
             "target": "keyed_heap::State::after_split",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_record(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: u32, _6: &[u8], _7: &[u8]) -> std::result::Result<u64, error::Error> [body:d69123b414e52337]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_record(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: u32, _6: &[u8], _7: &[u8]) -> std::result::Result<u64, error::Error> [body:46b37712c4209d1c]",
             "target": "chain_shape",
             "result": "model/caller-specific"
           },
@@ -2800,12 +2800,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:cead2e0439115ab8]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:ebc6f68a4e7f3706]",
             "target": "keyed_heap::State::after_split",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_record(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: u32, _6: &[u8], _7: &[u8]) -> std::result::Result<u64, error::Error> [body:d69123b414e52337]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_record(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: u32, _6: &[u8], _7: &[u8]) -> std::result::Result<u64, error::Error> [body:46b37712c4209d1c]",
             "target": "chain_shape",
             "result": "model/caller-specific"
           },
