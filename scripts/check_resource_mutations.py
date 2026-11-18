@@ -233,7 +233,7 @@ def main():
         cmd = ['cargo','kani','--manifest-path',str(crate/'Cargo.toml'),'--default-unwind','5','-Z','function-contracts','-Z','stubbing']
         def run(name, command):
             with (out/(name+'.log')).open('w') as log:
-                code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=1200).returncode
+                code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300).returncode
             return code, (out/(name+'.log')).read_text()
         # Match the full-crate suite's two workers within the existing runner
         # budget. Each deliberately mutated fixture remains sequential below.
