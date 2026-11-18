@@ -400,7 +400,7 @@
     "crates/varlit-core/src/file/lifecycle.rs": "7bce1bd1dd428245",
     "crates/varlit-core/src/file/locks.rs": "da4f9fe3196bff8a",
     "crates/varlit-core/src/file/mapped_access.rs": "4cc708e2eb033758",
-    "crates/varlit-core/src/file/matrix_access.rs": "9c13058a9170a698",
+    "crates/varlit-core/src/file/matrix_access.rs": "b2d2109ad332e6de",
     "crates/varlit-core/src/file/matrix_sidecar.rs": "22f6ff7b5f0002b6",
     "crates/varlit-core/src/file/matrix_tiles_io.rs": "3470a73e671c3920",
     "crates/varlit-core/src/file/mmap_views.rs": "d7ed8d2814342371",
