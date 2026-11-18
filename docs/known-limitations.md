@@ -269,20 +269,23 @@ support for them is unstable:
   files beyond 4 GiB can be read record by record; a single value, buffer or
   mapping cannot exceed the address space, and nothing here was run on a
   32-bit device or on a 32-bit architecture other than x86.
-- **Big-endian.** No CI job executes big-endian code natively. Miri interprets
-  the unsafe modules and the byte-order-sensitive unit tests (wire layouts,
-  row packers, snapshot codecs) for `s390x-unknown-linux-gnu`. File formats
-  use explicit byte orders; the one place that depends on the host's is the
-  bulk numeric vector decode, which swaps bytes when the two differ. The
-  matrix tile tests, the integration tests and every feature-gated path are
-  not interpreted for a big-endian target.
+- **Big-endian.** Big-endian code runs under emulation, not on hardware: CI
+  cross-builds the workspace for `s390x-unknown-linux-gnu` and runs its
+  library and integration tests under QEMU's user mode, one test at a time
+  (the emulator crashes, rarely, when several threads unwind at once), and
+  Miri interprets the unsafe modules and the byte-order-sensitive unit tests
+  there. File formats use explicit byte orders, which `enforcement_gates`
+  holds in the source; the one place that depends on the host's is the bulk
+  numeric vector decode, which swaps bytes when the two differ. The compile
+  snapshot tests are left out there, as on every job but MSRV.
 - **Raw views on another byte order.** A zero-copy raw view checks the
   implementer's `RAW_ENDIAN` against the file's byte order, not against the
   host's. A struct of plain integer fields declared `RAW_ENDIAN = Little`
-  passes that check on a big-endian host and reads swapped values; such a
-  type is only correct where the host's byte order is the declared one.
-  Use explicit-endian field types (for example `zerocopy::byteorder`) for
-  views that must work on both. Single-feature,
+  passes that check on a big-endian host and reads swapped values; declare
+  `Endian::NATIVE` for such a type, so the view is refused there instead, and
+  use `raw_fixed_or_decode` / `raw_cell_or_decode` to get the decoded value
+  in its place. Explicit-endian field types (for example
+  `zerocopy::byteorder`) are viewed on every host. Single-feature,
 pairwise and all-feature runs do not enumerate every higher-order configuration.
 Runner images and some compiler jobs roll over time.
 

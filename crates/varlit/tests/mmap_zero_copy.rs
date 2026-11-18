@@ -907,3 +907,67 @@ fn a_native_order_raw_type_is_viewed_or_refused_and_decoding_converts() -> varli
     cleanup(&path);
     Ok(())
 }
+
+/// `raw_fixed_or_decode` views a record where its byte order is the host's
+/// and decodes it, converting, where it is not; a record that is refused for
+/// any other reason is refused, not decoded.
+#[cfg(feature = "zero-copy")]
+#[test]
+fn raw_fixed_or_decode_views_or_falls_back_with_the_same_value() -> varlit::Result<()> {
+    let path = temp_path("raw_or_decode");
+    cleanup(&path);
+    let native = RawPoint {
+        x: 0x0102_0304,
+        y: 0x0a0b_0c0d,
+    };
+    let declared_big = BigEndianRawPoint { x: 7, y: 9 };
+    {
+        let mut file = MmapFormat::create(&path)?;
+        file.push(&native)?;
+        file.push(&declared_big)?;
+        file.push(&RawVariable { id: 3 })?;
+        file.flush()?;
+    }
+    let file = MmapFormat::open_readonly(&path)?;
+    // SAFETY: The fixture is not modified while the mapping is alive.
+    let mmap = unsafe { file.mmap_payloads()? };
+    let mut scratch = Vec::new();
+
+    let view =
+        unsafe { mmap.raw_fixed_or_decode::<RawPoint>(0, &mut scratch) }?.expect("the first point");
+    assert_eq!(*view, native);
+    // The fallback is taken exactly when the raw view is refused: on a
+    // big-endian host for the byte order, on any host for the alignment.
+    assert_eq!(
+        view.is_fallback(),
+        unsafe { mmap.raw_fixed::<RawPoint>(0) }.is_err()
+    );
+    if let varlit::RawView::Raw(point) = view {
+        // A view is the mapped bytes, not a copy of them.
+        let window = mmap.block_payload_window::<RawPoint>(0)?.expect("payload");
+        assert_eq!(std::ptr::from_ref(point).cast::<u8>(), window.as_ptr());
+    }
+
+    // Declared big-endian in a little-endian file: refused as a view on every
+    // host, decoded to the value written.
+    let view = unsafe { mmap.raw_fixed_or_decode::<BigEndianRawPoint>(0, &mut scratch) }?
+        .expect("the big-endian point");
+    assert!(view.is_fallback());
+    assert_eq!(*view, declared_big);
+
+    // Past the last record of the block: nothing, as `raw_fixed` says.
+    assert!(unsafe { mmap.raw_fixed_or_decode::<RawPoint>(1, &mut scratch) }?.is_none());
+    // A variable block is not a raw view, and is not decoded in its place.
+    assert!(matches!(
+        unsafe { mmap.raw_fixed_or_decode::<RawVariable>(0, &mut scratch) },
+        Err(Error::ZeroCopyBlockKindMismatch { .. })
+    ));
+    assert!(
+        scratch.capacity() == 0,
+        "an uncompressed record used the scratch"
+    );
+    drop(mmap);
+    drop(file);
+    cleanup(&path);
+    Ok(())
+}

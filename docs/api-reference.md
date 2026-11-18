@@ -1578,6 +1578,18 @@ Feature-gated APIs:
 | `mmap` | `MmapMatrix::cell_numeric::<T, N>(key)` | endian-aware numeric scalar read |
 | `zero-copy` | `unsafe MmapPayloads::raw_fixed::<T>()` | raw fixed block view |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell::<T>(key)` | raw matrix cell view |
+| `zero-copy` | `unsafe MmapPayloads::raw_fixed_or_decode::<T>(index, scratch)` | raw fixed view, or the record decoded where the view is refused for byte order or alignment (`RawView::Decoded`) |
+| `zero-copy` | `unsafe MmapMatrix::raw_cell_or_decode::<T>(key)` | raw cell view, or the cell decoded on the same grounds |
+
+A raw type of plain integer or float fields declares
+`RAW_ENDIAN = Endian::NATIVE`, the byte order of the machine it is compiled
+for. Its raw views open where that is the file's order and are refused with
+`ZeroCopyEndianMismatch` elsewhere, instead of reading swapped values. The
+`_or_decode` forms take that refusal, and an alignment refusal, as the cue to
+decode the value in place of the view (`RawView::Decoded`, which says so
+through `is_fallback()`); every other refusal is returned as it is. Matrix
+slots are packed with their checksums, so a cell type aligned above 1 may be
+refused for alignment on any host and served by the fallback.
 
 `mmap_payload_range(a..b)` maps from record `a`'s header to record `b - 1`'s
 end and copies only those entries; read a large file in successive ranges, or

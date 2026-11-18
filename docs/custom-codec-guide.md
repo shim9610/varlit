@@ -290,15 +290,19 @@ struct RawPoint {
 
 #[cfg(feature = "zero-copy")]
 unsafe impl varlit::VarlitRawFixedBlock for RawPoint {
-    const RAW_ENDIAN: varlit::Endian = varlit::Endian::Little;
+    // Plain `u32` fields hold the host's byte order.
+    const RAW_ENDIAN: varlit::Endian = varlit::Endian::NATIVE;
 }
 ```
 
 `RAW_ENDIAN` is a promise about the bytes of `Self`, and the library compares
-it only with the file's byte order. `RawPoint` above holds plain `u32` fields,
-so its bytes are little-endian only on a little-endian host: on a big-endian
-host the check still passes and the fields read swapped. A raw type that must
-work on both uses explicit-endian fields, such as `zerocopy::byteorder::U32<LE>`.
+it with the file's byte order. `RawPoint` above holds plain `u32` fields, which
+are in the host's order, so it declares `Endian::NATIVE`: on a host whose order
+is the file's the view opens, and on any other it is refused with
+`ZeroCopyEndianMismatch`. Declaring a fixed order (`Endian::Little`) for plain
+fields would pass the check on a big-endian host and read swapped values. A raw
+type that must be viewed on every host uses explicit-endian fields, such as
+`zerocopy::byteorder::U32<LE>`, and declares that order.
 
 Default typed reads do not use this path. Callers opt in through unsafe raw
 access:
@@ -308,6 +312,16 @@ access:
 // until `mmap` is dropped.
 let mmap = unsafe { file.mmap_payloads()? };
 let point = unsafe { mmap.raw_fixed::<RawPoint>(index) }?;
+
+// Or: the view where it can be taken, the record decoded (converting its byte
+// order) where it is refused for byte order or alignment.
+let mut scratch = Vec::new();
+if let Some(point) = unsafe { mmap.raw_fixed_or_decode::<RawPoint>(index, &mut scratch) }? {
+    if point.is_fallback() {
+        // decoded, not viewed: correct, but not zero-copy
+    }
+    let x = point.x;
+}
 ```
 
 The mapping constructor requires backing-file immutability for the mapping's

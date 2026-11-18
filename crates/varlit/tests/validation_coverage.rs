@@ -164,6 +164,175 @@ varlit::varlit_format! {
     struct ProbeFormat { magic: b"VCONTRACT"; version: 1; endian: little; integrity: crc32_with_header; blocks: [Probe]; }
 }
 
+/// A fixed record of plain `u32` fields, declared in the host's byte order:
+/// viewed raw on a little-endian host, decoded on a big-endian one.
+#[cfg(feature = "zero-copy")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    varlit::VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
+)]
+#[repr(C)]
+#[varlit(id = 91, version = 1, kind = "fixed")]
+struct RawProbe {
+    x: u32,
+    y: u32,
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawFixedBlock for RawProbe {
+    const RAW_ENDIAN: varlit::Endian = varlit::Endian::NATIVE;
+}
+
+/// The same layout declared in the order that is not the host's: its raw view
+/// is refused on every host.
+#[cfg(feature = "zero-copy")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    varlit::VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
+)]
+#[repr(C)]
+#[varlit(id = 92, version = 1, kind = "fixed")]
+struct ForeignRawProbe {
+    x: u32,
+    y: u32,
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawFixedBlock for ForeignRawProbe {
+    const RAW_ENDIAN: varlit::Endian = match varlit::Endian::NATIVE {
+        varlit::Endian::Little => varlit::Endian::Big,
+        varlit::Endian::Big => varlit::Endian::Little,
+    };
+}
+
+#[cfg(feature = "zero-copy")]
+varlit::varlit_format! {
+    struct RawProbeFormat { magic: b"VRAWPRB"; version: 1; endian: little; blocks: [RawProbe, ForeignRawProbe, Probe]; }
+}
+
+/// A file of `RawProbe { 1, 2 }` and `ForeignRawProbe { 3, 4 }`, mapped.
+#[cfg(feature = "zero-copy")]
+fn raw_probe_fixture()
+-> Result<(tempfile::TempDir, varlit::VarlitFile, varlit::MmapPayloads), Box<dyn std::error::Error>>
+{
+    let directory = private_tempdir::private_tempdir()?;
+    let path = directory.path().join("raw.varlit");
+    let mut writer = RawProbeFormat::create(&path)?;
+    writer.push(&RawProbe { x: 1, y: 2 })?;
+    writer.push(&ForeignRawProbe { x: 3, y: 4 })?;
+    writer.push(&Probe { value: 5 })?;
+    writer.sync()?;
+    drop(writer);
+    let file = RawProbeFormat::open_readonly(&path)?;
+    // SAFETY: the fixture owns the file and never modifies it while mapped.
+    let mapped = unsafe { file.mmap_payloads()? };
+    Ok((directory, file, mapped))
+}
+
+/// A matrix cell of one plain `u32`, declared in the order that is not the
+/// host's: its raw view is refused on every host.
+#[cfg(feature = "zero-copy")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    varlit::VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
+)]
+#[repr(C)]
+#[varlit(id = 93, version = 1, kind = "matrix")]
+struct ForeignWord {
+    value: u32,
+}
+
+#[cfg(feature = "zero-copy")]
+impl varlit::VarlitMatrixBlock for ForeignWord {
+    const DIMENSIONS: [&'static str; 2] = ["row", "col"];
+    const CATEGORY: &'static str = "word";
+    const SLOT_STRIDE: u64 = 4;
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawMatrixBlock for ForeignWord {
+    const RAW_ENDIAN: varlit::Endian = match varlit::Endian::NATIVE {
+        varlit::Endian::Little => varlit::Endian::Big,
+        varlit::Endian::Big => varlit::Endian::Little,
+    };
+}
+
+/// A 2x2 matrix of `ForeignWord` whose cell (1, 0) holds 9, mapped.
+#[cfg(feature = "zero-copy")]
+fn foreign_word_fixture()
+-> Result<(tempfile::TempDir, varlit::VarlitFile, varlit::MmapMatrix), Box<dyn std::error::Error>> {
+    use varlit::VarlitBlock as _;
+    static BLOCKS: &[varlit::BlockDescriptor] = &[varlit::BlockDescriptor {
+        id: ForeignWord::ID,
+        name: "ForeignWord",
+        version: ForeignWord::VERSION,
+        kind: varlit::BlockKind::Matrix,
+        fields: ForeignWord::FIELDS,
+    }];
+    static DIMS: &[varlit::MatrixDimensionDescriptor] = &[
+        varlit::MatrixDimensionDescriptor { name: "row" },
+        varlit::MatrixDimensionDescriptor { name: "col" },
+    ];
+    static COMMITS: &[varlit::MatrixCommitDescriptor] = &[varlit::MatrixCommitDescriptor {
+        name: "word",
+        kind: varlit::MatrixCommitKind::Cell,
+    }];
+    static MATRIX_BLOCKS: &[varlit::MatrixBlockDescriptor] = &[varlit::MatrixBlockDescriptor {
+        block_id: ForeignWord::ID,
+        dimensions: ["row", "col"],
+        category: "word",
+        slot_stride: 4,
+        tile: [0, 0],
+    }];
+    let spec = varlit::FormatSpec::new(
+        b"VRAWWORD",
+        1,
+        varlit::Endian::Little,
+        0,
+        varlit::IndexPolicy::ScanOnOpen,
+        varlit::IntegrityPolicy::None,
+        varlit::RecoveryPolicy::Strict,
+        varlit::ManifestPolicy::None,
+        BLOCKS,
+    )
+    .with_block_identities(&[ForeignWord::IDENTITY])
+    .with_matrix_spec(DIMS, COMMITS, MATRIX_BLOCKS)
+    .with_read_limits(varlit::ReadLimits::finite_all(u64::MAX));
+    let directory = private_tempdir::private_tempdir()?;
+    let path = directory.path().join("word.varlit");
+    let key = varlit::MatrixKey::new(1, 0);
+    let mut writer = spec.create_writer_with_dims(
+        &path,
+        varlit::MatrixDimensions::from_pairs([("row", 2), ("col", 2)]),
+    )?;
+    writer.write_matrix_cell(key, &ForeignWord { value: 9 })?;
+    writer.commit_matrix_cell::<ForeignWord>(key)?;
+    writer.sync()?;
+    drop(writer);
+    let file = spec.open_readonly(&path)?;
+    // SAFETY: the fixture owns the file and never modifies it while mapped.
+    let mapped = unsafe { file.mmap_matrix()? };
+    Ok((directory, file, mapped))
+}
+
 varlit::varlit_format! {
     pub format OwnershipHeader {
         magic: b"OWHD"; version: 1; preset: none;
@@ -1126,6 +1295,46 @@ const CONTRACTS: &[Contract] = &[
     contract!("macros/modules/block_derive.rs::block_derive::generator:seen_ident@eb2d230ef54d4dca", generated "decode_from_slice_into",
         valid { let bytes=varlit::encode_to_vec(&IntoWindowRequiredOnly{w:3},varlit::Endian::Little)?; let mut out=IntoWindow{w:9,added:vec![1,2]}; varlit::decode_from_slice_into(&bytes,varlit::Endian::Little,&mut out)?; assert_eq!(out,IntoWindow{w:3,added:Vec::new()}); Ok(()) },
         invalid { let bytes=varlit::encode_to_vec(&IntoWindowDefaultOnly{added:vec![1]},varlit::Endian::Little)?; let mut out=IntoWindow{w:9,added:vec![1,2]}; assert!(matches!(varlit::decode_from_slice_into(&bytes,varlit::Endian::Little,&mut out),Err(varlit::Error::MissingField { .. }))); Ok(()) }
+    ),
+    contract!("core/file/mmap_views.rs::file::mmap_views::MmapPayloads::fn:raw_fixed_or_decode@def55b45760add3d",
+        valid { #[cfg(feature = "zero-copy")] { let (_d, _file, mapped) = raw_probe_fixture()?; let mut scratch = Vec::new(); // SAFETY: the fixture never modifies the mapped file.
+            let native = unsafe { mapped.raw_fixed_or_decode::<RawProbe>(0, &mut scratch)? }.expect("record"); assert_eq!(*native, RawProbe { x: 1, y: 2 }); // SAFETY: as above. The fallback is taken exactly when the raw view is refused (byte order, or alignment).
+            assert_eq!(native.is_fallback(), unsafe { mapped.raw_fixed::<RawProbe>(0) }.is_err()); // SAFETY: as above.
+            let foreign = unsafe { mapped.raw_fixed_or_decode::<ForeignRawProbe>(0, &mut scratch)? }.expect("record"); assert!(foreign.is_fallback()); assert_eq!(*foreign, ForeignRawProbe { x: 3, y: 4 }); assert_eq!(scratch.capacity(), 0); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let (_d, _file, mapped) = raw_probe_fixture()?; let mut scratch = Vec::new(); // SAFETY: the fixture never modifies the mapped file.
+            assert!(unsafe { mapped.raw_fixed_or_decode::<RawProbe>(1, &mut scratch)? }.is_none()); // SAFETY: as above.
+            assert!(matches!(unsafe { mapped.raw_fixed_or_decode::<RawProbe>(0, &mut scratch) }.map(|v| v.is_some()), Ok(true))); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/file/mmap_views.rs::file::mmap_views::MmapMatrix::fn:raw_cell_or_decode@7efdf0feb3705b7b",
+        valid { #[cfg(feature = "zero-copy")] { let (_d, _file, mapped) = foreign_word_fixture()?; // SAFETY: the fixture never modifies the mapped file.
+            let word = unsafe { mapped.raw_cell_or_decode::<ForeignWord>(varlit::MatrixKey::new(1, 0))? }; assert!(word.is_fallback()); assert_eq!(word.value, 9); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let (_d, _file, mapped) = foreign_word_fixture()?; // SAFETY: the fixture never modifies the mapped file.
+            assert!(matches!(unsafe { mapped.raw_cell_or_decode::<ForeignWord>(varlit::MatrixKey::new(0, 0)) }, Err(varlit::Error::MatrixNotCommitted))); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/file/mmap_views.rs::file::mmap_views::RawView < '_ , T >::fn:is_fallback@470cc54fecc2eabb",
+        valid { #[cfg(feature = "zero-copy")] { let decoded: varlit::RawView<'_, u32> = varlit::RawView::Decoded(7); assert!(decoded.is_fallback()); assert_eq!(*decoded, 7); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let value = 7u32; let raw = varlit::RawView::Raw(&value); assert!(!raw.is_fallback()); assert_eq!(*raw, 7); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/file/mmap_views.rs::file::mmap_views::RawView::variant:Raw@3ac2d34b60997b52",
+        valid { #[cfg(feature = "zero-copy")] { let value = 7u32; assert!(matches!(varlit::RawView::Raw(&value), varlit::RawView::Raw(7))); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let decoded: varlit::RawView<'_, u32> = varlit::RawView::Decoded(7); assert!(!matches!(decoded, varlit::RawView::Raw(_))); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/file/mmap_views.rs::file::mmap_views::RawView::variant:Decoded@dd932ae414a069c2",
+        valid { #[cfg(feature = "zero-copy")] { let (_d, _file, mapped) = raw_probe_fixture()?; // SAFETY: the fixture never modifies the mapped file.
+            let foreign = unsafe { mapped.raw_fixed_or_decode::<ForeignRawProbe>(0, &mut Vec::new())? }; assert!(matches!(foreign, Some(varlit::RawView::Decoded(ForeignRawProbe { x: 3, y: 4 })))); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let value = 7u32; assert!(!matches!(varlit::RawView::Raw(&value), varlit::RawView::Decoded(_))); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/file/mmap_views.rs::file::mmap_views::enum:RawView@4866f029fb7abaa7",
+        valid { #[cfg(feature = "zero-copy")] { let value = 7u32; let views = [varlit::RawView::Raw(&value), varlit::RawView::Decoded(7)]; assert!(views.iter().all(|view| **view == 7)); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let value = 7u32; assert_ne!(varlit::RawView::Raw(&value), varlit::RawView::Decoded(7)); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:RawView@6e607d422c333e5c",
+        valid { #[cfg(feature = "zero-copy")] { let view: varlit::RawView<'_, u8> = varlit::RawView::Decoded(1); assert!(view.is_fallback()); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let value = 1u8; let view: varlit::RawView<'_, u8> = varlit::RawView::Raw(&value); assert!(!view.is_fallback()); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:RawView@ad5760f85da97ff8",
+        valid { #[cfg(feature = "zero-copy")] { let view: varlit::RawView<'_, u8> = varlit::RawView::Decoded(1); assert_eq!(*view, 1); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let value = 2u8; let view: varlit::RawView<'_, u8> = varlit::RawView::Raw(&value); assert_ne!(*view, 1); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
     ),
     contract!("core/format.rs::format::Endian::const:NATIVE@c7f4a41abe965f4e",
         valid { let host = if cfg!(target_endian = "little") { varlit::Endian::Little } else { varlit::Endian::Big }; assert_eq!(varlit::Endian::NATIVE, host); let directory = private_tempdir::private_tempdir()?; let path = directory.path().join("native.varlit"); let mut spec = ProbeFormat::spec(); spec.endian = varlit::Endian::NATIVE; let mut writer = spec.create(&path)?; writer.push(&Probe { value: 19 })?; writer.sync()?; drop(writer); let reader = spec.open_readonly(&path)?; let mut out = [<Probe as varlit::VarlitEmpty>::empty()]; let page = reader.blocks::<Probe>(&mut Vec::new(), &mut out)?; assert_eq!(page.filled, 1); assert_eq!(out, [Probe { value: 19 }]); Ok(()) },

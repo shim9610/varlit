@@ -4,6 +4,54 @@
 #![allow(unsafe_code)]
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "zero-copy")]
+/// What [`MmapPayloads::raw_fixed_or_decode`] and
+/// [`MmapMatrix::raw_cell_or_decode`] return: the raw view where it can be
+/// taken, the value decoded in its place where it cannot.
+///
+/// `Decoded` is the fallback, and a caller that counts on zero-copy reads can
+/// tell it apart (`is_fallback`) instead of losing the speed silently. Both
+/// arms dereference to the value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RawView<'a, T> {
+    /// The mapped bytes, viewed in place.
+    Raw(&'a T),
+    /// The bytes could not be viewed as `T` on this host (their byte order is
+    /// not the host's, or they are not aligned for `T`), so they were decoded,
+    /// converting the byte order, into this value.
+    Decoded(T),
+}
+
+#[cfg(feature = "zero-copy")]
+impl<T> RawView<'_, T> {
+    /// Whether the value was decoded instead of viewed.
+    pub const fn is_fallback(&self) -> bool {
+        matches!(self, Self::Decoded(_))
+    }
+}
+
+#[cfg(feature = "zero-copy")]
+impl<T> std::ops::Deref for RawView<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match self {
+            Self::Raw(value) => value,
+            Self::Decoded(value) => value,
+        }
+    }
+}
+
+#[cfg(feature = "zero-copy")]
+/// Whether a raw view refused for `error` may be replaced by decoding: the
+/// bytes are sound, only their place or order does not fit `T` on this host.
+fn raw_view_falls_back(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::ZeroCopyEndianMismatch { .. } | Error::ZeroCopyAlignmentMismatch { .. }
+    )
+}
+
 #[cfg(feature = "mmap")]
 /// A read-only mapping paired with an immutable snapshot of the validated
 /// append-log index.
@@ -310,6 +358,51 @@ impl MmapPayloads {
                 expected: expected_len,
                 actual: bytes.len() as u64,
             })
+    }
+
+    #[cfg(feature = "zero-copy")]
+    /// [`Self::raw_fixed`] where the view can be taken, the record decoded
+    /// where it cannot.
+    ///
+    /// A view is refused when the payload's byte order is not the one `T`
+    /// holds (a type of plain integer fields declared `Endian::NATIVE`, read
+    /// on a host whose order is not the file's) or when it is not aligned for
+    /// `T`. Those bytes are sound, so instead of the refusal this decodes the
+    /// record as [`Self::decode_block_into`] does, converting the byte order,
+    /// and returns [`RawView::Decoded`]. Every other refusal (an unregistered
+    /// or non-fixed block, a size mismatch, a failed checksum) is returned as
+    /// it is. `scratch` is used only for a compressed record, as in
+    /// `decode_block_into`; the decoded value itself is not allocated.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::raw_fixed`].
+    pub unsafe fn raw_fixed_or_decode<T>(
+        &self,
+        block_index: usize,
+        scratch: &mut Vec<u8>,
+    ) -> Result<Option<RawView<'_, T>>>
+    where
+        T: crate::VarlitRawFixedBlock + crate::VarlitEmpty,
+    {
+        // SAFETY: forwarded; the caller upholds `raw_fixed`'s contract.
+        match unsafe { self.raw_fixed::<T>(block_index) } {
+            Ok(view) => Ok(view.map(RawView::Raw)),
+            Err(error) if raw_view_falls_back(&error) => {
+                let Some(position) = self
+                    .by_block
+                    .get(&T::ID)
+                    .and_then(|positions| positions.get(block_index))
+                    .copied()
+                else {
+                    return Ok(None);
+                };
+                let mut value = T::empty();
+                self.decode_block_into(&self.index[position], scratch, &mut value)?;
+                Ok(Some(RawView::Decoded(value)))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     #[inline]
@@ -637,6 +730,45 @@ impl MmapMatrix {
             expected: expected_len,
             actual: bytes.len() as u64,
         })
+    }
+    #[cfg(feature = "zero-copy")]
+    /// [`Self::raw_cell`] where the view can be taken, the cell decoded where
+    /// it cannot: see [`MmapPayloads::raw_fixed_or_decode`]. The cell's
+    /// commit bit and checksum are checked either way; the decoded value is
+    /// not allocated.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::raw_cell`].
+    pub unsafe fn raw_cell_or_decode<T>(&self, key: MatrixKey) -> Result<RawView<'_, T>>
+    where
+        T: crate::VarlitRawMatrixBlock + crate::VarlitEmpty,
+    {
+        // SAFETY: forwarded; the caller upholds `raw_cell`'s contract.
+        match unsafe { self.raw_cell::<T>(key) } {
+            Ok(view) => Ok(RawView::Raw(view)),
+            Err(error) if raw_view_falls_back(&error) => {
+                let payload = self.cell_payload_window::<T>(key)?;
+                let limit = self
+                    .spec
+                    .read_limits
+                    .require(ReadLimitKey::MaterializedBytes)?
+                    .unwrap_or(u64::MAX)
+                    .checked_sub(payload.len() as u64)
+                    .ok_or(Error::ResourceArithmeticOverflow {
+                        resource: "materialized bytes",
+                    })?;
+                let mut value = T::empty();
+                crate::codec::Decoder::decode_from_slice_limited_into(
+                    payload,
+                    T::ENDIAN.unwrap_or(self.spec.endian),
+                    limit,
+                    &mut value,
+                )?;
+                Ok(RawView::Decoded(value))
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 

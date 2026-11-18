@@ -54,6 +54,17 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `.vks` state sidecar, native keyed files and matrices are unchanged; read
   indexed data with 0.12.1 and rewrite it (see the
   [migration guide](docs/migration-guide.md)).
+- Add `Endian::NATIVE`, the byte order of the compilation target: a raw
+  zero-copy type of plain integer fields declares it, so its views are refused
+  on a host whose order is not the file's instead of reading swapped values.
+- Add `MmapPayloads::raw_fixed_or_decode` and `MmapMatrix::raw_cell_or_decode`:
+  the raw view where it can be taken, else the value decoded in its place
+  (`RawView::Decoded`, `is_fallback()`), when the view is refused for byte
+  order or alignment. Other refusals are returned unchanged; the decoded value
+  is not allocated.
+- Run the library and integration tests for big-endian `s390x` under QEMU in
+  CI, and refuse host-byte-order conversions (`to_ne_bytes`, `transmute`, ...)
+  in shipped code outside the three reviewed uses.
 - Add bounded keyed storage (opt-in). A format that declares
   `keyed_storage: in_place(free_space = N%)` (or
   `FormatSpec::with_keyed_storage`) stores each keyed block once per key

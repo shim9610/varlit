@@ -7920,6 +7920,8 @@ pub(crate) use locks::with_writer_lock_value;
 #[cfg(feature = "mmap")]
 #[path = "file/mmap_views.rs"]
 mod mmap_views;
+#[cfg(feature = "zero-copy")]
+pub use mmap_views::RawView;
 #[cfg(feature = "mmap")]
 use mmap_views::*;
 #[cfg(feature = "mmap")]

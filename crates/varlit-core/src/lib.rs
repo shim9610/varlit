@@ -125,6 +125,8 @@ pub use disk_index::{
 pub use error::{AllocationFailureContext, Error, Result};
 pub use fallible::{TryClone, try_box};
 pub use fallible::{try_box_uninit, try_box_with};
+#[cfg(feature = "zero-copy")]
+pub use file::RawView;
 pub use file::{
     AppendInfo, BlockChain, BlockEvent, COMMIT_BLOCK_ID, CREATION_NONCE_BLOCK_ID, DefragmentReport,
     DirectoryRead, FIELD_INLINE, FieldSpan, FieldWalk, FileMatrixDurabilityBarrier, INDEX_BLOCK_ID,
