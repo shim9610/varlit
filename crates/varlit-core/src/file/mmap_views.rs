@@ -16,9 +16,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub enum RawView<'a, T> {
     /// The mapped bytes, viewed in place.
     Raw(&'a T),
-    /// The bytes could not be viewed as `T` on this host (their byte order is
-    /// not the host's, or they are not aligned for `T`), so they were decoded,
-    /// converting the byte order, into this value.
+    /// The bytes could not be viewed as `T` on this host, so they were read
+    /// into this value instead: copied as they are where they were only not
+    /// aligned for `T`, decoded (converting the byte order) where their byte
+    /// order is not the one `T` holds.
     Decoded(T),
 }
 
@@ -44,12 +45,22 @@ impl<T> std::ops::Deref for RawView<'_, T> {
 
 #[cfg(feature = "zero-copy")]
 /// Whether a raw view refused for `error` may be replaced by decoding: the
-/// bytes are sound, only their place or order does not fit `T` on this host.
+/// bytes are sound, only their byte order is not the one `T` holds. (A view
+/// refused for alignment alone is read, not decoded: see
+/// [`read_unaligned_raw`].)
 fn raw_view_falls_back(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::ZeroCopyEndianMismatch { .. } | Error::ZeroCopyAlignmentMismatch { .. }
-    )
+    matches!(error, Error::ZeroCopyEndianMismatch { .. })
+}
+
+#[cfg(feature = "zero-copy")]
+/// `bytes` read into a `T`: a copy of `size_of::<T>()` bytes to the stack,
+/// which needs no alignment. Used where the view was refused for alignment
+/// only, so the size and byte order are already `T`'s.
+fn read_unaligned_raw<T: zerocopy::FromBytes>(bytes: &[u8]) -> Result<T> {
+    T::read_from_bytes(bytes).map_err(|_| Error::ZeroCopyPayloadSizeMismatch {
+        expected: std::mem::size_of::<T>(),
+        actual: bytes.len() as u64,
+    })
 }
 
 #[cfg(feature = "mmap")]
@@ -367,9 +378,12 @@ impl MmapPayloads {
     /// A view is refused when the payload's byte order is not the one `T`
     /// holds (a type of plain integer fields declared `Endian::NATIVE`, read
     /// on a host whose order is not the file's) or when it is not aligned for
-    /// `T`. Those bytes are sound, so instead of the refusal this decodes the
-    /// record as [`Self::decode_block_into`] does, converting the byte order,
-    /// and returns [`RawView::Decoded`]. Every other refusal (an unregistered
+    /// `T`. Those bytes are sound, so instead of the refusal this returns the
+    /// value in a [`RawView::Decoded`]: misaligned bytes are copied as they are
+    /// (`size_of::<T>()` bytes, no decoding), bytes in another order are
+    /// decoded as [`Self::decode_block_into`] does, converting the byte order.
+    /// Fields of alignment 1 (`zerocopy::byteorder` numbers) are never
+    /// refused for alignment, and are viewed in place. Every other refusal (an unregistered
     /// or non-fixed block, a size mismatch, a failed checksum) is returned as
     /// it is. `scratch` is used only for a compressed record, as in
     /// `decode_block_into`; the decoded value itself is not allocated.
@@ -388,6 +402,14 @@ impl MmapPayloads {
         // SAFETY: forwarded; the caller upholds `raw_fixed`'s contract.
         match unsafe { self.raw_fixed::<T>(block_index) } {
             Ok(view) => Ok(view.map(RawView::Raw)),
+            // The bytes are `T`'s, in the order `T` holds, only not aligned
+            // for it: read them into a value, with no decoding.
+            Err(Error::ZeroCopyAlignmentMismatch { .. }) => {
+                let Some(bytes) = self.block_payload_window::<T>(block_index)? else {
+                    return Ok(None);
+                };
+                Ok(Some(RawView::Decoded(read_unaligned_raw(bytes)?)))
+            }
             Err(error) if raw_view_falls_back(&error) => {
                 let Some(position) = self
                     .by_block
@@ -747,6 +769,10 @@ impl MmapMatrix {
         // SAFETY: forwarded; the caller upholds `raw_cell`'s contract.
         match unsafe { self.raw_cell::<T>(key) } {
             Ok(view) => Ok(RawView::Raw(view)),
+            // Only not aligned for `T`: read the slot into a value.
+            Err(Error::ZeroCopyAlignmentMismatch { .. }) => Ok(RawView::Decoded(
+                read_unaligned_raw(self.cell_payload_window::<T>(key)?)?,
+            )),
             Err(error) if raw_view_falls_back(&error) => {
                 let payload = self.cell_payload_window::<T>(key)?;
                 let limit = self

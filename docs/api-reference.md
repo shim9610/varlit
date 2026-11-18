@@ -1581,15 +1581,22 @@ Feature-gated APIs:
 | `zero-copy` | `unsafe MmapPayloads::raw_fixed_or_decode::<T>(index, scratch)` | raw fixed view, or the record decoded where the view is refused for byte order or alignment (`RawView::Decoded`) |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell_or_decode::<T>(key)` | raw cell view, or the cell decoded on the same grounds |
 
+Build raw types from `zerocopy::byteorder` numbers (`U32<LE>`, `F64<LE>`, ...;
+`varlit::zerocopy` re-exports the crate): they have alignment 1 and state
+their byte order, so a view of them is taken at any position and on every
+host, and they are stored exactly as the plain number they hold. Declare the
+order the fields state (`RAW_ENDIAN = Endian::Little` for `LE` fields).
+
 A raw type of plain integer or float fields declares
 `RAW_ENDIAN = Endian::NATIVE`, the byte order of the machine it is compiled
 for. Its raw views open where that is the file's order and are refused with
-`ZeroCopyEndianMismatch` elsewhere, instead of reading swapped values. The
-`_or_decode` forms take that refusal, and an alignment refusal, as the cue to
-decode the value in place of the view (`RawView::Decoded`, which says so
-through `is_fallback()`); every other refusal is returned as it is. Matrix
-slots are packed with their checksums, so a cell type aligned above 1 may be
-refused for alignment on any host and served by the fallback.
+`ZeroCopyEndianMismatch` elsewhere, instead of reading swapped values; and
+they need the payload aligned for the type, which records and matrix slots
+(packed with their checksums) generally are not. The `_or_decode` forms
+return the value in place of a refused view (`RawView::Decoded`, which
+`is_fallback()` reports): misaligned bytes are copied as they are
+(`size_of::<T>()` bytes, no decoding), bytes in another order are decoded,
+converting it. Every other refusal is returned as it is.
 
 `mmap_payload_range(a..b)` maps from record `a`'s header to record `b - 1`'s
 end and copies only those entries; read a large file in successive ranges, or

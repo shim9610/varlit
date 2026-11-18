@@ -283,9 +283,11 @@ support for them is unstable:
   host's. A struct of plain integer fields declared `RAW_ENDIAN = Little`
   passes that check on a big-endian host and reads swapped values; declare
   `Endian::NATIVE` for such a type, so the view is refused there instead, and
-  use `raw_fixed_or_decode` / `raw_cell_or_decode` to get the decoded value
-  in its place. Explicit-endian field types (for example
-  `zerocopy::byteorder`) are viewed on every host. Single-feature,
+  use `raw_fixed_or_decode` / `raw_cell_or_decode` to get the value in its
+  place. Plain fields also need aligned payloads, which records and matrix
+  slots generally are not; the same calls copy such values out. Types built
+  from `zerocopy::byteorder` numbers (alignment 1, stated order) are viewed in
+  place on every host. Single-feature,
 pairwise and all-feature runs do not enumerate every higher-order configuration.
 Runner images and some compiler jobs roll over time.
 

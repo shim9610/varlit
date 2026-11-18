@@ -60,8 +60,15 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 - Add `MmapPayloads::raw_fixed_or_decode` and `MmapMatrix::raw_cell_or_decode`:
   the raw view where it can be taken, else the value decoded in its place
   (`RawView::Decoded`, `is_fallback()`), when the view is refused for byte
-  order or alignment. Other refusals are returned unchanged; the decoded value
-  is not allocated.
+  order (decoded, converting it) or alignment (the bytes copied out, no
+  decoding). Other refusals are returned unchanged; the value is not
+  allocated.
+- `zerocopy::byteorder` numbers (`U16`..`U128`, `I16`..`I128`, `F32`, `F64`,
+  either order) are block fields, stored as the plain number they hold, with
+  the same wire type and schema id: raw types built from them have alignment
+  1 and are viewed in place on every host, which plain-field types (needing
+  aligned payloads, which records and matrix slots generally are not) are
+  not.
 - Run the library and integration tests for big-endian `s390x` under QEMU in
   CI, and refuse host-byte-order conversions (`to_ne_bytes`, `transmute`, ...)
   in shipped code outside the three reviewed uses.

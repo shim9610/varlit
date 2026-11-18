@@ -1783,6 +1783,56 @@ impl VarlitDecode for f64 {
     }
 }
 
+/// `zerocopy::byteorder` numbers, the fields a raw zero-copy type is built
+/// from so that it is viewed on every host: alignment 1 and a stated byte
+/// order. Each is stored exactly as the number it holds (the same wire type
+/// and schema id as the plain integer or float), so switching a field between
+/// `u32` and `U32<LE>` changes neither the file nor the schema; the byte order
+/// a field states is how it is held in memory, and the file's own order still
+/// governs the encoding.
+#[cfg(feature = "zero-copy")]
+macro_rules! byteorder_codec {
+    ($($wrapper:ident => $plain:ty),+ $(,)?) => {$(
+        impl<O: zerocopy::byteorder::ByteOrder> VarlitEncode for zerocopy::byteorder::$wrapper<O> {
+            const WIRE_TYPE: WireType = <$plain as VarlitEncode>::WIRE_TYPE;
+            const SCHEMA_ID: u64 = <$plain as VarlitEncode>::SCHEMA_ID;
+
+            fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
+                self.get().encode_varlit(encoder)
+            }
+        }
+
+        impl<O: zerocopy::byteorder::ByteOrder> VarlitDecode for zerocopy::byteorder::$wrapper<O> {
+            // Library-owned and decoded by the plain number's codec: it calls
+            // no user code.
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
+            const WIRE_TYPE: WireType = <$plain as VarlitDecode>::WIRE_TYPE;
+            const SCHEMA_ID: u64 = <$plain as VarlitDecode>::SCHEMA_ID;
+
+            #[inline]
+            fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
+                Ok(Self::new(<$plain as VarlitDecode>::decode_varlit(decoder)?))
+            }
+        }
+
+        impl<O: zerocopy::byteorder::ByteOrder> VarlitEmpty for zerocopy::byteorder::$wrapper<O> {
+            #[inline]
+            fn empty() -> Self {
+                Self::new(<$plain as VarlitEmpty>::empty())
+            }
+        }
+    )+};
+}
+#[cfg(feature = "zero-copy")]
+byteorder_codec!(
+    U16 => u16, U32 => u32, U64 => u64, U128 => u128,
+    I16 => i16, I32 => i32, I64 => i64, I128 => i128,
+    F32 => f32, F64 => f64,
+);
+
 impl VarlitEncode for Vec<u8> {
     const WIRE_TYPE: WireType = WireType::Bytes;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bytes");

@@ -189,8 +189,7 @@ unsafe impl varlit::VarlitRawFixedBlock for RawProbe {
     const RAW_ENDIAN: varlit::Endian = varlit::Endian::NATIVE;
 }
 
-/// The same layout declared in the order that is not the host's: its raw view
-/// is refused on every host.
+/// The same layout declared big-endian: its raw view is refused on every host.
 #[cfg(feature = "zero-copy")]
 #[derive(
     Clone,
@@ -211,10 +210,9 @@ struct ForeignRawProbe {
 
 #[cfg(feature = "zero-copy")]
 unsafe impl varlit::VarlitRawFixedBlock for ForeignRawProbe {
-    const RAW_ENDIAN: varlit::Endian = match varlit::Endian::NATIVE {
-        varlit::Endian::Little => varlit::Endian::Big,
-        varlit::Endian::Big => varlit::Endian::Little,
-    };
+    // Big-endian, the order the little-endian fixture is not: refused on
+    // every host, never a promise the file's order lets through.
+    const RAW_ENDIAN: varlit::Endian = varlit::Endian::Big;
 }
 
 #[cfg(feature = "zero-copy")]
@@ -241,8 +239,8 @@ fn raw_probe_fixture()
     Ok((directory, file, mapped))
 }
 
-/// A matrix cell of one plain `u32`, declared in the order that is not the
-/// host's: its raw view is refused on every host.
+/// A matrix cell of one plain `u32`, declared big-endian: its raw view is
+/// refused on every host.
 #[cfg(feature = "zero-copy")]
 #[derive(
     Clone,
@@ -269,10 +267,9 @@ impl varlit::VarlitMatrixBlock for ForeignWord {
 
 #[cfg(feature = "zero-copy")]
 unsafe impl varlit::VarlitRawMatrixBlock for ForeignWord {
-    const RAW_ENDIAN: varlit::Endian = match varlit::Endian::NATIVE {
-        varlit::Endian::Little => varlit::Endian::Big,
-        varlit::Endian::Big => varlit::Endian::Little,
-    };
+    // Big-endian, the order the little-endian fixture is not: refused on
+    // every host, never a promise the file's order lets through.
+    const RAW_ENDIAN: varlit::Endian = varlit::Endian::Big;
 }
 
 /// A 2x2 matrix of `ForeignWord` whose cell (1, 0) holds 9, mapped.
@@ -2182,6 +2179,14 @@ const CONTRACTS: &[Contract] = &[
     contract!("core/lib.rs::::export:VarlitEmpty@4b57d884a6fd10de",
         valid { let mut out=<Probe as varlit::VarlitEmpty>::empty(); assert_eq!(out,Probe{value:0}); varlit::decode_from_slice_into(&varlit::encode_to_vec(&Probe{value:7},varlit::Endian::Little)?,varlit::Endian::Little,&mut out)?; assert_eq!(out,Probe{value:7}); Ok(()) },
         invalid { let bytes=varlit::encode_to_vec(&Probe{value:7},varlit::Endian::Little)?; let mut out=<Probe as varlit::VarlitEmpty>::empty(); assert!(matches!(varlit::decode_from_slice_into(&bytes[..bytes.len()-1],varlit::Endian::Little,&mut out),Err(varlit::Error::UnexpectedEof))); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::macro:byteorder_codec@a985bea5818611dc", generated "decode_from_slice_into",
+        valid { #[cfg(feature = "zero-copy")] { let value = varlit::zerocopy::byteorder::U32::<varlit::zerocopy::byteorder::LittleEndian>::new(0x0102_0304); let bytes = varlit::encode_to_vec(&value, varlit::Endian::Little)?; assert_eq!(bytes, 0x0102_0304u32.to_le_bytes()); assert_eq!(bytes, varlit::encode_to_vec(&0x0102_0304u32, varlit::Endian::Little)?); let mut out = <varlit::zerocopy::byteorder::U32<varlit::zerocopy::byteorder::LittleEndian> as varlit::VarlitEmpty>::empty(); varlit::decode_from_slice_into(&bytes, varlit::Endian::Little, &mut out)?; assert_eq!(out.get(), 0x0102_0304); assert_eq!(<varlit::zerocopy::byteorder::U32<varlit::zerocopy::byteorder::BigEndian> as varlit::VarlitEncode>::WIRE_TYPE, <u32 as varlit::VarlitEncode>::WIRE_TYPE); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let mut out = <varlit::zerocopy::byteorder::U32<varlit::zerocopy::byteorder::LittleEndian> as varlit::VarlitEmpty>::empty(); assert!(matches!(varlit::decode_from_slice_into(&[1u8, 2, 3], varlit::Endian::Little, &mut out), Err(varlit::Error::UnexpectedEof))); assert_eq!(out.get(), 0); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::macro:byteorder_codec@cdacd04f238cdd50", generated "decode_from_slice_into",
+        valid { #[cfg(feature = "zero-copy")] { let value = varlit::zerocopy::byteorder::F64::<varlit::zerocopy::byteorder::BigEndian>::new(2.5); let bytes = varlit::encode_to_vec(&value, varlit::Endian::Big)?; assert_eq!(bytes, 2.5f64.to_be_bytes()); let mut out = <varlit::zerocopy::byteorder::F64<varlit::zerocopy::byteorder::BigEndian> as varlit::VarlitEmpty>::empty(); varlit::decode_from_slice_into(&bytes, varlit::Endian::Big, &mut out)?; assert_eq!(out.get(), 2.5); let mut signed = <varlit::zerocopy::byteorder::I16<varlit::zerocopy::byteorder::LittleEndian> as varlit::VarlitEmpty>::empty(); varlit::decode_from_slice_into(&(-2i16).to_le_bytes(), varlit::Endian::Little, &mut signed)?; assert_eq!(signed.get(), -2); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) },
+        invalid { #[cfg(feature = "zero-copy")] { let mut out = <varlit::zerocopy::byteorder::F64<varlit::zerocopy::byteorder::BigEndian> as varlit::VarlitEmpty>::empty(); assert!(varlit::decode_from_slice_into(&[0u8; 9], varlit::Endian::Big, &mut out).is_err()); assert!(varlit::decode_from_slice_into(&[0u8; 7], varlit::Endian::Big, &mut out).is_err()); } #[cfg(not(feature = "zero-copy"))] assert!(true); Ok(()) }
     ),
     contract!("core/codec.rs::codec::macro:empty_zero@c53b949f57373b8b", generated "empty",
         valid { assert_eq!(<u64 as varlit::VarlitEmpty>::empty(),0); assert_eq!(<String as varlit::VarlitEmpty>::empty(),""); assert!(!<bool as varlit::VarlitEmpty>::empty()); let mut out=<u64 as varlit::VarlitEmpty>::empty(); varlit::decode_from_slice_into(&7u64.to_le_bytes(),varlit::Endian::Little,&mut out)?; assert_eq!(out,7); Ok(()) },

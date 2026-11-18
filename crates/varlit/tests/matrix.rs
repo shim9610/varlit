@@ -493,8 +493,11 @@ unsafe impl varlit::VarlitRawMatrixBlock for NativeWordCell {
     const RAW_ENDIAN: Endian = Endian::NATIVE;
 }
 
-/// The same layout declared in the order that is not the host's, so its raw
-/// view is refused on every host.
+/// The same layout declared big-endian, the order the (little-endian) file is
+/// not, so its raw view is refused on every host and the cell is decoded.
+/// (Declaring the host's *other* order instead would be a false promise on a
+/// big-endian host, `Little` for big-endian bytes, which the file's order
+/// would let through.)
 #[cfg(feature = "zero-copy")]
 #[repr(C)]
 #[derive(
@@ -522,10 +525,39 @@ impl VarlitMatrixBlock for ForeignWordCell {
 
 #[cfg(feature = "zero-copy")]
 unsafe impl varlit::VarlitRawMatrixBlock for ForeignWordCell {
-    const RAW_ENDIAN: Endian = match Endian::NATIVE {
-        Endian::Little => Endian::Big,
-        Endian::Big => Endian::Little,
-    };
+    const RAW_ENDIAN: Endian = Endian::Big;
+}
+
+/// A matrix cell of one `U32<LE>`: alignment 1 and a stated byte order, so it
+/// is viewed in place on every host and at any slot position.
+#[cfg(feature = "zero-copy")]
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
+)]
+#[varlit(id = 253, version = 1, kind = "matrix")]
+struct ByteorderWordCell {
+    value: varlit::zerocopy::byteorder::U32<varlit::zerocopy::byteorder::LittleEndian>,
+}
+
+#[cfg(feature = "zero-copy")]
+impl VarlitMatrixBlock for ByteorderWordCell {
+    const DIMENSIONS: [&'static str; 2] = ["scan", "ch"];
+    const CATEGORY: &'static str = "byteorder";
+    const SLOT_STRIDE: u64 = 4;
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawMatrixBlock for ByteorderWordCell {
+    const RAW_ENDIAN: Endian = Endian::Little;
 }
 
 #[cfg(feature = "zero-copy")]
@@ -545,6 +577,13 @@ fn word_matrix_spec() -> FormatSpec {
             kind: BlockKind::Matrix,
             fields: ForeignWordCell::FIELDS,
         },
+        BlockDescriptor {
+            id: ByteorderWordCell::ID,
+            name: "ByteorderWordCell",
+            version: ByteorderWordCell::VERSION,
+            kind: BlockKind::Matrix,
+            fields: ByteorderWordCell::FIELDS,
+        },
     ];
     static DIMS: &[MatrixDimensionDescriptor] = &[
         MatrixDimensionDescriptor { name: "scan" },
@@ -557,6 +596,10 @@ fn word_matrix_spec() -> FormatSpec {
         },
         MatrixCommitDescriptor {
             name: ForeignWordCell::CATEGORY,
+            kind: MatrixCommitKind::Cell,
+        },
+        MatrixCommitDescriptor {
+            name: ByteorderWordCell::CATEGORY,
             kind: MatrixCommitKind::Cell,
         },
     ];
@@ -575,6 +618,13 @@ fn word_matrix_spec() -> FormatSpec {
             slot_stride: ForeignWordCell::SLOT_STRIDE,
             tile: [0, 0],
         },
+        MatrixBlockDescriptor {
+            block_id: ByteorderWordCell::ID,
+            dimensions: ByteorderWordCell::DIMENSIONS,
+            category: ByteorderWordCell::CATEGORY,
+            slot_stride: ByteorderWordCell::SLOT_STRIDE,
+            tile: [0, 0],
+        },
     ];
     FormatSpec::new(
         b"WMTX",
@@ -587,7 +637,11 @@ fn word_matrix_spec() -> FormatSpec {
         varlit::ManifestPolicy::None,
         BLOCKS,
     )
-    .with_block_identities(&[NativeWordCell::IDENTITY, ForeignWordCell::IDENTITY])
+    .with_block_identities(&[
+        NativeWordCell::IDENTITY,
+        ForeignWordCell::IDENTITY,
+        ByteorderWordCell::IDENTITY,
+    ])
     .with_matrix_spec(DIMS, COMMITS, MATRIX_BLOCKS)
     .with_read_limits(ReadLimits::finite_all(u64::MAX))
 }
@@ -1450,6 +1504,13 @@ fn raw_cell_or_decode_views_or_falls_back_with_the_same_value() -> varlit::Resul
         writer.commit_matrix_cell::<NativeWordCell>(key)?;
         writer.write_matrix_cell(key, &ForeignWordCell { value })?;
         writer.commit_matrix_cell::<ForeignWordCell>(key)?;
+        writer.write_matrix_cell(
+            key,
+            &ByteorderWordCell {
+                value: value.into(),
+            },
+        )?;
+        writer.commit_matrix_cell::<ByteorderWordCell>(key)?;
         writer.sync()?;
     }
     {
@@ -1482,6 +1543,16 @@ fn raw_cell_or_decode_views_or_falls_back_with_the_same_value() -> varlit::Resul
             unsafe { mmap.raw_cell::<ForeignWordCell>(key) },
             Err(Error::ZeroCopyEndianMismatch { .. } | Error::ZeroCopyAlignmentMismatch { .. })
         ));
+        // Alignment 1 and a stated order: viewed in place on every host, at a
+        // slot position a `u32` could not be viewed at.
+        let viewed = unsafe { mmap.raw_cell::<ByteorderWordCell>(key) }?;
+        assert_eq!(viewed.value.get(), value);
+        let view = unsafe { mmap.raw_cell_or_decode::<ByteorderWordCell>(key) }?;
+        assert!(!view.is_fallback());
+        assert_eq!(view.value.get(), value);
+        let mut decoded = <ByteorderWordCell as varlit::VarlitEmpty>::empty();
+        reader.read_matrix_cell(key, &mut decoded)?;
+        assert_eq!(decoded.value.get(), value);
         // A cell that was never committed is refused, not decoded.
         assert!(matches!(
             unsafe { mmap.raw_cell_or_decode::<NativeWordCell>(MatrixKey::new(0, 0)) },

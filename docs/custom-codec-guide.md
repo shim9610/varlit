@@ -284,25 +284,33 @@ eligible in the first scaffold.
 #[repr(C)]
 #[varlit(id = 121, version = 1, kind = "fixed")]
 struct RawPoint {
-    x: u32,
-    y: u32,
+    x: varlit::zerocopy::byteorder::U32<varlit::zerocopy::byteorder::LittleEndian>,
+    y: varlit::zerocopy::byteorder::U32<varlit::zerocopy::byteorder::LittleEndian>,
 }
 
 #[cfg(feature = "zero-copy")]
 unsafe impl varlit::VarlitRawFixedBlock for RawPoint {
-    // Plain `u32` fields hold the host's byte order.
-    const RAW_ENDIAN: varlit::Endian = varlit::Endian::NATIVE;
+    // The fields hold little-endian bytes on every host.
+    const RAW_ENDIAN: varlit::Endian = varlit::Endian::Little;
 }
 ```
 
+`zerocopy::byteorder` numbers have alignment 1, so a view of `RawPoint` is
+taken wherever its payload lies, and they state their byte order, so it reads
+the same on every host (`point.x.get()`). They are stored exactly as the plain
+`u32` they hold: switching a field between the two changes neither the file
+nor the schema.
+
 `RAW_ENDIAN` is a promise about the bytes of `Self`, and the library compares
-it with the file's byte order. `RawPoint` above holds plain `u32` fields, which
-are in the host's order, so it declares `Endian::NATIVE`: on a host whose order
-is the file's the view opens, and on any other it is refused with
-`ZeroCopyEndianMismatch`. Declaring a fixed order (`Endian::Little`) for plain
-fields would pass the check on a big-endian host and read swapped values. A raw
-type that must be viewed on every host uses explicit-endian fields, such as
-`zerocopy::byteorder::U32<LE>`, and declares that order.
+it with the file's byte order. A type of plain `u32` fields holds the host's
+order, so it declares `Endian::NATIVE`: on a host whose order is the file's the
+view opens, and on any other it is refused with `ZeroCopyEndianMismatch`
+(declaring a fixed order for plain fields would pass the check on a big-endian
+host and read swapped values). Plain fields also need the payload aligned for
+them, which a record's payload or a matrix slot generally is not, so their
+views are often refused with `ZeroCopyAlignmentMismatch` on any host;
+`raw_fixed_or_decode` then returns the value, copied out of the misaligned
+bytes.
 
 Default typed reads do not use this path. Callers opt in through unsafe raw
 access:
@@ -313,8 +321,8 @@ access:
 let mmap = unsafe { file.mmap_payloads()? };
 let point = unsafe { mmap.raw_fixed::<RawPoint>(index) }?;
 
-// Or: the view where it can be taken, the record decoded (converting its byte
-// order) where it is refused for byte order or alignment.
+// Or: the view where it can be taken, the value where it is refused for byte
+// order (decoded, converting it) or alignment (copied out).
 let mut scratch = Vec::new();
 if let Some(point) = unsafe { mmap.raw_fixed_or_decode::<RawPoint>(index, &mut scratch) }? {
     if point.is_fallback() {

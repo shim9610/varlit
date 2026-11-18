@@ -117,6 +117,31 @@ unsafe impl varlit::VarlitRawFixedBlock for BigEndianRawPoint {
     const RAW_ENDIAN: Endian = Endian::Big;
 }
 
+/// Fields of alignment 1 in a stated byte order: viewed in place on every
+/// host and at any payload position.
+#[cfg(feature = "zero-copy")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    VarlitBlock,
+    zerocopy::FromBytes,
+    zerocopy::Immutable,
+    zerocopy::KnownLayout,
+)]
+#[repr(C)]
+#[varlit(id = 86, version = 1, kind = "fixed")]
+struct ByteorderPoint {
+    x: zerocopy::byteorder::U32<zerocopy::byteorder::LittleEndian>,
+    y: zerocopy::byteorder::F64<zerocopy::byteorder::LittleEndian>,
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawFixedBlock for ByteorderPoint {
+    const RAW_ENDIAN: Endian = Endian::Little;
+}
+
 #[cfg(feature = "zero-copy")]
 #[derive(
     Clone, Copy, Debug, PartialEq, zerocopy::FromBytes, zerocopy::Immutable, zerocopy::KnownLayout,
@@ -193,7 +218,8 @@ varlit_format! {
             RawPoint,
             RawVariable,
             BigEndianRawPoint,
-            SizeMismatchRawPoint
+            SizeMismatchRawPoint,
+            ByteorderPoint
         ];
     }
 }
@@ -966,6 +992,61 @@ fn raw_fixed_or_decode_views_or_falls_back_with_the_same_value() -> varlit::Resu
         scratch.capacity() == 0,
         "an uncompressed record used the scratch"
     );
+    drop(mmap);
+    drop(file);
+    cleanup(&path);
+    Ok(())
+}
+
+/// A record of `zerocopy::byteorder` fields is viewed in place on every host
+/// whatever its payload's alignment, and stores exactly the bytes a plain
+/// field of the same number would.
+#[cfg(feature = "zero-copy")]
+#[test]
+fn byteorder_fields_are_viewed_in_place_on_every_host() -> varlit::Result<()> {
+    let path = temp_path("byteorder_view");
+    cleanup(&path);
+    let point = ByteorderPoint {
+        x: 0x0102_0304.into(),
+        y: 2.5f64.into(),
+    };
+    {
+        let mut file = MmapFormat::create(&path)?;
+        // A record before it moves its payload off any 8-byte boundary.
+        file.push(&MmapMessage {
+            id: 1,
+            text: "abc".into(),
+        })?;
+        file.push(&point)?;
+        file.flush()?;
+    }
+    let file = MmapFormat::open_readonly(&path)?;
+    // SAFETY: The fixture is not modified while the mapping is alive.
+    let mmap = unsafe { file.mmap_payloads()? };
+    let viewed = unsafe { mmap.raw_fixed::<ByteorderPoint>(0) }?.expect("the point");
+    assert_eq!(viewed.x.get(), 0x0102_0304);
+    assert_eq!(viewed.y.get(), 2.5);
+    let window = mmap
+        .block_payload_window::<ByteorderPoint>(0)?
+        .expect("payload");
+    assert_eq!(std::ptr::from_ref(viewed).cast::<u8>(), window.as_ptr());
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&0x0102_0304u32.to_le_bytes());
+    expected.extend_from_slice(&2.5f64.to_le_bytes());
+    assert_eq!(window, &expected[..]);
+    let view = unsafe { mmap.raw_fixed_or_decode::<ByteorderPoint>(0, &mut Vec::new()) }?
+        .expect("the point");
+    assert!(!view.is_fallback());
+    // The decoding read agrees.
+    let entry = mmap
+        .index_entries()
+        .iter()
+        .find(|entry| entry.block_id == ByteorderPoint::ID)
+        .expect("an entry for the point")
+        .clone();
+    let mut decoded = <ByteorderPoint as varlit::VarlitEmpty>::empty();
+    mmap.decode_block_into(&entry, &mut Vec::new(), &mut decoded)?;
+    assert_eq!(decoded, point);
     drop(mmap);
     drop(file);
     cleanup(&path);

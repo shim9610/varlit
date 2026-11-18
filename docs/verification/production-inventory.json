@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "a16388facea816e8",
-    "count": 3601
+    "catalogue": "54b138ef8c039212",
+    "count": 3602
   },
   "schema": 1,
   "sources": {
@@ -369,7 +369,7 @@
     "crates/varlit-core/src/adapter.rs": "65ab8f87ed2d760e",
     "crates/varlit-core/src/anchor.rs": "03fd1c00ae7109c1",
     "crates/varlit-core/src/chunks.rs": "4b7fdc96d6089a10",
-    "crates/varlit-core/src/codec.rs": "a1d9ffbbe22d0c6a",
+    "crates/varlit-core/src/codec.rs": "b673d62aea642519",
     "crates/varlit-core/src/codec/raw_fill.rs": "af9087198c42bcd2",
     "crates/varlit-core/src/collections.rs": "2799b69254dcc528",
     "crates/varlit-core/src/compression_buffers.rs": "5c701e03f12d4e92",
@@ -403,7 +403,7 @@
     "crates/varlit-core/src/file/matrix_access.rs": "b2d2109ad332e6de",
     "crates/varlit-core/src/file/matrix_sidecar.rs": "22f6ff7b5f0002b6",
     "crates/varlit-core/src/file/matrix_tiles_io.rs": "3470a73e671c3920",
-    "crates/varlit-core/src/file/mmap_views.rs": "334de5bd7ddbd3dc",
+    "crates/varlit-core/src/file/mmap_views.rs": "0fce823555a8deae",
     "crates/varlit-core/src/file/mutation.rs": "ebebf887a587e965",
     "crates/varlit-core/src/file/publication.rs": "c32c94a7d6075d42",
     "crates/varlit-core/src/file/record_checksum.rs": "9d899f4903f211d3",
