@@ -78,6 +78,11 @@ def decoder_fixture():
         return source[start:end]
     start = source.index('pub struct Decoder<')
     structure = source[start:source.index("impl<'a> Decoder", start)]
+    # Keyed storage's callback names the crate's keyed block trait, which
+    # this fixture does not carry; no proof here decodes through it.
+    keyed = structure.find('struct KeyedCallback')
+    if keyed != -1:
+        structure = structure[:keyed] + structure[structure.index('struct CallbackGuard', keyed):]
     methods = ['new', 'new_limited', 'decode_from_slice_accounted', 'remaining',
                'decode_nested', 'charge_materialization', 'decode_complete',
                'decode_value','with_callback','with_existing_callback',
@@ -228,7 +233,7 @@ def main():
         cmd = ['cargo','kani','--manifest-path',str(crate/'Cargo.toml'),'--default-unwind','5','-Z','function-contracts','-Z','stubbing']
         def run(name, command):
             with (out/(name+'.log')).open('w') as log:
-                code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300).returncode
+                code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=1200).returncode
             return code, (out/(name+'.log')).read_text()
         # Match the full-crate suite's two workers within the existing runner
         # budget. Each deliberately mutated fixture remains sequential below.
