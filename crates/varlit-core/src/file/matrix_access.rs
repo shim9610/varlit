@@ -54,11 +54,9 @@ impl VarlitFile {
         // Encoded into the handle's record buffer and staged from it: no
         // buffer is made for the call.
         let mut encoded = std::mem::take(&mut self.record_buffer);
-        let result = self
-            .encode_matrix_slot(value, &mut encoded)
-            .and_then(|()| {
-                self.matrix_mutation(|tiles, store| tiles.write_cell(store, T::ID, key, &encoded))
-            });
+        let result = self.encode_matrix_slot(value, &mut encoded).and_then(|()| {
+            self.matrix_mutation(|tiles, store| tiles.write_cell(store, T::ID, key, &encoded))
+        });
         self.record_buffer = encoded;
         result
     }

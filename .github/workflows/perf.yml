@@ -10,7 +10,8 @@ name: Performance A/B
 #
 # The harness comes from the head ref and is built against both libraries,
 # so `base_ref` must have the API the harness uses (a recent commit of the
-# same line of work).
+# same line of work). It must also be an ancestor of the head: the workflow
+# builds and runs only code already in the head's history.
 on:
   workflow_dispatch:
     inputs:
@@ -53,13 +54,30 @@ jobs:
       run:
         shell: bash
     steps:
+      # One checkout of the head, with history. The base is not checked out
+      # by ref from the input: it is taken from that history, below, and only
+      # when it is an ancestor of the head, so the only code built is code
+      # already merged into this line of work. No credentials stay behind.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: head
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.base_ref }}
-          path: base
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Take the base from the head's history
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          case "$BASE_REF" in
+            ''|-*|*[!A-Za-z0-9._/-]*) echo "base_ref must be a plain ref or commit" >&2; exit 1 ;;
+          esac
+          base="$(git -C head rev-parse --verify --quiet "$BASE_REF^{commit}" \
+            || git -C head rev-parse --verify --quiet "origin/$BASE_REF^{commit}")" \
+            || { echo "base_ref $BASE_REF is not in the head's history" >&2; exit 1; }
+          if ! git -C head merge-base --is-ancestor "$base" HEAD; then
+            echo "base_ref $BASE_REF ($base) is not an ancestor of the head" >&2
+            exit 1
+          fi
+          git -C head worktree add --detach ../base "$base"
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
