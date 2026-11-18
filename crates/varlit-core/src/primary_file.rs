@@ -93,6 +93,9 @@ struct ReaderBound {
     floor: u64,
     /// The bound last read, kept when a read finds both slots unreadable.
     last: std::sync::atomic::AtomicU64,
+    /// The file's logical length when last measured: a bound within it
+    /// needs no new measurement.
+    seen: std::sync::atomic::AtomicU64,
 }
 
 /// Supplies the anchor a write reaches: given its index and logical offset,
@@ -189,6 +192,7 @@ impl PrimaryFile {
             slots_at,
             floor,
             last: std::sync::atomic::AtomicU64::new(floor),
+            seen: std::sync::atomic::AtomicU64::new(0),
         });
     }
 
@@ -277,6 +281,9 @@ impl PrimaryFile {
                 last: std::sync::atomic::AtomicU64::new(
                     bound.last.load(std::sync::atomic::Ordering::Relaxed),
                 ),
+                seen: std::sync::atomic::AtomicU64::new(
+                    bound.seen.load(std::sync::atomic::Ordering::Relaxed),
+                ),
             }),
             published: None,
         })
@@ -287,14 +294,25 @@ impl PrimaryFile {
     /// by a published end (see [`Self::bound_by_published_end`]) is told no
     /// more than that end.
     pub(crate) fn len(&self) -> std::io::Result<u64> {
-        let logical = self.unbounded_len()?;
+        use std::sync::atomic::Ordering::Relaxed;
         let Some(bound) = &self.bound else {
-            return Ok(logical);
+            return self.unbounded_len();
         };
         let published = self.read_published(bound.slots_at)?;
-        let last = bound.last.load(std::sync::atomic::Ordering::Relaxed);
+        // An end within the length last measured needs no new measurement:
+        // a follower's idle poll is one read of the slots, as it was one
+        // measurement before the published end existed.
+        if let Some(len) =
+            crate::published_end::known_len(bound.floor, published, bound.seen.load(Relaxed))
+        {
+            bound.last.store(len, Relaxed);
+            return Ok(len);
+        }
+        let logical = self.unbounded_len()?;
+        bound.seen.store(logical, Relaxed);
+        let last = bound.last.load(Relaxed);
         let (len, next) = crate::published_end::visible_len(logical, bound.floor, published, last);
-        bound.last.store(next, std::sync::atomic::Ordering::Relaxed);
+        bound.last.store(next, Relaxed);
         Ok(len)
     }
 

@@ -475,7 +475,8 @@
         "published_end::proofs::a_slot_round_trips",
         "published_end::proofs::the_visible_length_is_bounded_by_the_file_and_the_published_end",
         "published_end::proofs::a_torn_slot_write_falls_back_to_the_previous_end",
-        "published_end::proofs::the_newest_valid_slot_decides"
+        "published_end::proofs::the_newest_valid_slot_decides",
+        "published_end::proofs::a_known_length_is_what_measuring_would_give"
       ],
       "sources": [
         "crates/varlit-core/src/published_end/proofs.rs",
@@ -485,7 +486,7 @@
       "limits": "A torn slot is assumed to fail its checksum; that the writer publishes only after a durable publication's barrier is held by an integration test, not here",
       "specification": {
         "requires": "The writer writes slot seq % 2 with increasing sequences and non-decreasing ends.",
-        "ensures": "A reader is told no more than the file and the newest valid published end; a torn write falls back to an earlier, no larger end.",
+        "ensures": "A reader is told no more than the file and the newest valid published end; a torn write falls back to an earlier, no larger end. Skipping the length measurement when the bound lies within the last measured length gives the same answer while the file has not shrunk.",
         "on_error": "Unreadable slots keep the reader's last bound.",
         "frame": "The append log start is never hidden.",
         "progress": "Pure, loop-bounded functions."

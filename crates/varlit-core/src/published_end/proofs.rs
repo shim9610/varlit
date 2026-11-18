@@ -115,3 +115,28 @@ fn the_newest_valid_slot_decides() {
     assert_eq!(choose(None, None, true), Published::Unbounded);
     assert_eq!(choose(None, None, false), Published::Unreadable);
 }
+
+/// Skipping the measurement changes nothing while the file has not shrunk:
+/// whenever [`known_len`] answers, the file is at least as long as it was
+/// when measured, and the answer is what [`visible_len`] gives for it.
+#[kani::proof]
+fn a_known_length_is_what_measuring_would_give() {
+    let floor: u64 = kani::any();
+    let seen: u64 = kani::any();
+    let file_len: u64 = kani::any();
+    let last: u64 = kani::any();
+    let end: u64 = kani::any();
+    kani::assume(file_len >= seen);
+    let published = match kani::any::<u8>() % 3 {
+        0 => Published::Unbounded,
+        1 => Published::Bounded(end),
+        _ => Published::Unreadable,
+    };
+    if let Some(len) = known_len(floor, published, seen) {
+        assert!(len <= seen);
+        assert_eq!(
+            Some(len),
+            Some(visible_len(file_len, floor, published, last).0)
+        );
+    }
+}

@@ -184,6 +184,21 @@ pub(crate) fn visible_len(
     }
 }
 
+/// The length a reader may use without measuring the file again, when the
+/// file held `seen` bytes the last time it was measured: a bounded end no
+/// greater than that. `None` when the file has to be measured.
+///
+/// The file only grows while a writer appends, so a bound within the
+/// length last measured is within the file now; where it is not (a recovery
+/// that cut the file back, the window before it publishes the lower end) a
+/// read past the end fails as it would have on the truncated file.
+pub(crate) fn known_len(floor: u64, published: Published, seen: u64) -> Option<u64> {
+    match published {
+        Published::Bounded(end) => Some(end.max(floor)).filter(|bound| *bound <= seen),
+        Published::Unbounded | Published::Unreadable => None,
+    }
+}
+
 #[cfg(kani)]
 mod proofs;
 
