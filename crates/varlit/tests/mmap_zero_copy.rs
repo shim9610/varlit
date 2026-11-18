@@ -47,9 +47,29 @@ struct RawPoint {
     y: u32,
 }
 
+// Plain integer fields hold the host's byte order, so the type says so:
+// views open on a little-endian host (the fixture's order) and are refused on
+// a big-endian one instead of reading swapped values.
 #[cfg(feature = "zero-copy")]
 unsafe impl varlit::VarlitRawFixedBlock for RawPoint {
-    const RAW_ENDIAN: Endian = Endian::Little;
+    const RAW_ENDIAN: Endian = Endian::NATIVE;
+}
+
+/// What a raw view of `RawPoint` owes on this host: the value where the host's
+/// byte order is the file's (little), the endian refusal where it is not.
+#[cfg(feature = "zero-copy")]
+fn assert_native_view(view: varlit::Result<Option<&RawPoint>>, expected: Option<&RawPoint>) {
+    if Endian::NATIVE == Endian::Little {
+        assert_eq!(view.expect("a view on the file's byte order"), expected);
+    } else {
+        assert!(matches!(
+            view,
+            Err(Error::ZeroCopyEndianMismatch {
+                expected: Endian::Little,
+                actual: Endian::Big
+            })
+        ));
+    }
 }
 
 #[cfg(feature = "zero-copy")]
@@ -325,7 +345,7 @@ fn mapped_record_reads_verify_crc_before_exposing_bytes() -> varlit::Result<()> 
             // SAFETY: these mappings are dropped before the fixture is edited.
             let mapped = unsafe { reader.mmap_payloads()? };
             for _ in 0..3 {
-                assert_eq!(unsafe { mapped.raw_fixed::<RawPoint>(0)? }, Some(&value));
+                assert_native_view(unsafe { mapped.raw_fixed::<RawPoint>(0) }, Some(&value));
                 assert_eq!(mapped.payload_window(&entry)?, expected);
             }
             let window = unsafe { reader.mmap_payload_window(&entry)? };
@@ -361,10 +381,18 @@ fn mapped_record_reads_verify_crc_before_exposing_bytes() -> varlit::Result<()> 
                     mapped.block_payload_window::<RawPoint>(0),
                     Err(Error::ChecksumMismatch { .. })
                 ));
+                // The byte order is checked before the payload is read, so a
+                // big-endian host refuses the view on that ground first.
                 assert!(matches!(
                     unsafe { mapped.raw_fixed::<RawPoint>(0) },
-                    Err(Error::ChecksumMismatch { .. })
+                    Err(Error::ChecksumMismatch { .. }) | Err(Error::ZeroCopyEndianMismatch { .. })
                 ));
+                if Endian::NATIVE == Endian::Little {
+                    assert!(matches!(
+                        unsafe { mapped.raw_fixed::<RawPoint>(0) },
+                        Err(Error::ChecksumMismatch { .. })
+                    ));
+                }
                 assert!(matches!(
                     unsafe { reader.mmap_payload_window(&entry) },
                     Err(Error::ChecksumMismatch { .. })
@@ -566,7 +594,7 @@ fn mapped_record_survives_append_with_eight_independent_readers() -> varlit::Res
 
 #[cfg(feature = "zero-copy")]
 #[test]
-fn zero_copy_raw_fixed_successfully_views_canonical_little_endian_payload() -> varlit::Result<()> {
+fn zero_copy_raw_fixed_views_the_payload_on_its_own_byte_order() -> varlit::Result<()> {
     let path = temp_path("raw_fixed");
     cleanup(&path);
 
@@ -582,14 +610,14 @@ fn zero_copy_raw_fixed_successfully_views_canonical_little_endian_payload() -> v
     let file = MmapFormat::open_readonly(&path)?;
     // SAFETY: The fixture is not modified while the mapping is alive.
     let mmap = unsafe { file.mmap_payloads()? };
-    assert_eq!(
-        unsafe { mmap.raw_fixed::<RawPoint>(0) }?,
+    assert_native_view(
+        unsafe { mmap.raw_fixed::<RawPoint>(0) },
         Some(&RawPoint {
             x: 0x1122_3344,
-            y: 0x5566_7788
-        })
+            y: 0x5566_7788,
+        }),
     );
-    assert!(unsafe { mmap.raw_fixed::<RawPoint>(1) }?.is_none());
+    assert_native_view(unsafe { mmap.raw_fixed::<RawPoint>(1) }, None);
 
     drop(mmap);
     drop(file);
@@ -765,5 +793,117 @@ fn individual_mapping_works_without_a_resident_directory_or_whole_file_budget() 
         unsafe { file.mmap_payload_window(&forged) },
         Err(Error::MmapEntryNotInSnapshot)
     ));
+    Ok(())
+}
+
+/// `mmap_payloads` copies the record index, never a payload: every window it
+/// hands out is a slice of one mapping, so two records' windows are as far
+/// apart in memory as their payloads are in the file, and the same window is
+/// the same bytes on every call.
+#[test]
+fn payload_windows_are_slices_of_one_mapping_not_copies() -> varlit::Result<()> {
+    let path = temp_path("one_mapping");
+    cleanup(&path);
+    {
+        let mut file = MmapFormat::create(&path)?;
+        for x in 0..16 {
+            file.push(&MmapPoint { x, y: x + 1 })?;
+        }
+        file.flush()?;
+    }
+    let file = MmapFormat::open_readonly(&path)?;
+    // SAFETY: The fixture is not modified while the mapping is alive.
+    let mmap = unsafe { file.mmap_payloads()? };
+    let entries = mmap.index_entries().to_vec();
+    assert_eq!(entries.len(), 16);
+    let first = mmap.payload_window(&entries[0])?.as_ptr() as usize;
+    for entry in &entries {
+        let window = mmap.payload_window(entry)?;
+        let at = window.as_ptr() as usize;
+        assert_eq!(
+            (at - first) as u64,
+            entry.payload_offset - entries[0].payload_offset,
+            "a window is not where its payload is in the mapping"
+        );
+        assert_eq!(mmap.payload_window(entry)?.as_ptr() as usize, at);
+        assert_eq!(window, MmapFormat::read_payload(entry, &path)?);
+    }
+    drop(mmap);
+    drop(file);
+    cleanup(&path);
+    Ok(())
+}
+
+/// The index copy is charged to `IndexBytes` before it is made: a limit
+/// below what the snapshot's index takes refuses the mapping instead of
+/// copying past it.
+#[test]
+fn the_index_copy_is_bounded_by_the_index_bytes_limit() -> varlit::Result<()> {
+    let path = temp_path("index_limit");
+    cleanup(&path);
+    {
+        let mut file = MmapFormat::create(&path)?;
+        for x in 0..64 {
+            file.push(&MmapPoint { x, y: x })?;
+        }
+        file.flush()?;
+    }
+    let mut limits = MmapFormat::spec().read_limits;
+    limits.max_index_bytes = varlit::ReadLimit::Finite(64);
+    let file = MmapFormat::spec()
+        .with_resource_limits(limits)
+        .open_readonly(&path);
+    // The open itself may already refuse a resident index that large; if it
+    // opens, the mapping must.
+    if let Ok(file) = file {
+        // SAFETY: The fixture is not modified while a mapping would be alive.
+        let mapped = unsafe { file.mmap_payloads() };
+        assert!(matches!(mapped, Err(Error::LimitExceeded { .. })));
+    } else {
+        assert!(matches!(file, Err(Error::LimitExceeded { .. })));
+    }
+    // Within the limit, the same file maps.
+    let file = MmapFormat::open_readonly(&path)?;
+    // SAFETY: as above.
+    let mapped = unsafe { file.mmap_payloads()? };
+    assert_eq!(mapped.len(), 64);
+    drop(mapped);
+    drop(file);
+    cleanup(&path);
+    Ok(())
+}
+
+/// A type of plain fields that declares `Endian::NATIVE` is viewed without a
+/// copy where the host's order is the file's and refused elsewhere, and the
+/// decoding read, which converts, returns the value on every host.
+#[cfg(feature = "zero-copy")]
+#[test]
+fn a_native_order_raw_type_is_viewed_or_refused_and_decoding_converts() -> varlit::Result<()> {
+    let path = temp_path("native_order");
+    cleanup(&path);
+    let value = RawPoint {
+        x: 0x0102_0304,
+        y: 0x0a0b_0c0d,
+    };
+    {
+        let mut file = MmapFormat::create(&path)?;
+        file.push(&value)?;
+        file.flush()?;
+    }
+    let file = MmapFormat::open_readonly(&path)?;
+    // SAFETY: The fixture is not modified while the mapping is alive.
+    let mmap = unsafe { file.mmap_payloads()? };
+    assert_native_view(unsafe { mmap.raw_fixed::<RawPoint>(0) }, Some(&value));
+    let entry = mmap.index_entries()[0].clone();
+    let mut decoded = <RawPoint as varlit::VarlitEmpty>::empty();
+    mmap.decode_block_into(&entry, &mut Vec::new(), &mut decoded)?;
+    assert_eq!(decoded, value);
+    assert_eq!(
+        mmap.payload_window(&entry)?,
+        &[4, 3, 2, 1, 13, 12, 11, 10][..]
+    );
+    drop(mmap);
+    drop(file);
+    cleanup(&path);
     Ok(())
 }
