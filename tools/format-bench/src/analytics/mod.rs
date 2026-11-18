@@ -17,6 +17,7 @@
 use crate::common::*;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "hdf5")]
 mod h5;
 mod pq;
 mod sq;
@@ -127,6 +128,7 @@ pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
         "varlit" => vl::CANDIDATES,
         "sqlite" => sq::CANDIDATES,
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::CANDIDATES,
         "parquet" => pq::CANDIDATES,
         _ => return Err(format!("unknown engine {engine}").into()),
@@ -157,6 +159,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     let mut w: Box<dyn Writer> = match engine {
         "varlit" => vl::create(&p, &cand)?,
         "sqlite" => sq::create(&p, &cand)?,
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::create(&p, &cand)?,
         "parquet" => pq::create(&p, &cand)?,
         _ => return Err("engine".into()),
@@ -220,6 +223,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     let mut r: Box<dyn Analytics> = match engine {
         "varlit" => vl::open(&p, &cand)?,
         "sqlite" => sq::open(&p, &cand)?,
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::open(&p, &cand)?,
         _ => pq::open(&p, &cand)?,
     };

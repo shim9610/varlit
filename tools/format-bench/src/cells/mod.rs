@@ -19,8 +19,10 @@ use crate::common::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(feature = "hdf5")]
 mod h5;
 mod sq;
+#[cfg(unix)]
 pub mod tile_proto;
 mod varlit_matrix;
 
@@ -127,8 +129,10 @@ pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
         "varlit" => &["matrix"],
         "sqlite" => sq::CANDIDATES,
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::CANDIDATES,
         "parquet" => &["-"],
+        #[cfg(unix)]
         "tile" => tile_proto::CANDIDATES,
         _ => return Err(format!("unknown engine {engine}").into()),
     })
@@ -141,7 +145,9 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellWriter>> {
     match (engine, cand) {
         ("varlit", "matrix") => varlit_matrix::create(p),
         ("sqlite", c) => sq::create(p, c),
+        #[cfg(unix)]
         ("tile", c) => tile_proto::create(p, c),
+        #[cfg(feature = "hdf5")]
         ("hdf5", c) => h5::create(p, c),
         ("parquet", _) => {
             Err("parquet: files are immutable; no in-place cell update (unsupported)".into())
@@ -153,7 +159,9 @@ fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellReader>> {
     match (engine, cand) {
         ("varlit", "matrix") => varlit_matrix::open(p),
         ("sqlite", c) => sq::open(p, c),
+        #[cfg(unix)]
         ("tile", c) => tile_proto::open(p, c),
+        #[cfg(feature = "hdf5")]
         ("hdf5", c) => h5::open(p, c),
         _ => Err(format!("unknown {engine}/{cand}").into()),
     }

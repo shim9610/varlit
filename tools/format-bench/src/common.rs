@@ -1,27 +1,37 @@
 //! Shared helpers: deterministic data, timing, file accounting, metric output.
-use std::{
-    collections::BTreeMap,
-    ffi::{c_int, c_long},
-    path::Path,
-    time::Instant,
-};
+#[cfg(unix)]
+use std::ffi::{c_int, c_long};
+use std::{collections::BTreeMap, path::Path, time::Instant};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[cfg(unix)]
 #[repr(C)]
 struct Timespec {
     sec: c_long,
     nsec: c_long,
 }
+#[cfg(unix)]
 unsafe extern "C" {
     fn clock_gettime(id: c_int, t: *mut Timespec) -> c_int;
 }
 
 /// CLOCK_MONOTONIC, comparable across processes on the same host.
+#[cfg(unix)]
 pub fn mono_ns() -> u64 {
     let mut t = Timespec { sec: 0, nsec: 0 };
     assert_eq!(unsafe { clock_gettime(1, &mut t) }, 0);
     t.sec as u64 * 1_000_000_000 + t.nsec as u64
+}
+
+/// Elsewhere the precise wall clock (on Windows, the system time with
+/// sub-microsecond resolution), the clock every process of a run shares.
+/// A clock adjustment during a run would show in its latencies.
+#[cfg(not(unix))]
+pub fn mono_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
 }
 
 pub fn splitmix(mut x: u64) -> u64 {
@@ -56,6 +66,7 @@ pub fn fsync_file(path: &Path) -> Result<()> {
 /// Total *allocated* bytes of all files under `root` (sidecars included;
 /// sparse preallocation is not counted).
 pub fn dir_bytes(root: &Path) -> u64 {
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     let mut n = 0;
     if let Ok(rd) = std::fs::read_dir(root) {
@@ -67,7 +78,15 @@ pub fn dir_bytes(root: &Path) -> u64 {
             if m.is_dir() {
                 n += dir_bytes(&e.path());
             } else {
-                n += m.blocks() * 512;
+                #[cfg(unix)]
+                {
+                    n += m.blocks() * 512;
+                }
+                // Off Unix the file length: sparse space counts as allocated.
+                #[cfg(not(unix))]
+                {
+                    n += m.len();
+                }
             }
         }
     }
@@ -104,12 +123,19 @@ pub fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[i]
 }
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int) -> c_int;
 }
 
+/// Without `posix_fadvise` (Windows) nothing is evicted: "cold" reads there
+/// read from the cache.
+#[cfg(not(unix))]
+pub fn evict(_root: &Path) {}
+
 /// Evict every file under `root` from the page cache (clean pages only, so
 /// files are fsynced first). Gives cold-read numbers without root privileges.
+#[cfg(unix)]
 pub fn evict(root: &Path) {
     use std::os::fd::AsRawFd;
     let Ok(rd) = std::fs::read_dir(root) else {
@@ -151,7 +177,14 @@ pub fn vl_stream(mut o: varlit::StreamOptions) -> varlit::StreamOptions {
     o
 }
 
+/// Not measured off Unix: reported as 0.
+#[cfg(not(unix))]
+pub fn process_cpu_s() -> f64 {
+    0.0
+}
+
 /// CPU seconds consumed by this process (all threads).
+#[cfg(unix)]
 pub fn process_cpu_s() -> f64 {
     let mut t = Timespec { sec: 0, nsec: 0 };
     assert_eq!(unsafe { clock_gettime(2, &mut t) }, 0); // CLOCK_PROCESS_CPUTIME_ID
@@ -180,7 +213,10 @@ pub fn cand() -> String {
 /// Disk-health probe: 1000 x (4 KiB pwrite + fdatasync) on a fresh file.
 /// Returns seconds. Independent of every scenario's configuration.
 pub fn probe(dir: &Path) -> Result<f64> {
+    #[cfg(unix)]
     use std::os::unix::fs::FileExt;
+    #[cfg(windows)]
+    use std::os::windows::fs::FileExt;
     std::fs::create_dir_all(dir)?;
     let p = dir.join("probe.bin");
     let f = std::fs::OpenOptions::new()
@@ -192,7 +228,10 @@ pub fn probe(dir: &Path) -> Result<f64> {
     let buf = [0x5au8; 4096];
     let t = Timer::start();
     for i in 0..1000u64 {
+        #[cfg(unix)]
         f.write_all_at(&buf, i * 4096)?;
+        #[cfg(windows)]
+        f.seek_write(&buf, i * 4096)?;
         f.sync_data()?;
     }
     let s = t.secs();

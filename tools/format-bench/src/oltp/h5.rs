@@ -190,7 +190,11 @@ pub fn open(p: &Path, _cand: &str) -> Result<Box<dyn OltpRead>> {
         cr: f.dataset("created")?,
         ids: f.dataset("br_ids")?,
         off: f.dataset("br_off")?,
-        keys: if sparse() { Some(f.dataset("key")?) } else { None },
+        keys: if sparse() {
+            Some(f.dataset("key")?)
+        } else {
+            None
+        },
         _f: f,
     }))
 }

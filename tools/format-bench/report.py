@@ -7,8 +7,6 @@ usage: report.py RUN_DIR
 import json, sys
 from pathlib import Path
 
-S = json.loads((Path(sys.argv[1]) / "summary.json").read_text())
-
 # label -> (title, [(column, metric, scale, digits)]). Times are seconds
 # unless the column says ms; MB is allocated disk space.
 KEY = {
@@ -53,19 +51,25 @@ def cell(m, metric, scale, digits):
     return f"{v:.{digits}f}"
 
 
-out = []
-for label, (title, cols) in KEY.items():
-    rows = [(k.split("/", 1)[1], m) for k, m in S.items() if k.split("/", 1)[0] == label]
-    if not rows:
-        continue
-    gb = next((m.get("data_gb") for _, m in rows if "data_gb" in m), None)
-    out.append(f"### {title}" + (f" ({gb:g} GB)" if gb else "") + "\n")
-    out.append("| engine | " + " | ".join(c for c, *_ in cols) + " |")
-    out.append("|---|" + "---|" * len(cols))
-    for fmt, m in rows:
-        if "failed" in m:
-            out.append(f"| {fmt} | failed: {m['failed']} |" + " |" * (len(cols) - 1))
+def main():
+    S = json.loads((Path(sys.argv[1]) / "summary.json").read_text())
+    out = []
+    for label, (title, cols) in KEY.items():
+        rows = [(k.split("/", 1)[1], m) for k, m in S.items() if k.split("/", 1)[0] == label]
+        if not rows:
             continue
-        out.append(f"| {fmt} | " + " | ".join(cell(m, *c[1:]) for c in cols) + " |")
-    out.append("")
-print("\n".join(out))
+        gb = next((m.get("data_gb") for _, m in rows if "data_gb" in m), None)
+        out.append(f"### {title}" + (f" ({gb:g} GB)" if gb else "") + "\n")
+        out.append("| engine | " + " | ".join(c for c, *_ in cols) + " |")
+        out.append("|---|" + "---|" * len(cols))
+        for fmt, m in rows:
+            if "failed" in m:
+                out.append(f"| {fmt} | failed: {m['failed']} |" + " |" * (len(cols) - 1))
+                continue
+            out.append(f"| {fmt} | " + " | ".join(cell(m, *c[1:]) for c in cols) + " |")
+        out.append("")
+    print("\n".join(out))
+
+
+if __name__ == "__main__":
+    main()

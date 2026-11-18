@@ -21,6 +21,7 @@
 use crate::common::*;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "hdf5")]
 mod h5;
 mod pq;
 mod sq;
@@ -239,6 +240,7 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn GridWrite>> {
     match engine {
         "varlit" => vl_matrix::create(p, shape_of(cand)?),
         "sqlite" => sq::create(p, shape_of(cand)?),
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::create(p, shape_of(cand)?),
         "parquet" => pq::create(p, shape_of(cand)?),
         _ => Err("engine".into()),
@@ -249,6 +251,7 @@ fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn GridRead>> {
     match engine {
         "varlit" => vl_matrix::open(p, shape_of(cand)?),
         "sqlite" => sq::open(p, shape_of(cand)?),
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::open(p, shape_of(cand)?),
         _ => pq::open(p, shape_of(cand)?),
     }

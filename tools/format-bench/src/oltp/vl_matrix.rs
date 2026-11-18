@@ -96,10 +96,7 @@ impl Oltp for W {
         let mut id = 0;
         while id < accounts() {
             let n = (accounts() - id).min(COLS) as usize;
-            for (i, cell) in run[..n * AB]
-                .chunks_exact_mut(AB)
-                .enumerate()
-            {
+            for (i, cell) in run[..n * AB].chunks_exact_mut(AB).enumerate() {
                 enc(id + i as u64, cell);
             }
             self.f

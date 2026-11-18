@@ -99,7 +99,8 @@ fn h(i: u64, j: u64) -> u64 {
         ^ i
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, hdf5::H5Type, varlit::VarlitBlock)]
+#[derive(Clone, Copy, PartialEq, Debug, varlit::VarlitBlock)]
+#[cfg_attr(feature = "hdf5", derive(hdf5::H5Type))]
 #[varlit(id = 60, version = 1, kind = "fixed")]
 #[repr(C)]
 pub struct RecA {
@@ -108,7 +109,8 @@ pub struct RecA {
     pub f: [bool; 3],
     pub x: [u16; 500],
 }
-#[derive(Clone, Copy, PartialEq, Debug, hdf5::H5Type, varlit::VarlitBlock)]
+#[derive(Clone, Copy, PartialEq, Debug, varlit::VarlitBlock)]
+#[cfg_attr(feature = "hdf5", derive(hdf5::H5Type))]
 #[varlit(id = 61, version = 1, kind = "fixed")]
 #[repr(C)]
 pub struct RecB {
@@ -281,6 +283,7 @@ use vl_stream as vl;
 
 mod sq;
 
+#[cfg(feature = "hdf5")]
 mod h5;
 
 mod pq;
@@ -355,6 +358,7 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn AcqWriter>> {
         ("varlit", "native-rec") => vl_native_rec::create(p),
         ("varlit", "native-raw") => vl_native_raw::create(p),
         ("sqlite", _) => sq::create(p),
+        #[cfg(feature = "hdf5")]
         ("hdf5", _) => h5::create(p),
         ("parquet", _) => pq::create(p),
         _ => Err(format!("unknown {engine}/{cand}").into()),
@@ -367,6 +371,7 @@ fn open(engine: &str, cand: &str, p: &Path, want: [bool; 3]) -> Result<Box<dyn A
         ("varlit", "native-rec") => vl_native_rec::open(p, want),
         ("varlit", "native-raw") => vl_native_raw::open(p, want),
         ("sqlite", _) => sq::open(p, want),
+        #[cfg(feature = "hdf5")]
         ("hdf5", _) => h5::open(p, want),
         ("parquet", _) => pq::open(p, want),
         _ => Err(format!("unknown {engine}/{cand}").into()),
@@ -436,9 +441,18 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
                 w.will_publish(durable_pub(npub + 1, last));
             }
             let t = Timer::start();
-            let a = match la.take() { Some(x) => x, None => ra.recv()? };
-            let b = match lb.take() { Some(x) => x, None => rb.recv()? };
-            let c = match lc.take() { Some(x) => x, None => rc.recv()? };
+            let a = match la.take() {
+                Some(x) => x,
+                None => ra.recv()?,
+            };
+            let b = match lb.take() {
+                Some(x) => x,
+                None => rb.recv()?,
+            };
+            let c = match lc.take() {
+                Some(x) => x,
+                None => rc.recv()?,
+            };
             t_wait += t.secs();
             let t = Timer::start();
             w.append(a, b, c)?;
@@ -531,9 +545,7 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
                     let durable_at = durable_ns.get(w).copied().unwrap_or(0);
                     if durable_at == 0 || seen_at < durable_at {
                         early += 1;
-                        early_ms = early_ms.max(
-                            durable_at.saturating_sub(seen_at) as f64 / 1e6,
-                        );
+                        early_ms = early_ms.max(durable_at.saturating_sub(seen_at) as f64 / 1e6);
                     }
                     early_seen += 1;
                 }
@@ -578,7 +590,10 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
         m.set(&format!("{role}_peak_rss_mb"), rss);
     }
     if loss_ms() == 0 {
-        m.set("seen_before_durable_frac", early as f64 / early_seen.max(1) as f64);
+        m.set(
+            "seen_before_durable_frac",
+            early as f64 / early_seen.max(1) as f64,
+        );
         m.set("seen_before_durable_max_ms", early_ms);
     }
     m.set("all_readers", all_readers() as u64);

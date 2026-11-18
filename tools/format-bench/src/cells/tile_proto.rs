@@ -168,7 +168,11 @@ impl Pending {
         order.sort_by_key(|&i| (self.ranges[i].0, i));
         for i in order {
             let (at, start, len) = self.ranges[i];
-            out.push(file, at, &self.bytes[start as usize..(start + len) as usize])?;
+            out.push(
+                file,
+                at,
+                &self.bytes[start as usize..(start + len) as usize],
+            )?;
         }
         out.flush(file)
     }
@@ -200,7 +204,12 @@ fn paths(p: &Path) -> (PathBuf, PathBuf) {
 
 impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
     pub fn create(p: &Path, journaled: bool) -> Result<Self> {
-        const { assert!(Shape::<TR, TC>::TILE_BYTES <= 64 << 20, "tile exceeds a record") };
+        const {
+            assert!(
+                Shape::<TR, TC>::TILE_BYTES <= 64 << 20,
+                "tile exceeds a record"
+            )
+        };
         let (jp, lp) = paths(p);
         let main = OpenOptions::new()
             .read(true)
@@ -319,7 +328,12 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
             } else {
                 let last = level + 1 == LEVELS;
                 let at = self.end.next_multiple_of(if last { 64 } else { PAGE });
-                self.end = at + if last { Shape::<TR, TC>::TILE_BYTES } else { PAGE };
+                self.end = at
+                    + if last {
+                        Shape::<TR, TC>::TILE_BYTES
+                    } else {
+                        PAGE
+                    };
                 self.dir_page(page)?[index as usize] = at;
                 self.pending.push(page + index * 8, &at.to_le_bytes());
                 if last {
@@ -705,7 +719,11 @@ fn scratch_file() -> std::io::Result<File> {
         std::process::id(),
         N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let f = OpenOptions::new().read(true).write(true).create_new(true).open(&p)?;
+    let f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&p)?;
     std::fs::remove_file(&p)?;
     Ok(f)
 }

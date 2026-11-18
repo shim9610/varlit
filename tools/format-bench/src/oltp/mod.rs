@@ -23,11 +23,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub mod csr;
+#[cfg(feature = "hdf5")]
 mod h5;
 mod pq;
 mod sq;
-mod vl_matrix;
 mod vl_keyed;
+mod vl_matrix;
 
 pub const TXNS: usize = 1000;
 pub const TRANSFERS: usize = 10;
@@ -132,6 +133,7 @@ pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
         ("varlit", false) => &["matrix"],
         ("varlit", true) => &["keyed"],
         ("sqlite", _) => sq::CANDIDATES,
+        #[cfg(feature = "hdf5")]
         ("hdf5", _) => h5::CANDIDATES,
         ("parquet", false) => pq::CANDIDATES,
         _ => return Err(format!("{engine} has no layout for this scenario").into()),
@@ -153,6 +155,7 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
         ("varlit", "matrix") => vl_matrix::create(p),
         ("varlit", "keyed") => vl_keyed::create(p),
         ("sqlite", c) => sq::create(p, c),
+        #[cfg(feature = "hdf5")]
         ("hdf5", c) => h5::create(p, c),
         ("parquet", c) => pq::create(p, c),
         _ => Err(format!("unknown {engine}/{cand}").into()),
@@ -163,6 +166,7 @@ fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn OltpRead>> {
         ("varlit", "matrix") => vl_matrix::open(p),
         ("varlit", "keyed") => vl_keyed::open(p),
         ("sqlite", c) => sq::open(p, c),
+        #[cfg(feature = "hdf5")]
         ("hdf5", c) => h5::open(p, c),
         ("parquet", c) => pq::open(p, c),
         _ => Err(format!("unknown {engine}/{cand}").into()),

@@ -66,6 +66,7 @@ fn main() -> Result<()> {
             };
             println!("{f}");
         }
+        #[cfg(unix)]
         Some("tile-bufsweep") => cells::tile_proto::buffer_sweep(&PathBuf::from(&a[2]))?,
         Some("probe") => println!("{}", common::probe(&PathBuf::from(&a[2]))?),
         Some("codec-probe") => mixed::codec_probe()?,
