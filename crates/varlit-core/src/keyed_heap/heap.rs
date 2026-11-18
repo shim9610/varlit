@@ -1226,7 +1226,7 @@ impl KeyedHeap {
                 return Err(format!("tree page {page} reached twice"));
             }
             self.read(store, page, &mut page_bytes).map_err(text)?;
-            let kind = node::kind(&page_bytes).map_err(text)?;
+            let kind = node::kind(&page_bytes).map_err(|error| text(error.into()))?;
             let interior = level > 0;
             if (kind == node::Kind::Interior) != interior {
                 return Err(format!("page {page} at level {level} is {kind:?}"));
