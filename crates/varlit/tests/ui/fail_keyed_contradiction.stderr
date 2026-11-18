@@ -1,8 +1,7 @@
 error[E0080]: evaluation panicked: this type implements VarlitKeyedBlock but declares VarlitBlock::IS_KEYED = false; keyed blocks must declare IS_KEYED = true
  --> $RUST/core/src/panic.rs
   |
-  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
-  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `varlit_core::traits::KeyedBlockContract::<ContradictoryKeyed>::OK` failed here
+  = note: evaluation of `varlit_core::traits::KeyedBlockContract::<ContradictoryKeyed>::OK` failed here
   |
  ::: $WORKSPACE/crates/varlit-core/src/traits.rs
   |

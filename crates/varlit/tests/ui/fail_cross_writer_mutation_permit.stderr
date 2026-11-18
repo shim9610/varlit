@@ -6,8 +6,8 @@ error[E0308]: mismatched types
    |     |
    |     arguments to this function are incorrect
    |
-   = note: expected struct `MutationPermit<'_, VarlitStreamWriter>`
-              found struct `MutationPermit<'static, VarlitFile>`
+   = note: expected struct `varlit_core::enforcement_probe::MutationPermit<'_, VarlitStreamWriter>`
+              found struct `varlit_core::enforcement_probe::MutationPermit<'static, VarlitFile>`
 note: function defined here
   --> tests/ui/fail_cross_writer_mutation_permit.rs:22:4
    |
