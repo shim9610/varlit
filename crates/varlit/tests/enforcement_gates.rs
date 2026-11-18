@@ -919,3 +919,49 @@ fn no_file_length_ceiling_is_enforced() {
         "`ensure_layout_open_limits` must not require a `file_len` declaration"
     );
 }
+
+/// Byte order is never the host's. Every on-disk and on-wire integer is
+/// converted with an explicit `to_le`/`to_be` (or `from_*`) so a file reads
+/// alike on every platform; big-endian targets are tested under QEMU and
+/// Miri, but only a sample of paths, so the property itself is held here:
+/// shipped code names the host-order conversions and reinterpretations only
+/// at the reviewed places below, each counted. Every one of them is
+/// byte-order neutral or converts to the declared order at once:
+///
+/// - `adapter.rs`: `i8` to and from its one byte.
+/// - `codec.rs`: `RawNumeric::to_native`, which turns bytes filled in place
+///   into the declared endianness.
+///
+/// A new use fails until it is reviewed and added with its reason.
+#[test]
+fn shipped_code_never_uses_host_byte_order() {
+    const HOST_ORDER: [&str; 4] = ["to_ne_bytes", "from_ne_bytes", "transmute", "align_to"];
+    const REVIEWED: [(&str, &str, usize); 3] = [
+        ("adapter.rs", "to_ne_bytes", 1),
+        ("adapter.rs", "from_ne_bytes", 1),
+        ("codec.rs", "to_ne_bytes", 1),
+    ];
+    let mut found = Vec::new();
+    for module in crate_modules() {
+        let code = crate_shipped_code(&module)
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for spelling in HOST_ORDER {
+            let count = code.matches(spelling).count();
+            if count > 0 {
+                found.push((module.clone(), spelling, count));
+            }
+        }
+    }
+    let expected: Vec<(String, &str, usize)> = REVIEWED
+        .iter()
+        .map(|(module, spelling, count)| ((*module).to_owned(), *spelling, *count))
+        .collect();
+    assert_eq!(
+        found, expected,
+        "host byte order in shipped code: convert with an explicit endianness, or review the \
+         use and add it to this gate with its reason"
+    );
+}
