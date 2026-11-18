@@ -4,6 +4,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
 14 |     let _forged: ReservedIndexSlot = ReservedIndexSlot(());
    |                                      ^^^^^^^^^^^^^^^^^
    |
+   = note: a struct named `ReservedIndexSlot` exists in another namespace
 note: constructor is not visible here due to private fields
   --> $WORKSPACE/crates/varlit-core/src/native_directory.rs
    |

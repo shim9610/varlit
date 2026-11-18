@@ -433,8 +433,12 @@ varlit_format! {
     }
 }
 
+/// A keyed native file has no companion file: the disk-index companion this
+/// check used to leave `Unverified` was removed with the indexed primary
+/// (`key_index = disk` is now a compile error), so the coherence check does
+/// not apply and the file passes on its own bytes.
 #[test]
-fn declared_disk_companion_is_not_silently_certified() -> varlit::Result<()> {
+fn a_keyed_file_has_no_companion_to_certify() -> varlit::Result<()> {
     let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("disk.varlit");
     {
@@ -446,13 +450,13 @@ fn declared_disk_companion_is_not_silently_certified() -> varlit::Result<()> {
         file.sync()?;
     }
     let report = DiskChecked::check_file(&path)?;
-    assert!(!report.passed());
     let check = report
         .checks()
         .iter()
         .find(|c| c.code == "sidecar.coherence")
         .unwrap();
-    assert_eq!(check.status, FileCheckStatus::Unverified, "{report:#?}");
+    assert_eq!(check.status, FileCheckStatus::NotApplicable, "{report:#?}");
+    assert!(report.passed(), "{report:#?}");
     Ok(())
 }
 
