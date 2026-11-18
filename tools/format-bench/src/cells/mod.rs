@@ -227,6 +227,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     m.set("reader_open_s", t.secs());
 
     let mut pubs = Vec::new();
+    let mut stages = Vec::new();
     let mut ndur = 0u64;
     let start = std::time::Instant::now();
     let mut write = || -> Result<()> {
@@ -236,6 +237,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
             let durable = loss_ms() == 0
                 || b == batches()
                 || last_durable.elapsed() >= Duration::from_millis(loss_ms());
+            let ts = Timer::start();
             w.begin(durable)?;
             for id in batch_cells(b) {
                 fill(id, b, 0, &mut buf);
@@ -243,6 +245,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
             }
             fill(0, b, mono_ns(), &mut buf);
             w.write(0, &buf)?;
+            stages.push(ts.secs() * 1e3);
             let t = Timer::start();
             w.publish(durable)?;
             pubs.push(t.secs() * 1e3);
@@ -272,6 +275,11 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     pubs.sort_by(f64::total_cmp);
     m.set("publish_p50_ms", percentile(&pubs, 0.5));
     m.set("publish_p99_ms", percentile(&pubs, 0.99));
+    m.set("stage_total_s", stages.iter().sum::<f64>() / 1e3);
+    m.set("publish_total_s", pubs.iter().sum::<f64>() / 1e3);
+    stages.sort_by(f64::total_cmp);
+    m.set("stage_p50_ms", percentile(&stages, 0.5));
+    m.set("stage_p99_ms", percentile(&stages, 0.99));
     m.set("durable_publications", ndur);
     let (mut p50, mut p99, mut torn, mut obs, mut cpu, mut rss) =
         (0f64, 0f64, 0u64, 0u64, 0f64, 0u64);

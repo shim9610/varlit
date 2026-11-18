@@ -142,7 +142,9 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `follow()` reads the file length through the handle it holds instead of
   duplicating the handle. In the format-bench `cells` scenario (64 random
   1 KiB cells per durable update, four followers) this took the writer from
-  about 184 to 4 writes per update and raised the update rate by about 7 %.
+  about 184 to 4 writes per update; the update rate did not change measurably
+  (an interleaved A/B of five 10 GB runs each was within noise), since
+  checkpoint write-back dominates that scenario.
 - Refuse data files that are not regular files. Opening a FIFO, socket,
   device or directory by path returns an `Io` error of kind `InvalidInput`
   instead of reading it, and on Unix the open no longer waits on a FIFO with
