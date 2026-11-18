@@ -131,6 +131,11 @@ fn any_page_of(count: u16) -> [u8; PAGE] {
     page
 }
 
+/// The most entries a checked page of `PAGE` bytes holds: the entries
+/// must end at or before the start of bodies, which is at most the page's
+/// end.
+const MAX_ENTRIES: u16 = ((PAGE - node::ENTRIES_AT) / 4) as u16;
+
 /// Whatever bytes a page holds, once it passes its check its body area lies
 /// inside the page, and every entry it yields lies inside the body area: no
 /// later read or write derived from them can leave the page.
@@ -153,13 +158,13 @@ fn a_page_that_passes_its_check_keeps_every_entry_inside_it() {
     }
 }
 
-/// A repack of any checked page with up to two entries never panics; it
-/// either keeps the page checked with its entries and no garbage, or fails
-/// and leaves the page exactly as it was.
+/// A repack of any checked page never panics; it either keeps the page
+/// checked with its entries and no garbage, or fails and leaves the page
+/// exactly as it was. Every entry count a checked page can hold is covered.
 #[kani::proof]
 #[kani::unwind(10)]
 fn a_repack_keeps_a_checked_page_or_changes_nothing() {
-    for count in 0..=2u16 {
+    for count in 0..=MAX_ENTRIES {
         let mut page = any_page_of(count);
         if node::kind_of(&page).is_err() {
             continue;
@@ -177,13 +182,14 @@ fn a_repack_keeps_a_checked_page_or_changes_nothing() {
     }
 }
 
-/// An insert into any checked page with up to two entries never panics. A
-/// body that goes in becomes entry `index` with its length, one more entry,
-/// and the page still passes its check; otherwise the page is unchanged.
+/// An insert into any checked page never panics. A body that goes in
+/// becomes entry `index` with its length, one more entry, and the page
+/// still passes its check; otherwise the page is unchanged. Every entry
+/// count a checked page can hold is covered.
 #[kani::proof]
 #[kani::unwind(10)]
 fn an_insert_keeps_a_checked_page_or_changes_nothing() {
-    for count in 0..=2u16 {
+    for count in 0..=MAX_ENTRIES {
         let mut page = any_page_of(count);
         if node::kind_of(&page).is_err() {
             continue;
