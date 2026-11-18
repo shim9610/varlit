@@ -3,6 +3,8 @@
 //! through an on-disk index when a publication outgrows the ring),
 //! following, reading and checkpointing allocate nothing: the counting
 //! allocator below sees every allocation the test thread makes.
+// The test format declares `integrity: crc32`.
+#![cfg(feature = "integrity")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell as StdCell;
