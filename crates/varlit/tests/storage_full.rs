@@ -178,7 +178,7 @@ fn concurrent_merges_fail_cleanly_on_a_full_disk_and_succeed_after() -> varlit::
     let (base, delta) = write_inputs(directory.path())?;
     let before = (digest(&base), digest(&delta));
 
-    let status = Command::new("sh")
+    let child = Command::new("sh")
         .arg("-c")
         .arg(format!(
             "trap '' XFSZ; ulimit -S -f {LIMIT_BLOCKS}; exec \"$0\" \"$@\""
@@ -188,8 +188,14 @@ fn concurrent_merges_fail_cleanly_on_a_full_disk_and_succeed_after() -> varlit::
         .env(CHILD, "1")
         .env("VARLIT_STORAGE_FULL_DIR", directory.path())
         .env("VARLIT_SPILL_DIR", spill.path())
-        .status()?;
-    assert!(status.success(), "the child failed or was killed: {status}");
+        .output()?;
+    assert!(
+        child.status.success(),
+        "the child failed or was killed: {}\n--- stdout\n{}\n--- stderr\n{}",
+        child.status,
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
 
     // Nothing was published, no scratch was left, and the inputs are intact.
     for job in 0..JOBS {
