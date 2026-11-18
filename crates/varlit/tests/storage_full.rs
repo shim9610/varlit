@@ -1,6 +1,6 @@
 //! Storage that fills up under concurrent maintenance jobs and readers.
 //!
-//! A child process runs with a file-size limit (`ulimit -f`) and SIGXFSZ
+//! A child process runs with a soft file-size limit (`ulimit -S -f`) and SIGXFSZ
 //! ignored, so every write past the limit fails with an error instead of
 //! killing the process: the same path a full disk takes through the library.
 //! Several keyed merges run at once, each with its own output and scratch,
@@ -155,6 +155,17 @@ fn child_merges_on_a_full_disk() {
         let error = result.expect_err("a merge succeeded past the file-size limit");
         println!("job {job}: {error}");
     }
+    // The limit is soft, so the child lifts it once the jobs are done: what
+    // the process writes as it exits (an instrumented build's coverage
+    // profile) is not the library's, and must not be cut short. Best effort:
+    // where `prlimit` is missing nothing the test checks depends on it.
+    let lifted = Command::new("prlimit")
+        .arg(format!("--pid={}", std::process::id()))
+        .arg("--fsize=unlimited:")
+        .status();
+    if !matches!(lifted, Ok(status) if status.success()) {
+        println!("could not lift the file-size limit: {lifted:?}");
+    }
 }
 
 #[test]
@@ -170,7 +181,7 @@ fn concurrent_merges_fail_cleanly_on_a_full_disk_and_succeed_after() -> varlit::
     let status = Command::new("sh")
         .arg("-c")
         .arg(format!(
-            "trap '' XFSZ; ulimit -f {LIMIT_BLOCKS}; exec \"$0\" \"$@\""
+            "trap '' XFSZ; ulimit -S -f {LIMIT_BLOCKS}; exec \"$0\" \"$@\""
         ))
         .arg(std::env::current_exe()?)
         .args(["--exact", "child_merges_on_a_full_disk", "--nocapture"])
