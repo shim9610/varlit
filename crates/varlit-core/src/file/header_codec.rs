@@ -1232,6 +1232,17 @@ pub(crate) fn file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
     if spec.header_slots.is_declared() {
         payload.extend_from_slice(&encode_empty_header_slots_region(spec)?);
     }
+    // The published end, last of all, for formats whose records become
+    // visible at commit markers: a durable commit's marker must not be
+    // adopted before its barrier returns. Under the other policies a record
+    // is visible once written, by contract, so nothing waits on a barrier. A
+    // file without the block (written before it existed) is read to its end,
+    // as it always was.
+    if crate::published_end::applies_to(spec) {
+        payload.extend_from_slice(PUBLISHED_END_MAGIC);
+        payload.extend_from_slice(&crate::width::small32(PUBLISHED_END_PAYLOAD_LEN).to_le_bytes());
+        payload.extend_from_slice(&crate::published_end::empty_payload());
+    }
     Ok(payload)
 }
 
@@ -1397,6 +1408,7 @@ pub(super) fn is_known_header_extension_magic(magic: &[u8; 4]) -> bool {
         || magic == HEADER_TAILS_MAGIC
         || magic == LIVENESS_MAGIC
         || magic == HEADER_SLOTS_MAGIC
+        || magic == PUBLISHED_END_MAGIC
 }
 
 /// Whether the file is allowed to disagree with this spec about the block's
@@ -1732,7 +1744,10 @@ pub(super) fn encode_header_slots_payload(
 }
 
 pub(super) fn is_mutable_header_extension_magic(magic: &[u8; 4]) -> bool {
-    magic == HEADER_TAILS_MAGIC || magic == LIVENESS_MAGIC || magic == HEADER_SLOTS_MAGIC
+    magic == HEADER_TAILS_MAGIC
+        || magic == LIVENESS_MAGIC
+        || magic == HEADER_SLOTS_MAGIC
+        || magic == PUBLISHED_END_MAGIC
 }
 
 /// Walk the extension region as a block sequence.
@@ -1914,6 +1929,21 @@ pub(super) fn mutable_header_block_extents(
 }
 
 /// One named mutable block's extent, for a writer that needs to hit exactly it.
+/// Header offset of the `VPUB` slots, when the file has a published end
+/// block of this build's geometry.
+pub(super) fn published_end_slots_at(header_len: u64, extensions: &[u8]) -> Result<Option<u64>> {
+    let Some(extent) = mutable_header_block_extent(header_len, extensions, PUBLISHED_END_MAGIC)?
+    else {
+        return Ok(None);
+    };
+    if extent.payload_len != PUBLISHED_END_PAYLOAD_LEN {
+        return Ok(None);
+    }
+    Ok(Some(
+        extent.payload_offset + crate::published_end::SLOTS_AT as u64,
+    ))
+}
+
 pub(super) fn mutable_header_block_extent(
     header_len: u64,
     extensions: &[u8],
@@ -1982,10 +2012,17 @@ pub(super) fn validate_file_header_extensions(spec: FormatSpec, extensions: &[u8
     let present = parse_file_header_extension_blocks(extensions)?;
     let expected_blocks = parse_file_header_extension_blocks(&expected)?;
     for expected_block in &expected_blocks {
-        let found = present
+        let Some(found) = present
             .iter()
             .find(|block| block.magic == expected_block.magic)
-            .ok_or(Error::InvalidCompressionHeader)?;
+        else {
+            // A file written before the published end existed has no block,
+            // and is read to its end.
+            if &expected_block.magic == PUBLISHED_END_MAGIC {
+                continue;
+            }
+            return Err(Error::InvalidCompressionHeader);
+        };
         if is_mutable_header_extension_magic(&expected_block.magic) {
             // Contents are the file's to change; the length is not. Comparing
             // it is what keeps every offset derived from `header_len` valid.

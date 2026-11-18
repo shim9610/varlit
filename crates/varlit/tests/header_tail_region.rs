@@ -56,6 +56,8 @@
 #[path = "support/pages.rs"]
 mod pages;
 
+#[path = "support/published_end.rs"]
+mod published_end;
 use varlit::{FormatSpec, VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -168,6 +170,16 @@ fn crc32(bytes: &[u8]) -> u32 {
 
 fn declared_blocks() -> usize {
     TailFormat::spec().blocks.len()
+}
+
+/// The published end block that follows the region in a transaction-marker
+/// format, read off the file: zero when the file has none.
+fn published_end_len(bytes: &[u8]) -> usize {
+    if published_end::slots_at(bytes).is_some() {
+        8 + 56
+    } else {
+        0
+    }
 }
 
 fn expected_region_len() -> usize {
@@ -545,7 +557,7 @@ fn the_published_layout_plan_describes_the_header_the_writer_writes() -> varlit:
     assert_eq!(
         extensions.ty,
         LayoutPlanFieldType::Bytes {
-            len: LayoutPlanLen::Fixed(expected_region_len() as u64)
+            len: LayoutPlanLen::Fixed((expected_region_len() + published_end_len(&bytes)) as u64)
         },
     );
     assert!(matches!(
@@ -558,7 +570,7 @@ fn the_published_layout_plan_describes_the_header_the_writer_writes() -> varlit:
     // against the bytes rather than against the constants above.
     let offset = find_region(&bytes).expect("the region is in the header");
     let declared = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
-    let header_end = offset + BLOCK_FRAMING_LEN + declared;
+    let header_end = offset + BLOCK_FRAMING_LEN + declared + published_end_len(&bytes);
     let planned: u64 = header
         .fields
         .iter()
@@ -630,6 +642,16 @@ fn a_byte_past_the_commit_point_takes_the_table_out_of_use() -> varlit::Result<(
         .open(&path)?
         .write_all(&[0u8])?;
 
+    // A byte no writer published is not part of the file a reader sees, so
+    // the table still describes all of it.
+    let (unpublished, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
+    assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
+    drop(unpublished);
+
+    // Published, as a writer's next publication would, it is past the commit
+    // the table describes.
+    published_end::publish_file_end(&path)?;
     let (after, source) =
         varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(
@@ -1471,7 +1493,10 @@ mod both_extension_blocks {
         assert_eq!(
             extensions.ty,
             LayoutPlanFieldType::Bytes {
-                len: LayoutPlanLen::Fixed((COMPRESSION_BLOCK_LEN + region_len()) as u64)
+                len: LayoutPlanLen::Fixed(
+                    (COMPRESSION_BLOCK_LEN + region_len() + super::published_end_len(&bytes))
+                        as u64
+                )
             },
             "the plan must sum both blocks, not report either alone",
         );
@@ -1483,7 +1508,8 @@ mod both_extension_blocks {
         // And the plan's total still lands where the file's header ends.
         let declared =
             u32::from_le_bytes(bytes[region_at + 4..region_at + 8].try_into().unwrap()) as usize;
-        let header_end = region_at + BLOCK_FRAMING_LEN + declared;
+        let header_end =
+            region_at + BLOCK_FRAMING_LEN + declared + super::published_end_len(&bytes);
         let planned: u64 = header
             .fields
             .iter()

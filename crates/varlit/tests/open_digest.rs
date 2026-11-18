@@ -21,6 +21,8 @@
 #[path = "support/pages.rs"]
 mod pages;
 
+#[path = "support/published_end.rs"]
+mod published_end;
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
@@ -281,6 +283,14 @@ fn a_record_appended_past_the_digest_falls_back() -> varlit::Result<()> {
         std::mem::forget(writer);
     }
 
+    // Never published, the record is not part of the file a reader sees: the
+    // digest still ends it.
+    let (_file, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
+    assert_eq!(source, LazyOpenSource::Digest);
+    assert_eq!(scanned_shape(spec, &path)?, expected);
+
+    // Published, the probe at the end of the file no longer finds a digest.
+    published_end::publish_file_end(&path)?;
     let (_file, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(source, LazyOpenSource::FullScan);
     // The uncommitted record is outside the committed boundary either way, so

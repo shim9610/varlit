@@ -494,6 +494,7 @@ impl VarlitFile {
         // file, so anything appended behind this record hides it.
         self.close_commit_point();
         self.file.flush()?;
+        self.publish_visible_end();
         Ok(())
     }
 
@@ -510,10 +511,13 @@ impl VarlitFile {
         {
             let info = AppendInfo::from(&entry);
             self.close_commit_point();
+            self.publish_visible_end();
             return Ok(info);
         }
         let info = self.write_commit_marker()?;
         self.close_commit_point();
+        // A commit without a barrier is visible at once, by contract.
+        self.publish_visible_end();
         Ok(info)
     }
 
@@ -534,6 +538,7 @@ impl VarlitFile {
             self.file.sync_all()?;
             // After a completed barrier the newest marker is the anchor.
             self.anchor_after_barrier(entry.record_offset);
+            self.publish_visible_end();
             // a durable commit on a file this handle created must
             // also establish the pathname; this happens once, not per commit.
             let publication = self.publish_matrix_generation();
@@ -583,6 +588,8 @@ impl VarlitFile {
             ));
         }
         self.anchor_after_barrier(info.record_offset);
+        // Only now, with the barrier complete, may readers adopt the marker.
+        self.publish_visible_end();
         let publication = self.publish_matrix_generation();
         self.poison_after_started_matrix_error(publication)?;
         self.sync_created_pathname_once()?;
@@ -679,6 +686,8 @@ impl VarlitFile {
         } else {
             self.file.sync_all()?;
         }
+        // The barrier above covers every record appended before it.
+        self.publish_visible_end();
         self.sync_created_pathname_once()?;
         self.immediate_state.reset();
         Ok(())
@@ -1318,6 +1327,45 @@ impl VarlitFile {
             window.copy_from_slice(&block[8..]);
         }
         Ok(())
+    }
+
+    /// Takes over the file's published end for this writer, and publishes
+    /// what the file holds once it is durable.
+    ///
+    /// Called by every read-write open after recovery, and after a
+    /// replacement rebinds the handle. An earlier writer may have left bytes
+    /// it never synced, so what is published here is synced first; that
+    /// barrier is paid only when the published end moves.
+    pub(super) fn open_published_end(&mut self) -> Result<()> {
+        if self.mode != OpenMode::ReadWrite {
+            return Ok(());
+        }
+        let header_len = append_log_start_for_file(self)?;
+        let Some(slots_at) = published_end_slots_at(header_len, &self.header_extensions)? else {
+            return Ok(());
+        };
+        self.file.adopt_published_end(slots_at)?;
+        let end = self.snapshot.len();
+        if self.file.published_end() != Some(end) {
+            self.file.sync_data()?;
+            self.file.publish_end(end)?;
+        }
+        Ok(())
+    }
+
+    /// Lets readers adopt everything this writer has written, after a
+    /// publication: after the barrier of a durable one, at once for one
+    /// that promises visibility without durability (`commit`, `flush`).
+    ///
+    /// Best-effort, like the header tails: the publication has happened, so
+    /// a failure must not read as one that did not. A slot that was not
+    /// written leaves readers at the previous end until the next publication
+    /// or writer open moves it; they never see more than was published.
+    pub(super) fn publish_visible_end(&mut self) {
+        if self.mode == OpenMode::ReadWrite {
+            let end = self.snapshot.len();
+            let _ = self.file.publish_end(end);
+        }
     }
 
     /// Takes the object: records whether the *previous* writer released it

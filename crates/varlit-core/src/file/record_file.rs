@@ -133,6 +133,65 @@ impl RecordFile {
         Self { file }
     }
 
+    /// Takes over the `VPUB` block whose slots are at `slots_at`: later
+    /// [`Self::publish_end`] calls continue after its newest slot.
+    pub(super) fn adopt_published_end(&mut self, slots_at: u64) -> Result<()> {
+        use crate::published_end::{ACTIVE, SLOT_LEN, decode_slot};
+        let mut slots = [0u8; 2 * SLOT_LEN];
+        crate::primary_file::read_exact_at(self.file.raw(), slots_at, &mut slots)?;
+        let mut seq = 0u64;
+        let mut end = None;
+        for bytes in slots.as_chunks::<SLOT_LEN>().0 {
+            if let Some(slot) = decode_slot(bytes)
+                && slot.seq >= seq
+            {
+                seq = slot.seq;
+                end = (slot.flags & ACTIVE != 0).then_some(slot.end);
+            }
+        }
+        self.file
+            .set_writer_published(crate::primary_file::WriterPublished { slots_at, seq, end });
+        Ok(())
+    }
+
+    /// The end the newest slot publishes, when the handle owns a `VPUB`
+    /// block whose newest slot is active.
+    pub(super) fn published_end(&self) -> Option<u64> {
+        self.file
+            .writer_published()
+            .and_then(|published| published.end)
+    }
+
+    /// Publishes `end` as the end readers may adopt: one write of the slot
+    /// after the newest, through the header-region gate. Nothing when the
+    /// handle owns no `VPUB` block or `end` is already published.
+    pub(super) fn publish_end(&mut self, end: u64) -> Result<()> {
+        use crate::published_end::{ACTIVE, SLOT_LEN, Slot, encode_slot, slot_index};
+        let Some(mut published) = self.file.writer_published() else {
+            return Ok(());
+        };
+        if published.end == Some(end) {
+            return Ok(());
+        }
+        let seq = published
+            .seq
+            .checked_add(1)
+            .ok_or(super::Error::LengthOverflow {
+                value: published.seq,
+            })?;
+        let bytes = encode_slot(Slot {
+            end,
+            seq,
+            flags: ACTIVE,
+        });
+        let at = published.slots_at + (slot_index(seq) * SLOT_LEN) as u64;
+        self.overwrite_header_region(at, &bytes)?;
+        published.seq = seq;
+        published.end = Some(end);
+        self.file.set_writer_published(published);
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn metadata(&self) -> std::io::Result<std::fs::Metadata> {
         self.file.raw().metadata()

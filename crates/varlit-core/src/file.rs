@@ -379,6 +379,9 @@ pub(crate) fn liveness_region_len(spec: FormatSpec) -> u64 {
 }
 /// The writer holds this object and has not released it cleanly.
 const LIVENESS_FLAG_DIRTY: u16 = 0x0001;
+use crate::published_end::{
+    MAGIC as PUBLISHED_END_MAGIC, PAYLOAD_LEN as PUBLISHED_END_PAYLOAD_LEN,
+};
 const HEADER_TAILS_VERSION: u16 = 1;
 /// Two slots, written alternately.
 ///
@@ -2948,6 +2951,10 @@ impl Drop for VarlitFile {
         // recovery pass it did not strictly need, which is the direction to
         // fail in. The opposite arrangement would let a crash read as clean.
         if self.mode == OpenMode::ReadWrite {
+            // A release promises no durability, as `flush` does not: what
+            // this writer appended becomes visible, as it was before the
+            // published end existed.
+            self.publish_visible_end();
             let _ = self.mark_writer_closed();
         }
     }

@@ -1418,6 +1418,7 @@ fn native_file_header_plan_extension_len(spec: FormatSpec) -> u64 {
         .saturating_add(crate::file::header_tails_region_len(spec))
         .saturating_add(crate::file::liveness_region_len(spec))
         .saturating_add(crate::format::header_slots_region_len(spec))
+        .saturating_add(crate::published_end::region_len_for(spec))
 }
 
 fn native_file_header_has_extension_len(spec: FormatSpec, extension_len: u64) -> bool {

@@ -1055,6 +1055,35 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   `replace_rewrite` refuses record-footer formats outright, and a digest
   requires the footer, so that path is unreachable for a digest format.
 
+### Published End
+
+- A native file whose commit policy is `TransactionMarker` carries a `VPUB`
+  header extension block, framed `magic[4] | len u32` like the blocks after
+  `VCHD`, appended after every other extension block. Its payload (56 bytes)
+  is `version u16 = 1 | reserved u16 | reserved u32` followed by two slots of
+  24 bytes, each `end u64 | seq u64 | flags u32 | checksum u32`. The checksum
+  is FNV-1a 32 over the slot's first 20 bytes. Flag bit `0` is *active*; the
+  other bits are zero.
+- A file is created with both slots zero. The current slot is the one with the
+  larger `seq` among those whose checksum holds. An active current slot bounds
+  readers at `end` (a logical offset); an inactive one, or two zero slots, does
+  not, and neither does a file without the block (written before it existed).
+  Two slots that are neither valid nor zero are unreadable: a reader keeps the
+  bound it read last, and the start of the append log on first use.
+- A reader treats the file as ending at `min(file length, max(end, append log
+  start))` and frames, scans and follows only up to there.
+- The writer publishes by writing slot `seq % 2` with the next sequence:
+  after the barrier of `commit_durable` or `sync`; at once for `commit`,
+  `flush` and its release; and at a read-write open, after syncing what an
+  earlier writer left. The block is never synced on its own. A write torn by
+  a crash fails its checksum and leaves the previous slot, which names an end
+  no larger.
+- The block is mutable: an open compares its length, not its contents, with
+  what the format would write. A rewrite publishes a replacement with both
+  slots zero, and the rebound writer publishes it again.
+- Proofs: `published_end::proofs` (slot round trip, the visible length's
+  bounds, torn-write fallback, blank and damaged slots).
+
 ### Editable Header Region
 
 - An **editable header region** is a fixed-size run of bytes reserved in the

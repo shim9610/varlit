@@ -134,6 +134,16 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   directory pages before the file grows. The matrix layout version is now 2:
   the metadata record gains the overflow list head, and matrix files written
   by an earlier 0.13 pre-release are refused with `InvalidMatrixLayout`.
+- Readers no longer adopt a durable commit before its barrier returns. A
+  transaction-marker format's file header gains a 64-byte `VPUB` block, the
+  published end, which the writer rewrites in place (one 24-byte write, no
+  barrier) after `commit_durable` and `sync` return, and at once for `commit`,
+  `flush` and release. Readers, opened or following, stop there. Previously
+  a follower could see the marker while its fsync was still running (96 % of
+  windows in the format-bench `mixed-live` run). After an operating-system
+  crash the last durable commit can stay hidden until a writer reopens the
+  file. Files written before this have no block and are read as before; the
+  header of a new transaction-marker file is 64 bytes longer.
 - Matrix writes and follows issue fewer system calls. The entries of an open
   ring frame collect in the writer's existing 64 KiB copy buffer and reach
   the file in one write per buffer, the frame header with them when the frame

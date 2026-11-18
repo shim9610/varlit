@@ -57,6 +57,36 @@ one `Err`:
   `Error::PublishedButParentSyncPending`, described in the next section, and
   leaves the request pending so a later `sync` retries it.
 
+### What readers see before the barrier returns
+
+Under a transaction-marker commit policy a reader, opened or following,
+adopts a commit only once the writer has *published* it, and a durable
+commit is published after its barrier returns. The writer's records and the
+marker reach the file with positional writes before the barrier, so without
+this a follower could adopt a transaction that a power loss would then take
+away. The published end is a `VPUB` header block (see the
+[specification](spec.md#published-end)) that the writer rewrites in place:
+
+- `commit_durable` and `sync` publish after their barrier returns;
+- `commit`, `flush` (with `OnFlush` markers) and releasing the writer promise
+  visibility without durability, and publish at once;
+- a read-write open syncs what an earlier writer left and publishes it.
+
+Publishing costs one 24-byte positional write and no barrier. A reader stops
+at the published end; bytes past it are not part of the file it sees. If the
+barrier fails, the commit stays unpublished until a later `sync` succeeds
+(`a_follower_does_not_adopt_a_commit_whose_barrier_did_not_return`); a clean
+release then publishes it, as the paragraph above describes.
+
+After an operating-system crash the newest published end may not have reached
+the disk, since it is never synced on its own. A reader then stops at the end
+published before it (the next barrier makes each end durable), which can hide
+the last durable commit until a writer opens the file again and publishes
+what it holds. It never shows a commit that was not durable.
+
+Formats under other commit policies have no block: their records are visible
+once written, by contract, and no visibility waits on a barrier.
+
 This is the same published-outcome family as `PublishedButRebindFailed`,
 `MatrixCommittedButHookFailed` and `MatrixCommittedButDurabilityUnproven`: a
 caller that receives one of them must not treat the operation as

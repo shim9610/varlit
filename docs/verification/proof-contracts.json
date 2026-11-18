@@ -448,6 +448,28 @@
         "frame": "Pure functions of their arguments.",
         "progress": "No loops but the class search's, at most eight halvings of the class table."
       }
+    },
+    {
+      "id": "published-end",
+      "harnesses": [
+        "published_end::proofs::a_slot_round_trips",
+        "published_end::proofs::the_visible_length_is_bounded_by_the_file_and_the_published_end",
+        "published_end::proofs::a_torn_slot_write_falls_back_to_the_previous_end",
+        "published_end::proofs::the_newest_valid_slot_decides"
+      ],
+      "sources": [
+        "crates/varlit-core/src/published_end/proofs.rs",
+        "crates/varlit-core/src/published_end.rs"
+      ],
+      "scope": "VPUB slot encoding, slot choice and the reader's visible length",
+      "limits": "A torn slot is assumed to fail its checksum; that the writer publishes only after a durable publication's barrier is held by an integration test, not here",
+      "specification": {
+        "requires": "The writer writes slot seq % 2 with increasing sequences and non-decreasing ends.",
+        "ensures": "A reader is told no more than the file and the newest valid published end; a torn write falls back to an earlier, no larger end.",
+        "on_error": "Unreadable slots keep the reader's last bound.",
+        "frame": "The append log start is never hidden.",
+        "progress": "Pure, loop-bounded functions."
+      }
     }
   ],
   "executable_contracts": [

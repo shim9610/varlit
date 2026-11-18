@@ -16,6 +16,8 @@
 #[path = "support/pages.rs"]
 mod pages;
 
+#[path = "support/published_end.rs"]
+mod published_end;
 use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 /// `read_block_at` into a fresh value, returned by value for the asserts.
@@ -570,7 +572,13 @@ fn a_followed_run_that_repeats_a_sequence_is_refused() -> varlit::Result<()> {
     writer.flush()?;
     drop(writer);
     let full = std::fs::read(&source)?;
-    assert!(full.len() > from && full[..from] == prefix[..]);
+    // The header's published end moved with the second writer; everything
+    // else in the prefix is unchanged.
+    assert!(
+        full.len() > from
+            && published_end::without_published_end(&full)[..from]
+                == published_end::without_published_end(&prefix)[..]
+    );
 
     // The field is located by searching the header window for the value the
     // append reported, rather than by restating the header layout here.

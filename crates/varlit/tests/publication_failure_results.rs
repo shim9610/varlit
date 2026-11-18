@@ -213,6 +213,46 @@ mod enabled {
     // bare `Err` entitles the caller to believe nothing happened and re-run the
     // transaction, appending a second marker for work already recorded.
 
+    /// A reader never adopts a durable commit before its barrier has
+    /// returned. With the barrier failed the marker is in the file, and a
+    /// follower still does not see the transaction; the retried `sync`
+    /// publishes it.
+    #[test]
+    fn a_follower_does_not_adopt_a_commit_whose_barrier_did_not_return() -> Result<()> {
+        let _gate = fault_gate();
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("visible-after-durable.varlit");
+
+        let mut writer = VarlitFile::create(durable_commit_spec(), &path)?;
+        writer.push_info(&FaultRecord::ok(1))?;
+        writer.commit_durable()?;
+        let mut reader = VarlitFile::open_readonly(durable_commit_spec(), &path)?;
+        let committed = reader.record_count()?;
+        assert!(committed > 0, "the first commit is visible once durable");
+
+        writer.push_info(&FaultRecord::ok(2))?;
+        VarlitFile::inject_commit_durability_failures(1);
+        let result = writer.commit_durable();
+        VarlitFile::inject_commit_durability_failures(0);
+        assert!(matches!(
+            result,
+            Err(Error::CommittedButDurabilityUnproven { .. })
+        ));
+        assert_eq!(reader.follow()?, 0, "the marker's barrier never returned");
+        assert_eq!(reader.record_count()?, committed);
+        let late = VarlitFile::open_readonly(durable_commit_spec(), &path)?;
+        assert_eq!(
+            late.record_count()?,
+            committed,
+            "nor does a new reader see it"
+        );
+
+        writer.sync()?;
+        assert!(reader.follow()? > 0, "the completed barrier publishes it");
+        assert!(reader.record_count()? > committed);
+        Ok(())
+    }
+
     #[test]
     fn a_durability_failure_after_the_commit_marker_is_reported_as_published() -> Result<()> {
         let _gate = fault_gate();

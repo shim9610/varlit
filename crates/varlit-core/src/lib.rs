@@ -49,6 +49,7 @@ pub mod scalable_fault;
 
 mod packed_rows;
 mod publication_protocol;
+mod published_end;
 mod scan_control;
 mod snapshot;
 mod spill_file;

@@ -1470,6 +1470,9 @@ impl VarlitFile {
                 // handle's own crash verdict, which would clobber the verdict
                 // this handle already established at its open.
                 self.write_liveness_flags(LIVENESS_FLAG_DIRTY)?;
+                // The replacement's published end was reset with the other
+                // mutable blocks; this writer takes it over.
+                self.open_published_end()?;
                 Ok(info)
             }
             Err(source) => {

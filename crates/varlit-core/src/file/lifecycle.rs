@@ -126,6 +126,7 @@ impl VarlitFile {
         file.create_keyed_storage()?;
         file.write_embedded_manifest_if_needed()?;
         file.mark_writer_open()?;
+        file.open_published_end()?;
         Ok(file)
     }
 
@@ -253,6 +254,7 @@ impl VarlitFile {
         file.create_tiles(&dims, creation_nonce)?;
         file.write_embedded_manifest_if_needed()?;
         file.mark_writer_open()?;
+        file.open_published_end()?;
         Ok(file)
     }
 
@@ -417,6 +419,7 @@ impl VarlitFile {
         if let Some(from) = pending_mark {
             opened.recover_marked_tail(from)?;
         }
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -490,6 +493,12 @@ impl VarlitFile {
             None,
         );
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // A reader stops at the published end: what a writer has written but
+        // not yet published (a durable commit whose barrier has not
+        // returned) is not there for it.
+        if let Some(slots_at) = published_end_slots_at(header_len, &header_extensions)? {
+            file.bound_by_published_end(slots_at, header_len);
+        }
         // Logical: measured once the header has installed the anchor layout.
         check_open_file_len(spec, &file)?;
         let append_start = header_len;
@@ -577,6 +586,8 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        // Read-only opens return at once; a writer takes over the end.
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -853,6 +864,8 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        // Read-only opens return at once; a writer takes over the end.
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -866,6 +879,12 @@ impl VarlitFile {
             None,
         );
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // A reader stops at the published end: what a writer has written but
+        // not yet published (a durable commit whose barrier has not
+        // returned) is not there for it.
+        if let Some(slots_at) = published_end_slots_at(header_len, &header_extensions)? {
+            file.bound_by_published_end(slots_at, header_len);
+        }
         // Logical: measured once the header has installed the anchor layout.
         let captured_len = check_open_file_len(spec, &file)?;
         let append_start = header_len;
@@ -917,6 +936,8 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        // Read-only opens return at once; a writer takes over the end.
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -1022,6 +1043,7 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        opened.open_published_end()?;
         Ok((opened, report))
     }
 }
