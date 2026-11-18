@@ -89,12 +89,45 @@ fn a_cell_keeps_what_fits_and_the_rest_fills_overflow_pages() {
 /// by the page's length), small enough for the solver.
 const PAGE: usize = 64;
 
+/// Whether two pages hold the same bytes, compared a word at a time: a
+/// byte-wise comparison would be a loop the solver unwinds per byte.
+fn same(a: &[u8; PAGE], b: &[u8; PAGE]) -> bool {
+    let mut at = 0;
+    while at < PAGE {
+        let word = |page: &[u8; PAGE]| {
+            u64::from_le_bytes([
+                page[at],
+                page[at + 1],
+                page[at + 2],
+                page[at + 3],
+                page[at + 4],
+                page[at + 5],
+                page[at + 6],
+                page[at + 7],
+            ])
+        };
+        if word(a) != word(b) {
+            return false;
+        }
+        at += 8;
+    }
+    true
+}
+
 /// A page read from disk: any bytes whatsoever, with a count of at most
 /// `max_count` entries.
 fn any_page(max_count: usize) -> [u8; PAGE] {
     let page: [u8; PAGE] = kani::any();
     let count = usize::from(u16::from_le_bytes([page[20], page[21]]));
     kani::assume(count <= max_count);
+    page
+}
+
+/// A page read from disk with exactly `count` entries and any other bytes:
+/// a count the solver sees as a constant bounds the loops over entries.
+fn any_page_of(count: u16) -> [u8; PAGE] {
+    let mut page: [u8; PAGE] = kani::any();
+    page[20..22].copy_from_slice(&count.to_le_bytes());
     page
 }
 
@@ -124,20 +157,23 @@ fn a_page_that_passes_its_check_keeps_every_entry_inside_it() {
 /// either keeps the page checked with its entries and no garbage, or fails
 /// and leaves the page exactly as it was.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(10)]
 fn a_repack_keeps_a_checked_page_or_changes_nothing() {
-    let mut page = any_page(2);
-    kani::assume(node::kind_of(&page).is_ok());
-    let before = page;
-    let count = node::count(&page);
-    let mut scratch = [0u8; PAGE];
-    match node::repack(&mut page, &mut scratch) {
-        Ok(()) => {
-            assert!(node::kind_of(&page).is_ok());
-            assert_eq!(node::count(&page), count);
-            assert_eq!(node::garbage(&page), 0);
+    for count in 0..=2u16 {
+        let mut page = any_page_of(count);
+        if node::kind_of(&page).is_err() {
+            continue;
         }
-        Err(_) => assert!(page == before),
+        let before = page;
+        let mut scratch = [0u8; PAGE];
+        match node::repack(&mut page, &mut scratch) {
+            Ok(()) => {
+                assert!(node::kind_of(&page).is_ok());
+                assert_eq!(node::count(&page), usize::from(count));
+                assert_eq!(node::garbage(&page), 0);
+            }
+            Err(_) => assert!(same(&page, &before)),
+        }
     }
 }
 
@@ -145,23 +181,26 @@ fn a_repack_keeps_a_checked_page_or_changes_nothing() {
 /// body that goes in becomes entry `index` with its length, one more entry,
 /// and the page still passes its check; otherwise the page is unchanged.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(10)]
 fn an_insert_keeps_a_checked_page_or_changes_nothing() {
-    let mut page = any_page(2);
-    kani::assume(node::kind_of(&page).is_ok());
-    let before = page;
-    let count = node::count(&page);
-    let body: [u8; 4] = kani::any();
-    let len: usize = kani::any();
-    kani::assume(len <= 4);
-    let index: usize = kani::any();
-    let mut scratch = [0u8; PAGE];
-    match node::insert(&mut page, index, &body[..len], &mut scratch) {
-        Ok(true) => {
-            assert!(node::kind_of(&page).is_ok());
-            assert_eq!(node::count(&page), count + 1);
-            assert!(matches!(node::entry(&page, index), Ok((_, found)) if found == len));
+    for count in 0..=2u16 {
+        let mut page = any_page_of(count);
+        if node::kind_of(&page).is_err() {
+            continue;
         }
-        Ok(false) | Err(_) => assert!(page == before),
+        let before = page;
+        let body: [u8; 4] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= 4);
+        let index: usize = kani::any();
+        let mut scratch = [0u8; PAGE];
+        match node::insert(&mut page, index, &body[..len], &mut scratch) {
+            Ok(true) => {
+                assert!(node::kind_of(&page).is_ok());
+                assert_eq!(node::count(&page), usize::from(count) + 1);
+                assert!(matches!(node::entry(&page, index), Ok((_, found)) if found == len));
+            }
+            Ok(false) | Err(_) => assert!(same(&page, &before)),
+        }
     }
 }
