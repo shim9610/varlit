@@ -158,55 +158,77 @@ fn a_page_that_passes_its_check_keeps_every_entry_inside_it() {
     }
 }
 
-/// A repack of any checked page never panics; it either keeps the page
-/// checked with its entries and no garbage, or fails and leaves the page
-/// exactly as it was. Every entry count a checked page can hold is covered.
-#[kani::proof]
-#[kani::unwind(10)]
-fn a_repack_keeps_a_checked_page_or_changes_nothing() {
-    for count in 0..=MAX_ENTRIES {
-        let mut page = any_page_of(count);
-        if node::kind_of(&page).is_err() {
-            continue;
+/// A repack of a checked page with `count` entries never panics; it either
+/// keeps the page checked with its entries and no garbage, or fails and
+/// leaves the page exactly as it was.
+fn repack_keeps_a_checked_page_or_changes_nothing(count: u16) {
+    let mut page = any_page_of(count);
+    kani::assume(node::kind_of(&page).is_ok());
+    let before = page;
+    let mut scratch = [0u8; PAGE];
+    match node::repack(&mut page, &mut scratch) {
+        Ok(()) => {
+            assert!(node::kind_of(&page).is_ok());
+            assert_eq!(node::count(&page), usize::from(count));
+            assert_eq!(node::garbage(&page), 0);
         }
-        let before = page;
-        let mut scratch = [0u8; PAGE];
-        match node::repack(&mut page, &mut scratch) {
-            Ok(()) => {
-                assert!(node::kind_of(&page).is_ok());
-                assert_eq!(node::count(&page), usize::from(count));
-                assert_eq!(node::garbage(&page), 0);
-            }
-            Err(_) => assert!(same(&page, &before)),
-        }
+        Err(_) => assert!(same(&page, &before)),
     }
 }
 
-/// An insert into any checked page never panics. A body that goes in
-/// becomes entry `index` with its length, one more entry, and the page
-/// still passes its check; otherwise the page is unchanged. Every entry
-/// count a checked page can hold is covered.
-#[kani::proof]
-#[kani::unwind(10)]
-fn an_insert_keeps_a_checked_page_or_changes_nothing() {
-    for count in 0..=MAX_ENTRIES {
-        let mut page = any_page_of(count);
-        if node::kind_of(&page).is_err() {
-            continue;
+/// An insert into a checked page with `count` entries never panics. A body
+/// that goes in becomes entry `index` with its length, one more entry, and
+/// the page still passes its check; otherwise the page is unchanged.
+fn insert_keeps_a_checked_page_or_changes_nothing(count: u16) {
+    let mut page = any_page_of(count);
+    kani::assume(node::kind_of(&page).is_ok());
+    let before = page;
+    let body: [u8; 4] = kani::any();
+    let len: usize = kani::any();
+    kani::assume(len <= 4);
+    let index: usize = kani::any();
+    let mut scratch = [0u8; PAGE];
+    match node::insert(&mut page, index, &body[..len], &mut scratch) {
+        Ok(true) => {
+            assert!(node::kind_of(&page).is_ok());
+            assert_eq!(node::count(&page), usize::from(count) + 1);
+            assert!(matches!(node::entry(&page, index), Ok((_, found)) if found == len));
         }
-        let before = page;
-        let body: [u8; 4] = kani::any();
-        let len: usize = kani::any();
-        kani::assume(len <= 4);
-        let index: usize = kani::any();
-        let mut scratch = [0u8; PAGE];
-        match node::insert(&mut page, index, &body[..len], &mut scratch) {
-            Ok(true) => {
-                assert!(node::kind_of(&page).is_ok());
-                assert_eq!(node::count(&page), usize::from(count) + 1);
-                assert!(matches!(node::entry(&page, index), Ok((_, found)) if found == len));
-            }
-            Ok(false) | Err(_) => assert!(same(&page, &before)),
-        }
+        Ok(false) | Err(_) => assert!(same(&page, &before)),
     }
 }
+
+/// One harness per entry count, so each stays within the solver's memory:
+/// together they cover every count a checked page of `PAGE` bytes can hold
+/// (0 to `MAX_ENTRIES`).
+macro_rules! per_count {
+    ($($repack:ident, $insert:ident, $count:literal;)*) => {$(
+        #[kani::proof]
+        #[kani::unwind(10)]
+        fn $repack() {
+            repack_keeps_a_checked_page_or_changes_nothing($count);
+        }
+        #[kani::proof]
+        #[kani::unwind(10)]
+        fn $insert() {
+            insert_keeps_a_checked_page_or_changes_nothing($count);
+        }
+    )*};
+}
+
+per_count! {
+    repack_0, insert_0, 0;
+    repack_1, insert_1, 1;
+    repack_2, insert_2, 2;
+    repack_3, insert_3, 3;
+    repack_4, insert_4, 4;
+    repack_5, insert_5, 5;
+    repack_6, insert_6, 6;
+    repack_7, insert_7, 7;
+    repack_8, insert_8, 8;
+}
+
+const _: () = assert!(
+    MAX_ENTRIES == 8,
+    "one harness per entry count up to MAX_ENTRIES"
+);
