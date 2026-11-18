@@ -12,6 +12,21 @@ use super::corrupt;
 use crate::Result;
 use core::cmp::Ordering;
 
+/// What is wrong with a damaged page: the part of it that does not hold.
+/// Its own small type, so the page functions (and their proofs) do not carry
+/// the crate's error type; `?` turns it into one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PageError(pub(crate) &'static str);
+
+impl From<PageError> for crate::Error {
+    fn from(error: PageError) -> Self {
+        corrupt(error.0)
+    }
+}
+
+/// A page function's result.
+pub(crate) type PageResult<T> = core::result::Result<T, PageError>;
+
 /// The page size: a pool page.
 pub(crate) const NODE_BYTES: usize = 4096;
 /// Where the header starts: past the pool link.
@@ -73,9 +88,9 @@ fn set_high(page: &mut [u8], high: usize) {
 }
 
 /// Checks a page's header and returns its kind.
-pub(crate) fn kind(page: &[u8]) -> Result<Kind> {
+pub(crate) fn kind(page: &[u8]) -> PageResult<Kind> {
     if page.len() != NODE_BYTES {
-        return Err(corrupt("keyed tree page"));
+        return Err(PageError("keyed tree page"));
     }
     kind_of(page)
 }
@@ -83,21 +98,21 @@ pub(crate) fn kind(page: &[u8]) -> Result<Kind> {
 /// [`kind`] for a page of any length up to 64 KiB. Every function here
 /// bounds itself by the page's length, which is `NODE_BYTES` for every page
 /// the tree reads; the proofs use smaller pages of the same layout.
-pub(crate) fn kind_of(page: &[u8]) -> Result<Kind> {
+pub(crate) fn kind_of(page: &[u8]) -> PageResult<Kind> {
     if page.len() <= ENTRIES_AT || page.len() > usize::from(u16::MAX) {
-        return Err(corrupt("keyed tree page"));
+        return Err(PageError("keyed tree page"));
     }
     let kind = match &page[HEADER_AT..HEADER_AT + 4] {
         magic if magic == LEAF_MAGIC => Kind::Leaf,
         magic if magic == INTERIOR_MAGIC => Kind::Interior,
-        _ => return Err(corrupt("keyed tree page")),
+        _ => return Err(PageError("keyed tree page")),
     };
     // `high` is stored in 16 bits, so a damaged page can name a start of
     // bodies past its end; every later offset is derived from it.
     let high = high(page);
     let low = ENTRIES_AT + count(page) * ENTRY_LEN;
     if high > page.len() || low > high || garbage(page) > page.len() - high {
-        return Err(corrupt("keyed tree page"));
+        return Err(PageError("keyed tree page"));
     }
     Ok(kind)
 }
@@ -131,9 +146,9 @@ pub(crate) const fn cost(len: usize) -> usize {
 
 /// Entry `index`: its body's offset and length, checked to lie in the
 /// page's body area.
-pub(crate) fn entry(page: &[u8], index: usize) -> Result<(usize, usize)> {
+pub(crate) fn entry(page: &[u8], index: usize) -> PageResult<(usize, usize)> {
     if index >= count(page) {
-        return Err(corrupt("keyed tree entry"));
+        return Err(PageError("keyed tree entry"));
     }
     let at = ENTRIES_AT + index * ENTRY_LEN;
     let offset = u16_at(page, at);
@@ -143,13 +158,13 @@ pub(crate) fn entry(page: &[u8], index: usize) -> Result<(usize, usize)> {
         return Ok((page.len(), 0));
     }
     if offset < high(page) || offset + len > page.len() {
-        return Err(corrupt("keyed tree entry"));
+        return Err(PageError("keyed tree entry"));
     }
     Ok((offset, len))
 }
 
 #[cfg(test)]
-pub(crate) fn body(page: &[u8], index: usize) -> Result<&[u8]> {
+pub(crate) fn body(page: &[u8], index: usize) -> PageResult<&[u8]> {
     let (offset, len) = entry(page, index)?;
     Ok(&page[offset..offset + len])
 }
@@ -163,7 +178,7 @@ pub(crate) fn insert(
     index: usize,
     body: &[u8],
     scratch: &mut [u8],
-) -> Result<bool> {
+) -> PageResult<bool> {
     let n = count(page);
     if index > n || cost(body.len()) > free(page) {
         return Ok(false);
@@ -173,7 +188,7 @@ pub(crate) fn insert(
         // The garbage count promised this room; a damaged one may not have.
         if cost(body.len()) > gap(page) {
             page.copy_from_slice(&scratch[..page.len()]);
-            return Err(corrupt("keyed tree page"));
+            return Err(PageError("keyed tree page"));
         }
     }
     let offset = high(page) - body.len();
@@ -188,13 +203,13 @@ pub(crate) fn insert(
 }
 
 /// Removes entry `index`; its body becomes garbage.
-pub(crate) fn remove(page: &mut [u8], index: usize) -> Result<()> {
+pub(crate) fn remove(page: &mut [u8], index: usize) -> PageResult<()> {
     let (offset, len) = entry(page, index)?;
     let n = count(page);
     let at = ENTRIES_AT + index * ENTRY_LEN;
     let garbage = garbage(page) + len;
     if len != 0 && offset != high(page) && garbage > page.len() - high(page) {
-        return Err(corrupt("keyed tree page"));
+        return Err(PageError("keyed tree page"));
     }
     page.copy_within(at + ENTRY_LEN..ENTRIES_AT + n * ENTRY_LEN, at);
     set_u16(page, HEADER_AT + 4, n - 1);
@@ -214,7 +229,7 @@ pub(crate) fn replace(
     index: usize,
     body: &[u8],
     scratch: &mut [u8],
-) -> Result<bool> {
+) -> PageResult<bool> {
     let (offset, len) = entry(page, index)?;
     if body.len() == len {
         page[offset..offset + len].copy_from_slice(body);
@@ -227,7 +242,7 @@ pub(crate) fn replace(
     if insert(page, index, body, scratch)? {
         Ok(true)
     } else {
-        Err(corrupt("keyed tree page"))
+        Err(PageError("keyed tree page"))
     }
 }
 
@@ -235,7 +250,7 @@ pub(crate) fn replace(
 /// garbage. `scratch` is a page-sized buffer, left holding the page as it
 /// was. An entry outside the body area, or bodies that together overrun it,
 /// are an error, and the page is restored.
-pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) -> Result<()> {
+pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) -> PageResult<()> {
     let n = count(page);
     let size = page.len();
     scratch[..size].copy_from_slice(page);
@@ -254,7 +269,7 @@ pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) -> Result<()> {
         }
         let Some(next) = high.checked_sub(len).filter(|next| *next >= low) else {
             page.copy_from_slice(&scratch[..page.len()]);
-            return Err(corrupt("keyed tree page"));
+            return Err(PageError("keyed tree page"));
         };
         high = next;
         page[high..high + len].copy_from_slice(&scratch[offset..offset + len]);
