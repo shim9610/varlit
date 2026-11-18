@@ -450,21 +450,28 @@ enum Checked {
     },
 }
 
+/// What every frame check of one scan shares: the ring, and the logical
+/// length of the file the frames' entries may point into.
+#[derive(Clone, Copy)]
+struct Frames {
+    ring: Ring,
+    available: u64,
+}
+
 /// Checks the frame at ring offset `at`: header, sequence, bounds, entries
 /// and checksum, streamed through `scratch`. With `report`, every entry and
 /// the index of the frame are passed to it as they are read; the scan only
 /// reports frames it already checked once. `None` ends the scan.
-#[allow(clippy::too_many_arguments)]
 fn check_frame<S: TileSource + ?Sized>(
     source: &mut S,
-    ring: Ring,
+    frames: Frames,
     at: u64,
     expected: u64,
     max_gen: u64,
-    available: u64,
     scratch: &mut [u8],
     mut report: Option<&mut ScanVisit<'_, S>>,
 ) -> Result<Option<Checked>> {
+    let Frames { ring, available } = frames;
     let mut header = [0u8; crate::width::small(FRAME_HEADER)];
     if source.read_at(ring.at(at), &mut header).is_err() || &header[0..4] != FRAME_MAGIC {
         return Ok(None);
@@ -579,7 +586,10 @@ pub(crate) fn scan<S: TileSource + ?Sized>(
     scratch: &mut [u8],
     visit: &mut dyn FnMut(&mut S, ScanEvent) -> Result<()>,
 ) -> Result<ScanEnd> {
-    let available = source.len()?;
+    let frames = Frames {
+        ring,
+        available: source.len()?,
+    };
     let mut at = from;
     let mut published = first_gen.saturating_sub(1);
     let mut head = from;
@@ -598,9 +608,7 @@ pub(crate) fn scan<S: TileSource + ?Sized>(
             continue;
         }
         let expected = current.unwrap_or(published + 1);
-        let Some(checked) = check_frame(
-            source, ring, at, expected, max_gen, available, scratch, None,
-        )?
+        let Some(checked) = check_frame(source, frames, at, expected, max_gen, scratch, None)?
         else {
             break;
         };
@@ -622,9 +630,7 @@ pub(crate) fn scan<S: TileSource + ?Sized>(
                 walked += len;
                 at = next;
                 if commit {
-                    if !replay(
-                        source, ring, gen_start, at, generation, available, scratch, visit,
-                    )? {
+                    if !replay(source, frames, gen_start, at, generation, scratch, visit)? {
                         break;
                     }
                     visit(source, ScanEvent::Committed(generation, at))?;
@@ -646,17 +652,16 @@ pub(crate) fn scan<S: TileSource + ?Sized>(
 /// Reads the frames of `generation` from `start` up to `end` again,
 /// reporting their entries. `false` when a frame no longer checks out: the
 /// ring changed under a reader since the first read, which its header shows.
-#[allow(clippy::too_many_arguments)]
 fn replay<S: TileSource + ?Sized>(
     source: &mut S,
-    ring: Ring,
+    frames: Frames,
     start: u64,
     end: u64,
     generation: u64,
-    available: u64,
     scratch: &mut [u8],
     visit: &mut dyn FnMut(&mut S, ScanEvent) -> Result<()>,
 ) -> Result<bool> {
+    let ring = frames.ring;
     let mut at = start;
     for _ in 0..=ring.area() / FRAME_MIN {
         if at == end {
@@ -669,11 +674,10 @@ fn replay<S: TileSource + ?Sized>(
         let report: &mut ScanVisit<'_, S> = &mut *visit;
         match check_frame(
             source,
-            ring,
+            frames,
             at,
             generation,
             generation,
-            available,
             scratch,
             Some(report),
         )? {

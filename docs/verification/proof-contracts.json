@@ -457,7 +457,9 @@
         "crates/varlit-core/src/verification/keyed_heap.rs",
         "crates/varlit-core/src/keyed_heap/node.rs",
         "crates/varlit-core/src/keyed_heap/tree.rs",
-        "crates/varlit-core/src/keyed_heap/heap.rs"
+        "crates/varlit-core/src/keyed_heap/heap.rs",
+        "crates/varlit-core/src/keyed_heap/heap/pages.rs",
+        "crates/varlit-core/src/keyed_heap/heap/rebalance.rs"
       ],
       "scope": "the binary search over every sorted entry array of up to eight entries and every target; the separator between every pair of keys of up to four bytes; varints for every u64; how much of every record below 2^48 bytes a leaf cell keeps, and that the rest fills whole overflow pages; and, for any bytes a tree page holds, the check a page read from disk must pass, and that a repack or an insert into a checked page of up to two entries never leaves the page",
       "limits": "Tree pages are proved on 64-byte pages of the same layout (every page function bounds itself by the page's length; the tree's pages are 4096 bytes), for any bytes, and repack and insert for every entry count such a page can hold (0 to 8), one harness per count so each fits the solver's memory. Splits, merges, separators of streamed keys, overflow chains, the free page list and blocks, crash atomicity and reader snapshots go through the write-ahead ring and are covered by native tests (keyed_heap::node::tests: a page against a list model and damaged pages; keyed_heap::tests: a model over splits, deletes and reopens on deep trees of small pages, keys and values of every length around every cell and overflow boundary, random histories with every structure checked, every crash prefix of a generation and of its publication, pages reused after deletes and rewrites, reader expiry) and the keyed_storage integration and fuzz targets, not proofs.",

@@ -29,6 +29,13 @@ pub(crate) const DEFAULT_RING_BYTES: u64 = 16 << 20;
 /// The smallest default ring.
 pub(crate) const MIN_DEFAULT_RING_BYTES: u64 = 256 << 10;
 
+/// The working buffers of one read pass: a tile row's slots, and a tile's
+/// commit bitmap.
+struct PassBuffers<'a> {
+    slots: &'a mut [u8],
+    bitmap: &'a mut [u8],
+}
+
 /// Where the spec's named things live.
 #[derive(Clone, Debug)]
 pub(crate) struct Names {
@@ -785,7 +792,11 @@ impl TiledMatrix {
         let slots = sized(&mut scratch.slots, geom.tile[1] * geom.slot_len())?;
         let bitmap = sized(&mut scratch.bitmap, geom.bitmap_unit_len())?;
         self.with_access(source, block, &mut |access| {
-            self.region_pass(access, geom, region, start, out, slots, bitmap)
+            let buffers = PassBuffers {
+                slots: &mut *slots,
+                bitmap: &mut *bitmap,
+            };
+            self.region_pass(access, geom, region, start, out, buffers)
         })
     }
 
@@ -864,24 +875,23 @@ impl TiledMatrix {
         let scratch = &mut *scratch;
         for first in (0..keys.len()).step_by(ORDER_KEYS) {
             let last = (first + ORDER_KEYS).min(keys.len());
-            self.read_cells_part(source, block, geom, keys, first..last, out, scratch)?;
+            self.read_cells_part(source, block, keys, first..last, out, scratch)?;
         }
         Ok(())
     }
 
     /// [`Self::read_cells`] for the keys in `part`, ordered by tile in the
     /// order buffer, which holds them all.
-    #[allow(clippy::too_many_arguments)]
     fn read_cells_part(
         &self,
         source: &dyn TileSource,
         block: usize,
-        geom: BlockGeom,
         keys: &[MatrixKey],
         part: std::ops::Range<usize>,
         out: &mut [u8],
         scratch: &mut MatrixScratch,
     ) -> Result<()> {
+        let geom = self.geom.blocks[block];
         let order = &mut scratch.order;
         order.clear();
         if order.capacity() < part.len() {
@@ -907,7 +917,11 @@ impl TiledMatrix {
         let slots = sized(&mut scratch.slots, widest * geom.slot_len())?;
         let bitmap = sized(&mut scratch.bitmap, geom.bitmap_unit_len())?;
         self.with_access(source, block, &mut |access| {
-            self.cells_pass(access, geom, order, out, slots, bitmap)
+            let buffers = PassBuffers {
+                slots: &mut *slots,
+                bitmap: &mut *bitmap,
+            };
+            self.cells_pass(access, geom, order, out, buffers)
         })
     }
 
@@ -917,9 +931,12 @@ impl TiledMatrix {
         geom: BlockGeom,
         order: &[(TileCoord, u64, usize)],
         out: &mut [u8],
-        scratch: &mut [u8],
-        bitmap: &mut [u8],
+        buffers: PassBuffers<'_>,
     ) -> Result<()> {
+        let PassBuffers {
+            slots: scratch,
+            bitmap,
+        } = buffers;
         let stride = crate::width::index(geom.stride)?;
         let slot_len = geom.slot_len();
         let span_cap = (CELLS_SPAN_BYTES / slot_len).clamp(1, geom.cells());
@@ -956,7 +973,6 @@ impl TiledMatrix {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn region_pass(
         &self,
         access: &mut dyn RegionAccess,
@@ -964,9 +980,12 @@ impl TiledMatrix {
         region: crate::MatrixRegion,
         start: MatrixKey,
         out: &mut [u8],
-        scratch: &mut [u8],
-        bitmap: &mut [u8],
+        buffers: PassBuffers<'_>,
     ) -> Result<(usize, Option<MatrixKey>)> {
+        let PassBuffers {
+            slots: scratch,
+            bitmap,
+        } = buffers;
         let stride = crate::width::index(geom.stride)?;
         let capacity = out.len() / stride;
         let mut key = start;

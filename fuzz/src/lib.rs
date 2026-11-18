@@ -7,6 +7,7 @@ use varlit::varlit_format;
 pub mod digest;
 pub mod header_tails;
 pub mod keyed;
+pub mod published;
 pub mod published_end;
 pub mod sidecar;
 

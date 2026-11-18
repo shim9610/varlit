@@ -257,6 +257,8 @@ fn no_writer_keeps_its_own_poison_boolean() {
         "stream.rs",
         // Keyed storage's writer engine, which replaced the indexed primary.
         "keyed_heap/heap.rs",
+        "keyed_heap/heap/pages.rs",
+        "keyed_heap/heap/rebalance.rs",
         "matrix.rs",
         "disk_index.rs",
     ] {
@@ -352,7 +354,14 @@ fn a_permit_can_only_be_minted_from_the_writers_own_poison_flag() {
 
     // Belt and braces: no module may hold a `PoisonFlag` anywhere but in a
     // writer's own field, so a decoy flag does not even come into being.
-    for module in ["file.rs", "layout.rs", "stream.rs", "keyed_heap/heap.rs"] {
+    for module in [
+        "file.rs",
+        "layout.rs",
+        "stream.rs",
+        "keyed_heap/heap.rs",
+        "keyed_heap/heap/pages.rs",
+        "keyed_heap/heap/rebalance.rs",
+    ] {
         let source = crate_code(module);
         for (number, line) in source.lines().enumerate() {
             if !line.contains("PoisonFlag::healthy()") {
@@ -889,6 +898,8 @@ fn no_file_length_ceiling_is_enforced() {
         "matrix.rs",
         "stream.rs",
         "keyed_heap/heap.rs",
+        "keyed_heap/heap/pages.rs",
+        "keyed_heap/heap/rebalance.rs",
     ] {
         let source = crate_source(module);
         assert!(

@@ -141,10 +141,12 @@ impl KeyedReader {
                 &mut view,
                 source,
                 &self.roots,
-                block_id,
+                Lookup {
+                    block_id,
+                    key_at,
+                    max_payload,
+                },
                 buf,
-                key_at,
-                max_payload,
                 encode,
             );
             let missed = view.missed;
@@ -175,18 +177,29 @@ impl KeyedReader {
     }
 }
 
+/// What a lookup asks for: the block type, where the key starts in the
+/// buffer `encode` fills, and the largest payload it may return.
+#[derive(Clone, Copy)]
+struct Lookup {
+    block_id: u32,
+    key_at: usize,
+    max_payload: u64,
+}
+
 /// One unvalidated lookup of [`KeyedReader::get`].
-#[allow(clippy::too_many_arguments, reason = "one lookup's inputs")]
 fn attempt(
     view: &mut dyn View,
     source: &dyn TileSource,
     roots: &Roots,
-    block_id: u32,
+    lookup: Lookup,
     buf: &mut Vec<u8>,
-    key_at: usize,
-    max_payload: u64,
     encode: &mut dyn FnMut(&mut Vec<u8>) -> Result<()>,
 ) -> Result<bool> {
+    let Lookup {
+        block_id,
+        key_at,
+        max_payload,
+    } = lookup;
     encode(buf)?;
     let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
         "keyed lookup key starts past its buffer",

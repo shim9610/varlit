@@ -2481,52 +2481,52 @@
       "callers": {
         "default": [
           {
-            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "caller": "check_frame(_1: &mut S, _2: Frames, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:c69fc2f8f37b5831]",
             "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "caller": "check_frame(_1: &mut S, _2: Frames, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:c69fc2f8f37b5831]",
             "target": "stream_entry",
             "result": "model/caller-specific"
           },
           {
-            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:bba6e1188635c037]",
+            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:f6233e21b9501e08]",
             "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:bba6e1188635c037]",
+            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:f6233e21b9501e08]",
             "target": "stream_entry",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store.rs}, _2: &mut dyn TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store.rs}, _2: &mut dyn store::TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
             "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open(_1: &mut dyn TileStore, _2: (u64, u64), _3: u64) -> std::result::Result<RingStore, error::Error> [body:738e7455db0ffef3]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open(_1: &mut dyn store::TileStore, _2: (u64, u64), _3: u64) -> std::result::Result<RingStore, error::Error> [body:738e7455db0ffef3]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
             "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::place(_1: &mut RingStore, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<u64, error::Error> [body:413d64fc493e5f5e]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::place(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<u64, error::Error> [body:413d64fc493e5f5e]",
             "target": "Ring::plan_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:2e92654637c1592a]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:58a5d85776b6aca0]",
             "target": "overlap",
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: (u64, u64)) -> std::result::Result<RingReader, error::Error> [body:6288b389688c5024]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn store::TileSource, _2: (u64, u64)) -> std::result::Result<RingReader, error::Error> [body:6288b389688c5024]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
@@ -2553,52 +2553,52 @@
         ],
         "all": [
           {
-            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "caller": "check_frame(_1: &mut S, _2: Frames, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:c69fc2f8f37b5831]",
             "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "caller": "check_frame(_1: &mut S, _2: Frames, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:c69fc2f8f37b5831]",
             "target": "stream_entry",
             "result": "model/caller-specific"
           },
           {
-            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:bba6e1188635c037]",
+            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:f6233e21b9501e08]",
             "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:bba6e1188635c037]",
+            "caller": "copy_committed(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: &mut [u8], _6: &mut dyn FnMut(u64, u64, u32) -> bool, _7: &mut dyn for<'a, 'b> FnMut(&'a mut S, u64, &'b [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<(), error::Error> [body:f6233e21b9501e08]",
             "target": "stream_entry",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store.rs}, _2: &mut dyn TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store.rs}, _2: &mut dyn store::TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
             "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open(_1: &mut dyn TileStore, _2: (u64, u64), _3: u64) -> std::result::Result<RingStore, error::Error> [body:738e7455db0ffef3]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open(_1: &mut dyn store::TileStore, _2: (u64, u64), _3: u64) -> std::result::Result<RingStore, error::Error> [body:738e7455db0ffef3]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
             "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::place(_1: &mut RingStore, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<u64, error::Error> [body:413d64fc493e5f5e]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::place(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<u64, error::Error> [body:413d64fc493e5f5e]",
             "target": "Ring::plan_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:2e92654637c1592a]",
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:58a5d85776b6aca0]",
             "target": "overlap",
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: (u64, u64)) -> std::result::Result<RingReader, error::Error> [body:6288b389688c5024]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn store::TileSource, _2: (u64, u64)) -> std::result::Result<RingReader, error::Error> [body:6288b389688c5024]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
@@ -2674,17 +2674,17 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:ae76bf65576ebbaa]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn store::TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:ae76bf65576ebbaa]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:33b90b723302378e]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn store::TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:33b90b723302378e]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:4a27846bca337186]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn store::TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:4a27846bca337186]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           }
@@ -2721,17 +2721,17 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:c5eaf5495680f964]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn store::TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:c5eaf5495680f964]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:053b94e656cd9c71]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn store::TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:053b94e656cd9c71]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:3fd5b63119bfb3e3]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn store::TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:3fd5b63119bfb3e3]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           }
@@ -2757,22 +2757,17 @@
       "callers": {
         "default": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:a888467c3dabf058]",
             "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:a888467c3dabf058]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
-            "target": "write_varint",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::separator(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: &KeySrc<'_>, _4: &KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:03170e78e8190d67]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:a888467c3dabf058]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
@@ -2787,54 +2782,54 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "insert(_1: &mut [u8], _2: usize, _3: &[u8], _4: &mut [u8]) -> std::result::Result<bool, PageError> [body:1e6d93d07287dde9]",
+            "caller": "insert(_1: &mut [u8], _2: usize, _3: &[u8], _4: &mut [u8]) -> std::result::Result<bool, PageError> [body:d9d175d269307631]",
             "target": "repack",
             "result": "model/caller-specific"
           },
           {
-            "caller": "node::kind(_1: &[u8]) -> std::result::Result<Kind, PageError> [body:7bc32d05c0104d49]",
+            "caller": "keyed_heap::node::kind(_1: &[u8]) -> std::result::Result<Kind, PageError> [body:7bc32d05c0104d49]",
             "target": "kind_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<keyed_heap::tree::Body, error::Error> [body:efa9ef3431cef33f]",
             "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<keyed_heap::tree::Body, error::Error> [body:efa9ef3431cef33f]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<keyed_heap::tree::Body, error::Error> [body:efa9ef3431cef33f]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:f00c0070da4dd9cf]",
+            "caller": "rebalance::<impl at crates/varlit-core/src/keyed_heap/heap/rebalance.rs>::separator(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: &keyed_heap::tree::KeySrc<'_>, _4: &keyed_heap::tree::KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:3109f39b570f38b0]",
+            "target": "write_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &keyed_heap::tree::KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:c0d72e1d3eed05de]",
             "target": "search_entries",
             "result": "model/caller-specific"
           }
         ],
         "all": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:a888467c3dabf058]",
             "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:a888467c3dabf058]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
-            "target": "write_varint",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::separator(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: &KeySrc<'_>, _4: &KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:03170e78e8190d67]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:a888467c3dabf058]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
@@ -2849,32 +2844,37 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "insert(_1: &mut [u8], _2: usize, _3: &[u8], _4: &mut [u8]) -> std::result::Result<bool, PageError> [body:1e6d93d07287dde9]",
+            "caller": "insert(_1: &mut [u8], _2: usize, _3: &[u8], _4: &mut [u8]) -> std::result::Result<bool, PageError> [body:d9d175d269307631]",
             "target": "repack",
             "result": "model/caller-specific"
           },
           {
-            "caller": "node::kind(_1: &[u8]) -> std::result::Result<Kind, PageError> [body:7bc32d05c0104d49]",
+            "caller": "keyed_heap::node::kind(_1: &[u8]) -> std::result::Result<Kind, PageError> [body:7bc32d05c0104d49]",
             "target": "kind_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<keyed_heap::tree::Body, error::Error> [body:efa9ef3431cef33f]",
             "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<keyed_heap::tree::Body, error::Error> [body:efa9ef3431cef33f]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
+            "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<keyed_heap::tree::Body, error::Error> [body:efa9ef3431cef33f]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:f00c0070da4dd9cf]",
+            "caller": "rebalance::<impl at crates/varlit-core/src/keyed_heap/heap/rebalance.rs>::separator(_1: &mut heap::KeyedHeap, _2: &mut dyn store::TileStore, _3: &keyed_heap::tree::KeySrc<'_>, _4: &keyed_heap::tree::KeySrc<'_>) -> std::result::Result<SepBody, error::Error> [body:3109f39b570f38b0]",
+            "target": "write_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &keyed_heap::tree::KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:c0d72e1d3eed05de]",
             "target": "search_entries",
             "result": "model/caller-specific"
           }

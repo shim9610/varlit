@@ -481,10 +481,18 @@ fn a_page_never_mixes_generations() -> varlit::Result<()> {
         let mut reader = spec().open_reader(&reader_path)?;
         let mut out = vec![Cell::empty(); 256];
         let mut pages = 0;
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        // Once the writer stops nothing expires, so a reader starved of every
+        // read while it ran still reads once after.
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) || pages == 0 {
             reader.follow()?;
-            let page = reader
-                .read_matrix_region_into::<Cell>(MatrixRegion::new(0..16, 0..16), &mut out)?;
+            // A reader the writer's ring moves past expires and follows
+            // again: that is the contract, not a mixed page.
+            let page = match reader
+                .read_matrix_region_into::<Cell>(MatrixRegion::new(0..16, 0..16), &mut out)
+            {
+                Err(varlit::Error::MatrixSnapshotExpired { .. }) => continue,
+                page => page?,
+            };
             assert_eq!(page.filled, 256);
             let first = out[0].value;
             assert!(
@@ -652,9 +660,13 @@ fn a_key_batch_never_mixes_generations() -> varlit::Result<()> {
         let mut reader = spec().open_reader(&reader_path)?;
         let mut out = vec![Cell::empty(); keys.len()];
         let mut batches = 0;
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) || batches == 0 {
             reader.follow()?;
-            reader.read_matrix_cells_into::<Cell>(&keys, &mut out)?;
+            // An expired snapshot follows again (see `a_page_never_mixes_generations`).
+            match reader.read_matrix_cells_into::<Cell>(&keys, &mut out) {
+                Err(varlit::Error::MatrixSnapshotExpired { .. }) => continue,
+                read => read?,
+            }
             let first = out[0].value;
             assert!(
                 out.iter().all(|cell| cell.value == first),

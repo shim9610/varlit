@@ -136,6 +136,142 @@ pub fn run(data: &[u8]) {
     assert_eq!(stats.keys, staged.len() as u64);
 }
 
+const CORRUPT_KEYS: u16 = 16;
+
+/// The valid file [`run_corrupt`] damages, and what it holds: records of
+/// every size class (short, page-sized, overflowing), some removed, in two
+/// publications.
+fn undamaged_keyed_file() -> &'static (Vec<u8>, Model) {
+    static FILE: std::sync::OnceLock<(Vec<u8>, Model)> = std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let path = dir.path().join("keyed.varlit");
+        let mut model = Model::new();
+        let mut writer =
+            varlit::VarlitFile::create(FuzzKeyedFormat::spec(), &path).expect("create");
+        for key in 0..CORRUPT_KEYS {
+            let len = [3usize, 700, 5_000][usize::from(key) % 3];
+            let value: Vec<u8> = (0..len).map(|i| (i as u8) ^ (key as u8)).collect();
+            writer
+                .put_keyed(&FuzzEntry {
+                    key,
+                    value: value.clone(),
+                })
+                .expect("put");
+            model.insert(key, value);
+            if key == CORRUPT_KEYS / 2 {
+                writer.sync().expect("sync");
+            }
+        }
+        for key in (0..CORRUPT_KEYS).step_by(5) {
+            writer.remove_keyed::<FuzzEntry>(&key).expect("remove");
+            model.remove(&key);
+        }
+        writer.sync().expect("sync");
+        drop(writer);
+        (std::fs::read(&path).expect("read the file back"), model)
+    })
+}
+
+/// Keyed storage read back from damaged bytes: a valid file (records of
+/// every size class, some removed, two publications) whose bytes the input
+/// overwrites, flips or cuts, then opened by a reader (lookups, a range, the
+/// stats, a follow) and by a writer (recovery, a put, a sync). Only soundness
+/// is owed: every refusal is an error, never a panic, a hang or a record that
+/// was never written. The undamaged file must read back exactly.
+pub fn run_corrupt(data: &[u8]) {
+    let Some((&control, rest)) = data.split_first() else {
+        return;
+    };
+    let Ok(dir) = tempfile::tempdir() else {
+        return;
+    };
+    let path = dir.path().join("keyed.varlit");
+    let spec = FuzzKeyedFormat::spec();
+    let keys = CORRUPT_KEYS;
+    // The undamaged file is built once per process: every input damages a
+    // copy of the same bytes, so a run costs a read, not sixteen puts.
+    let (pristine_bytes, model) = undamaged_keyed_file();
+    let mut bytes = pristine_bytes.clone();
+
+    let pristine = rest.is_empty();
+    if !pristine && !bytes.is_empty() {
+        let len = bytes.len();
+        let at = |pair: &[u8]| {
+            usize::from(u16::from_le_bytes([
+                pair[0],
+                pair.get(1).copied().unwrap_or(0),
+            ])) * len
+                / 65_536
+        };
+        match control % 3 {
+            // Overwrite a run of bytes somewhere in the file.
+            0 => {
+                let start = at(rest);
+                let patch = rest.get(2..).unwrap_or_default();
+                let end = (start + patch.len()).min(bytes.len());
+                bytes[start..end].copy_from_slice(&patch[..end - start]);
+            }
+            // Flip single bits, three bytes of input each.
+            1 => {
+                for triple in rest.chunks_exact(3) {
+                    let index = at(triple) % len;
+                    bytes[index] ^= 1 << (triple[2] % 8);
+                }
+            }
+            // Cut the file.
+            _ => {
+                let cut = at(rest);
+                bytes.truncate(cut);
+            }
+        }
+    }
+    if std::fs::write(&path, &bytes).is_err() {
+        return;
+    }
+
+    let mut scratch = Vec::new();
+    let mut out = FuzzEntry::empty();
+    if let Ok(mut reader) = varlit::VarlitFile::open_readonly(spec, &path) {
+        for key in 0..keys {
+            match reader.get_keyed::<FuzzEntry>(&key, &mut scratch, &mut out) {
+                Ok(true) => {
+                    if pristine {
+                        assert_eq!(Some(&out.value), model.get(&key), "key {key}");
+                    }
+                }
+                Ok(false) => assert!(!pristine || !model.contains_key(&key), "key {key} lost"),
+                Err(_) => assert!(!pristine, "the undamaged file refused key {key}"),
+            }
+        }
+        let mut seen = 0u64;
+        let visited = reader.range_keyed::<FuzzEntry, _>(.., &mut scratch, &mut out, &mut |_| {
+            seen += 1;
+            Ok(seen < 64)
+        });
+        if pristine {
+            assert_eq!(visited.ok(), Some(model.len() as u64));
+        }
+        let _ = reader.keyed_storage_stats();
+        let _ = reader.follow();
+        let _ = reader.get_keyed::<FuzzEntry>(&1, &mut scratch, &mut out);
+    } else {
+        assert!(!pristine, "the undamaged file did not open");
+    }
+    if let Ok(mut writer) = varlit::VarlitFile::open(spec, &path) {
+        let _ = writer.get_keyed::<FuzzEntry>(&1, &mut scratch, &mut out);
+        if writer
+            .put_keyed(&FuzzEntry {
+                key: 1,
+                value: vec![9; 40],
+            })
+            .is_ok()
+        {
+            let _ = writer.sync();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -158,6 +294,27 @@ mod tests {
         }
         for history in histories {
             super::run(&history);
+        }
+    }
+
+    #[test]
+    fn damaged_files_are_refused_or_read_soundly() {
+        // Undamaged first: it must read back exactly.
+        super::run_corrupt(&[0]);
+        let mut state = 0x1234_5678_u64;
+        for control in 0u8..3 {
+            for len in [2usize, 8, 40, 200] {
+                for _ in 0..6 {
+                    let mut data = vec![control];
+                    for _ in 0..len {
+                        state = state
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1);
+                        data.push((state >> 56) as u8);
+                    }
+                    super::run_corrupt(&data);
+                }
+            }
         }
     }
 }

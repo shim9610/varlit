@@ -112,3 +112,17 @@ path = "fuzz_targets/keyed_storage_model.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "keyed_storage_corrupt"
+path = "fuzz_targets/keyed_storage_corrupt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "published_end_damage"
+path = "fuzz_targets/published_end_damage.rs"
+test = false
+doc = false
+bench = false

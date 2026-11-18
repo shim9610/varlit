@@ -559,7 +559,6 @@ fn shift_up(page: &mut [u8], from: usize, n: usize, entry: usize) {
 
 /// Calls `visit(target, at, len)` for every entry of `generation`'s index
 /// rooted at `root` whose range overlaps `[at, at + len)`, in key order.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn for_each_overlapping(
     cache: &mut PageCache,
     mut io: Io<'_>,

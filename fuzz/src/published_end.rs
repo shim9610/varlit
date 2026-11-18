@@ -36,8 +36,11 @@ fn half(bytes: &[u8]) -> u32 {
     u32::from_le_bytes(out)
 }
 
+/// Bytes of the block's two slots.
+pub const SLOTS_LEN: usize = 2 * SLOT_LEN;
+
 /// Offset of the block's two slots, if the bytes carry the block.
-fn slots_at(bytes: &[u8]) -> Option<usize> {
+pub fn slots_at(bytes: &[u8]) -> Option<usize> {
     let header = &bytes[..bytes.len().min(HEADER_WINDOW)];
     header
         .windows(8)
