@@ -201,31 +201,112 @@ fn insert_keeps_a_checked_page_or_changes_nothing(count: u16) {
 /// One harness per entry count, so each stays within the solver's memory:
 /// together they cover every count a checked page of `PAGE` bytes can hold
 /// (0 to `MAX_ENTRIES`).
-macro_rules! per_count {
-    ($($repack:ident, $insert:ident, $count:literal;)*) => {$(
-        #[kani::proof]
-        #[kani::unwind(10)]
-        fn $repack() {
-            repack_keeps_a_checked_page_or_changes_nothing($count);
-        }
-        #[kani::proof]
-        #[kani::unwind(10)]
-        fn $insert() {
-            insert_keeps_a_checked_page_or_changes_nothing($count);
-        }
-    )*};
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_0() {
+    repack_keeps_a_checked_page_or_changes_nothing(0);
 }
 
-per_count! {
-    repack_0, insert_0, 0;
-    repack_1, insert_1, 1;
-    repack_2, insert_2, 2;
-    repack_3, insert_3, 3;
-    repack_4, insert_4, 4;
-    repack_5, insert_5, 5;
-    repack_6, insert_6, 6;
-    repack_7, insert_7, 7;
-    repack_8, insert_8, 8;
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_0() {
+    insert_keeps_a_checked_page_or_changes_nothing(0);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_1() {
+    repack_keeps_a_checked_page_or_changes_nothing(1);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_1() {
+    insert_keeps_a_checked_page_or_changes_nothing(1);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_2() {
+    repack_keeps_a_checked_page_or_changes_nothing(2);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_2() {
+    insert_keeps_a_checked_page_or_changes_nothing(2);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_3() {
+    repack_keeps_a_checked_page_or_changes_nothing(3);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_3() {
+    insert_keeps_a_checked_page_or_changes_nothing(3);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_4() {
+    repack_keeps_a_checked_page_or_changes_nothing(4);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_4() {
+    insert_keeps_a_checked_page_or_changes_nothing(4);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_5() {
+    repack_keeps_a_checked_page_or_changes_nothing(5);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_5() {
+    insert_keeps_a_checked_page_or_changes_nothing(5);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_6() {
+    repack_keeps_a_checked_page_or_changes_nothing(6);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_6() {
+    insert_keeps_a_checked_page_or_changes_nothing(6);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_7() {
+    repack_keeps_a_checked_page_or_changes_nothing(7);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_7() {
+    insert_keeps_a_checked_page_or_changes_nothing(7);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn repack_8() {
+    repack_keeps_a_checked_page_or_changes_nothing(8);
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn insert_8() {
+    insert_keeps_a_checked_page_or_changes_nothing(8);
 }
 
 const _: () = assert!(

@@ -2474,7 +2474,8 @@
         "Ring::after_frame",
         "Ring::room",
         "Ring::plan_frame",
-        "stream_entry"
+        "stream_entry",
+        "overlap"
       ],
       "result_policy": {},
       "callers": {
@@ -2517,6 +2518,11 @@
           {
             "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::place(_1: &mut RingStore, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<u64, error::Error> [body:413d64fc493e5f5e]",
             "target": "Ring::plan_frame",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:2e92654637c1592a]",
+            "target": "overlap",
             "result": "model/caller-specific"
           },
           {
@@ -2587,6 +2593,11 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:2e92654637c1592a]",
+            "target": "overlap",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: (u64, u64)) -> std::result::Result<RingReader, error::Error> [body:6288b389688c5024]",
             "target": "Ring::within",
             "result": "model/caller-specific"
@@ -2619,7 +2630,8 @@
         "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid",
         "matrix_tiles::wal::ring_proofs::a_placed_frame_never_overwrites_a_kept_frame",
         "matrix_tiles::wal::ring_proofs::room_promised_by_a_checkpoint_is_room_placement_finds",
-        "matrix_tiles::wal::ring_proofs::a_streamed_entry_lies_inside_the_frame_body"
+        "matrix_tiles::wal::ring_proofs::a_streamed_entry_lies_inside_the_frame_body",
+        "matrix_tiles::wal::ring_proofs::a_read_through_the_frame_buffer_copies_exactly_the_overlap"
       ]
     },
     "matrix-tile-geometry": {
@@ -2737,7 +2749,9 @@
         "search_entries",
         "read_varint",
         "write_varint",
-        "local_len"
+        "local_len",
+        "kind_of",
+        "repack"
       ],
       "result_policy": {},
       "callers": {
@@ -2763,13 +2777,23 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:615aea369957694c]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:615aea369957694c]",
             "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "insert(_1: &mut [u8], _2: usize, _3: &[u8], _4: &mut [u8]) -> std::result::Result<bool, PageError> [body:1e6d93d07287dde9]",
+            "target": "repack",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "node::kind(_1: &[u8]) -> std::result::Result<Kind, PageError> [body:7bc32d05c0104d49]",
+            "target": "kind_of",
             "result": "model/caller-specific"
           },
           {
@@ -2815,13 +2839,23 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:615aea369957694c]",
             "target": "read_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:615aea369957694c]",
             "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "insert(_1: &mut [u8], _2: usize, _3: &[u8], _4: &mut [u8]) -> std::result::Result<bool, PageError> [body:1e6d93d07287dde9]",
+            "target": "repack",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "node::kind(_1: &[u8]) -> std::result::Result<Kind, PageError> [body:7bc32d05c0104d49]",
+            "target": "kind_of",
             "result": "model/caller-specific"
           },
           {
@@ -2850,7 +2884,130 @@
         "keyed_heap::heap_proofs::the_entry_search_finds_the_insertion_point",
         "keyed_heap::heap_proofs::a_separator_lies_between_its_keys",
         "keyed_heap::heap_proofs::varints_round_trip",
-        "keyed_heap::heap_proofs::a_cell_keeps_what_fits_and_the_rest_fills_overflow_pages"
+        "keyed_heap::heap_proofs::a_cell_keeps_what_fits_and_the_rest_fills_overflow_pages",
+        "keyed_heap::heap_proofs::a_page_that_passes_its_check_keeps_every_entry_inside_it",
+        "keyed_heap::heap_proofs::repack_0",
+        "keyed_heap::heap_proofs::insert_0",
+        "keyed_heap::heap_proofs::repack_1",
+        "keyed_heap::heap_proofs::insert_1",
+        "keyed_heap::heap_proofs::repack_2",
+        "keyed_heap::heap_proofs::insert_2",
+        "keyed_heap::heap_proofs::repack_3",
+        "keyed_heap::heap_proofs::insert_3",
+        "keyed_heap::heap_proofs::repack_4",
+        "keyed_heap::heap_proofs::insert_4",
+        "keyed_heap::heap_proofs::repack_5",
+        "keyed_heap::heap_proofs::insert_5",
+        "keyed_heap::heap_proofs::repack_6",
+        "keyed_heap::heap_proofs::insert_6",
+        "keyed_heap::heap_proofs::repack_7",
+        "keyed_heap::heap_proofs::insert_7",
+        "keyed_heap::heap_proofs::repack_8",
+        "keyed_heap::heap_proofs::insert_8"
+      ]
+    },
+    "published-end": {
+      "symbols": [
+        "encode_slot",
+        "decode_slot",
+        "choose",
+        "visible_len",
+        "known_len",
+        "slot_of_seq"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "primary_file::<impl at crates/varlit-core/src/primary_file.rs>::len(_1: &PrimaryFile) -> std::result::Result<u64, std::io::Error> [body:b6e7b6b4d74109f6]",
+            "target": "known_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "primary_file::<impl at crates/varlit-core/src/primary_file.rs>::len(_1: &PrimaryFile) -> std::result::Result<u64, std::io::Error> [body:b6e7b6b4d74109f6]",
+            "target": "visible_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "published_end::read(_1: &[u8; 48]) -> Published [body:3bcffbcdf8acdf33]",
+            "target": "choose",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "published_end::read(_1: &[u8; 48]) -> Published [body:3bcffbcdf8acdf33]",
+            "target": "decode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "published_end::read(_1: &[u8; 48]) -> Published [body:3bcffbcdf8acdf33]",
+            "target": "decode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_file::<impl at crates/varlit-core/src/file/record_file.rs>::adopt_published_end(_1: &mut record_file::RecordFile, _2: u64) -> std::result::Result<(), error::Error> [body:3396838e4a96eef2]",
+            "target": "decode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_file::<impl at crates/varlit-core/src/file/record_file.rs>::publish_end(_1: &mut record_file::RecordFile, _2: u64) -> std::result::Result<(), error::Error> [body:11b33b96af9d3686]",
+            "target": "encode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_file::<impl at crates/varlit-core/src/file/record_file.rs>::publish_end(_1: &mut record_file::RecordFile, _2: u64) -> std::result::Result<(), error::Error> [body:11b33b96af9d3686]",
+            "target": "slot_of_seq",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "primary_file::<impl at crates/varlit-core/src/primary_file.rs>::len(_1: &PrimaryFile) -> std::result::Result<u64, std::io::Error> [body:b6e7b6b4d74109f6]",
+            "target": "known_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "primary_file::<impl at crates/varlit-core/src/primary_file.rs>::len(_1: &PrimaryFile) -> std::result::Result<u64, std::io::Error> [body:b6e7b6b4d74109f6]",
+            "target": "visible_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "published_end::read(_1: &[u8; 48]) -> Published [body:3bcffbcdf8acdf33]",
+            "target": "choose",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "published_end::read(_1: &[u8; 48]) -> Published [body:3bcffbcdf8acdf33]",
+            "target": "decode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "published_end::read(_1: &[u8; 48]) -> Published [body:3bcffbcdf8acdf33]",
+            "target": "decode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_file::<impl at crates/varlit-core/src/file/record_file.rs>::adopt_published_end(_1: &mut record_file::RecordFile, _2: u64) -> std::result::Result<(), error::Error> [body:3396838e4a96eef2]",
+            "target": "decode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_file::<impl at crates/varlit-core/src/file/record_file.rs>::publish_end(_1: &mut record_file::RecordFile, _2: u64) -> std::result::Result<(), error::Error> [body:11b33b96af9d3686]",
+            "target": "encode_slot",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_file::<impl at crates/varlit-core/src/file/record_file.rs>::publish_end(_1: &mut record_file::RecordFile, _2: u64) -> std::result::Result<(), error::Error> [body:11b33b96af9d3686]",
+            "target": "slot_of_seq",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "published_end::proofs::a_slot_round_trips",
+        "published_end::proofs::the_visible_length_is_bounded_by_the_file_and_the_published_end",
+        "published_end::proofs::a_torn_slot_write_falls_back_to_the_previous_end",
+        "published_end::proofs::the_newest_valid_slot_decides",
+        "published_end::proofs::a_known_length_is_what_measuring_would_give"
       ]
     }
   },

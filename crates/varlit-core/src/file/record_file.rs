@@ -166,7 +166,7 @@ impl RecordFile {
     /// after the newest, through the header-region gate. Nothing when the
     /// handle owns no `VPUB` block or `end` is already published.
     pub(super) fn publish_end(&mut self, end: u64) -> Result<()> {
-        use crate::published_end::{ACTIVE, SLOT_LEN, Slot, encode_slot, slot_index};
+        use crate::published_end::{ACTIVE, SLOT_LEN, Slot, encode_slot, slot_of_seq};
         let Some(mut published) = self.file.writer_published() else {
             return Ok(());
         };
@@ -184,7 +184,7 @@ impl RecordFile {
             seq,
             flags: ACTIVE,
         });
-        let at = published.slots_at + (slot_index(seq) * SLOT_LEN) as u64;
+        let at = published.slots_at + (slot_of_seq(seq) * SLOT_LEN) as u64;
         self.overwrite_header_region(at, &bytes)?;
         published.seq = seq;
         published.end = Some(end);

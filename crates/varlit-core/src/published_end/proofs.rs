@@ -77,7 +77,7 @@ fn a_torn_slot_write_falls_back_to_the_previous_end() {
         seq: previous.seq + 1,
         flags: ACTIVE,
     };
-    let new_first = slot_index(written.seq) == 0;
+    let new_first = slot_of_seq(written.seq) == 0;
     let (whole, torn) = if new_first {
         (
             choose(Some(written), Some(previous), false),
