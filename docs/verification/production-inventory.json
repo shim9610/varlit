@@ -422,7 +422,7 @@
     "crates/varlit-core/src/keyed_heap/heap.rs": "799e59546dc3dcb0",
     "crates/varlit-core/src/keyed_heap/lookup.rs": "f12ba0b35fca620e",
     "crates/varlit-core/src/keyed_heap/mod.rs": "bee855e10ac16f44",
-    "crates/varlit-core/src/keyed_heap/node.rs": "91627676bdc8f560",
+    "crates/varlit-core/src/keyed_heap/node.rs": "3a3490eb79e07252",
     "crates/varlit-core/src/keyed_heap/nodes.rs": "6f1644db0c9b0b16",
     "crates/varlit-core/src/keyed_heap/reader.rs": "5aa37eca7a8324a0",
     "crates/varlit-core/src/keyed_heap/tests.rs": "8c641b83a2a9601c",

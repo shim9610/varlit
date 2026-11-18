@@ -365,10 +365,13 @@ mod tests {
         let mut page = vec![0u8; NODE_BYTES];
         let mut scratch = vec![0u8; NODE_BYTES];
         let mut state = 0x9e37_79b9_7f4a_7c15u64;
-        for round in 0..20 {
+        // Under Miri (the big-endian run checks the page layout's byte order)
+        // a few hundred steps of each size class; natively, many more.
+        let (rounds, steps) = if cfg!(miri) { (2, 200) } else { (20, 3000) };
+        for round in 0..rounds {
             init(&mut page, Kind::Leaf);
             let mut model: Vec<Vec<u8>> = Vec::new();
-            for step in 0..3000 {
+            for step in 0..steps {
                 let roll = rng(&mut state) % 10;
                 let len = (rng(&mut state) % if round % 2 == 0 { 64 } else { 3000 }) as usize;
                 let body: Vec<u8> = (0..len).map(|i| (i as u64 ^ step) as u8).collect();
