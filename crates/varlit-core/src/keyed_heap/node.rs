@@ -37,7 +37,7 @@ pub(crate) fn init(page: &mut [u8], kind: Kind) {
         Kind::Interior => INTERIOR_MAGIC,
     });
     set_u16(page, HEADER_AT + 4, 0);
-    set_high(page, NODE_BYTES);
+    set_high(page, page.len());
     set_u16(page, HEADER_AT + 8, 0);
 }
 
@@ -45,9 +45,9 @@ fn u16_at(page: &[u8], at: usize) -> usize {
     usize::from(u16::from_le_bytes([page[at], page[at + 1]]))
 }
 
-/// Every value a page stores in 16 bits is below `NODE_BYTES`.
+/// Every value a page stores in 16 bits is below the page's length.
 fn set_u16(page: &mut [u8], at: usize, value: usize) {
-    debug_assert!(value < NODE_BYTES);
+    debug_assert!(value < page.len());
     #[allow(
         clippy::cast_possible_truncation,
         reason = "offsets, lengths and counts are below the 64 KiB page"
@@ -56,10 +56,10 @@ fn set_u16(page: &mut [u8], at: usize, value: usize) {
     page[at..at + 2].copy_from_slice(&value.to_le_bytes());
 }
 
-/// The start of the bodies; `NODE_BYTES` is stored as 0.
+/// The start of the bodies; the page's end is stored as 0.
 fn high(page: &[u8]) -> usize {
     match u16_at(page, HEADER_AT + 6) {
-        0 => NODE_BYTES,
+        0 => page.len(),
         high => high,
     }
 }
@@ -68,13 +68,23 @@ fn set_high(page: &mut [u8], high: usize) {
     set_u16(
         page,
         HEADER_AT + 6,
-        if high == NODE_BYTES { 0 } else { high },
+        if high == page.len() { 0 } else { high },
     );
 }
 
 /// Checks a page's header and returns its kind.
 pub(crate) fn kind(page: &[u8]) -> Result<Kind> {
     if page.len() != NODE_BYTES {
+        return Err(corrupt("keyed tree page"));
+    }
+    kind_of(page)
+}
+
+/// [`kind`] for a page of any length up to 64 KiB. Every function here
+/// bounds itself by the page's length, which is `NODE_BYTES` for every page
+/// the tree reads; the proofs use smaller pages of the same layout.
+pub(crate) fn kind_of(page: &[u8]) -> Result<Kind> {
+    if page.len() <= ENTRIES_AT || page.len() > usize::from(u16::MAX) {
         return Err(corrupt("keyed tree page"));
     }
     let kind = match &page[HEADER_AT..HEADER_AT + 4] {
@@ -86,7 +96,7 @@ pub(crate) fn kind(page: &[u8]) -> Result<Kind> {
     // bodies past its end; every later offset is derived from it.
     let high = high(page);
     let low = ENTRIES_AT + count(page) * ENTRY_LEN;
-    if high > NODE_BYTES || low > high || garbage(page) > NODE_BYTES - high {
+    if high > page.len() || low > high || garbage(page) > page.len() - high {
         return Err(corrupt("keyed tree page"));
     }
     Ok(kind)
@@ -130,9 +140,9 @@ pub(crate) fn entry(page: &[u8], index: usize) -> Result<(usize, usize)> {
     let len = u16_at(page, at + 2);
     // An empty body has no place; its offset is stored as 0.
     if len == 0 {
-        return Ok((NODE_BYTES, 0));
+        return Ok((page.len(), 0));
     }
-    if offset < high(page) || offset + len > NODE_BYTES {
+    if offset < high(page) || offset + len > page.len() {
         return Err(corrupt("keyed tree entry"));
     }
     Ok((offset, len))
@@ -162,7 +172,7 @@ pub(crate) fn insert(
         repack(page, scratch)?;
         // The garbage count promised this room; a damaged one may not have.
         if cost(body.len()) > gap(page) {
-            page[..NODE_BYTES].copy_from_slice(&scratch[..NODE_BYTES]);
+            page.copy_from_slice(&scratch[..page.len()]);
             return Err(corrupt("keyed tree page"));
         }
     }
@@ -183,7 +193,7 @@ pub(crate) fn remove(page: &mut [u8], index: usize) -> Result<()> {
     let n = count(page);
     let at = ENTRIES_AT + index * ENTRY_LEN;
     let garbage = garbage(page) + len;
-    if len != 0 && offset != high(page) && garbage > NODE_BYTES - high(page) {
+    if len != 0 && offset != high(page) && garbage > page.len() - high(page) {
         return Err(corrupt("keyed tree page"));
     }
     page.copy_within(at + ENTRY_LEN..ENTRIES_AT + n * ENTRY_LEN, at);
@@ -227,14 +237,15 @@ pub(crate) fn replace(
 /// are an error, and the page is restored.
 pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) -> Result<()> {
     let n = count(page);
-    scratch[..NODE_BYTES].copy_from_slice(&page[..NODE_BYTES]);
+    let size = page.len();
+    scratch[..size].copy_from_slice(page);
     let low = ENTRIES_AT + n * ENTRY_LEN;
-    let mut high = NODE_BYTES;
+    let mut high = size;
     for index in 0..n {
         let (offset, len) = match entry(scratch, index) {
             Ok(found) => found,
             Err(error) => {
-                page[..NODE_BYTES].copy_from_slice(&scratch[..NODE_BYTES]);
+                page.copy_from_slice(&scratch[..page.len()]);
                 return Err(error);
             }
         };
@@ -242,7 +253,7 @@ pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) -> Result<()> {
             continue;
         }
         let Some(next) = high.checked_sub(len).filter(|next| *next >= low) else {
-            page[..NODE_BYTES].copy_from_slice(&scratch[..NODE_BYTES]);
+            page.copy_from_slice(&scratch[..page.len()]);
             return Err(corrupt("keyed tree page"));
         };
         high = next;

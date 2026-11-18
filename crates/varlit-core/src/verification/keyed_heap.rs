@@ -84,33 +84,38 @@ fn a_cell_keeps_what_fits_and_the_rest_fills_overflow_pages() {
     }
 }
 
-/// A page read from disk: any bytes whatsoever behind a header with a
-/// symbolic count (at most `max_count`), `high` and garbage.
-fn any_page(max_count: usize) -> [u8; node::NODE_BYTES] {
-    let mut page: [u8; node::NODE_BYTES] = kani::any();
+/// The page size the page harnesses use: the same layout and the same code
+/// as the 4096-byte pages the tree reads (every page function bounds itself
+/// by the page's length), small enough for the solver.
+const PAGE: usize = 64;
+
+/// A page read from disk: any bytes whatsoever, with a count of at most
+/// `max_count` entries.
+fn any_page(max_count: usize) -> [u8; PAGE] {
+    let page: [u8; PAGE] = kani::any();
     let count = usize::from(u16::from_le_bytes([page[20], page[21]]));
     kani::assume(count <= max_count);
     page
 }
 
-/// Whatever bytes a page holds, once it passes [`node::kind`] its body area
-/// lies inside the page, and every entry it yields lies inside the body
-/// area: no later read or write derived from them can leave the page.
+/// Whatever bytes a page holds, once it passes its check its body area lies
+/// inside the page, and every entry it yields lies inside the body area: no
+/// later read or write derived from them can leave the page.
 #[kani::proof]
 fn a_page_that_passes_its_check_keeps_every_entry_inside_it() {
     let page = any_page(usize::MAX);
-    if node::kind(&page).is_err() {
+    if node::kind_of(&page).is_err() {
         return;
     }
     let low = node::ENTRIES_AT + node::count(&page) * 4;
-    assert!(low + node::gap(&page) <= node::NODE_BYTES);
-    assert!(node::free(&page) <= node::CAPACITY);
+    assert!(low + node::gap(&page) <= PAGE);
+    assert!(node::free(&page) <= PAGE - node::ENTRIES_AT);
     let index: usize = kani::any();
     if let Ok((offset, len)) = node::entry(&page, index) {
         assert!(index < node::count(&page));
         if len != 0 {
             assert!(offset >= low + node::gap(&page));
-            assert!(offset + len <= node::NODE_BYTES);
+            assert!(offset + len <= PAGE);
         }
     }
 }
@@ -119,16 +124,16 @@ fn a_page_that_passes_its_check_keeps_every_entry_inside_it() {
 /// either keeps the page checked with its entries and no garbage, or fails
 /// and leaves the page exactly as it was.
 #[kani::proof]
-#[kani::unwind(4)]
+#[kani::unwind(70)]
 fn a_repack_keeps_a_checked_page_or_changes_nothing() {
     let mut page = any_page(2);
-    kani::assume(node::kind(&page).is_ok());
+    kani::assume(node::kind_of(&page).is_ok());
     let before = page;
     let count = node::count(&page);
-    let mut scratch = [0u8; node::NODE_BYTES];
+    let mut scratch = [0u8; PAGE];
     match node::repack(&mut page, &mut scratch) {
         Ok(()) => {
-            assert!(node::kind(&page).is_ok());
+            assert!(node::kind_of(&page).is_ok());
             assert_eq!(node::count(&page), count);
             assert_eq!(node::garbage(&page), 0);
         }
@@ -140,20 +145,20 @@ fn a_repack_keeps_a_checked_page_or_changes_nothing() {
 /// body that goes in becomes entry `index` with its length, one more entry,
 /// and the page still passes its check; otherwise the page is unchanged.
 #[kani::proof]
-#[kani::unwind(4)]
+#[kani::unwind(70)]
 fn an_insert_keeps_a_checked_page_or_changes_nothing() {
     let mut page = any_page(2);
-    kani::assume(node::kind(&page).is_ok());
+    kani::assume(node::kind_of(&page).is_ok());
     let before = page;
     let count = node::count(&page);
     let body: [u8; 4] = kani::any();
     let len: usize = kani::any();
     kani::assume(len <= 4);
     let index: usize = kani::any();
-    let mut scratch = [0u8; node::NODE_BYTES];
+    let mut scratch = [0u8; PAGE];
     match node::insert(&mut page, index, &body[..len], &mut scratch) {
         Ok(true) => {
-            assert!(node::kind(&page).is_ok());
+            assert!(node::kind_of(&page).is_ok());
             assert_eq!(node::count(&page), count + 1);
             assert!(matches!(node::entry(&page, index), Ok((_, found)) if found == len));
         }
