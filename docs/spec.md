@@ -550,8 +550,11 @@ and `keyed_offset_chain`.
   its generation in memory and empties them when it follows. A lookup whose
   pages all come from there does not read the ring header: its answer is
   its generation's.
-- `sync` publishes the staged changes as one generation; a writer that stops
-  without one publishes nothing.
+- `sync` publishes the changes staged since the last publication as one
+  generation. A writer that stops without one publishes nothing past the last
+  round it ended: a put or remove that ends a round publishes everything
+  staged up to and including it, so changes larger than a round reach readers
+  (and survive a reopen) in round-sized atomic steps before the `sync`.
 - Pages freed by deleting most keys stay in the file for new keys to take;
   the file is not shrunk (rebuild it to reclaim them).
 

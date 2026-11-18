@@ -1040,8 +1040,11 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
   reader's range is one snapshot; `visit` must not read the same handle's
   keyed storage (`Error::KeyedStorageBusy`).
 - **Visibility.** A writer sees its own puts and removes at once. Readers see
-  them after `sync`, which publishes them as one generation through the
-  file's write-ahead ring; a writer dropped without `sync` publishes nothing.
+  them once they are published through the file's write-ahead ring: by
+  `sync`, as one generation, or earlier by a put or remove that ends a round
+  (one that filled the change budget or the ring), which publishes everything
+  staged up to and including it. Each publication is atomic; a writer dropped
+  without `sync` publishes nothing past the last round it ended.
   A reader keeps its generation until `follow`; one the ring has moved past
   gets `MatrixSnapshotExpired` and must `follow`.
 - **Space.** Records live in a B-tree of 4 KiB pages, one tree per keyed

@@ -5,7 +5,10 @@
 //! The heap's metadata is the first record of the log. A writable handle
 //! opens the heap as its writer; a read-only handle as a reader of the
 //! generation published when it first reads. What a writer puts is visible
-//! to itself at once and to readers once [`VarlitFile::sync`] publishes it.
+//! to itself at once and to readers once it is published: by
+//! [`VarlitFile::sync`], or earlier by a put or remove that ends a round
+//! (one that filled the change budget or the ring), which publishes
+//! everything staged up to and including it.
 
 use super::matrix_tiles_io::{FileTiles, FileTilesRead};
 use super::*;
@@ -115,7 +118,8 @@ impl VarlitFile {
     /// Stores `block` as the one record of its key, replacing the one there
     /// is. Space the old value used is reused; the file does not grow with
     /// the number of updates. Visible to this handle at once and to readers
-    /// after [`Self::sync`].
+    /// after [`Self::sync`], or after the round it ends is published (see the
+    /// module documentation).
     pub fn put_keyed<T>(&mut self, block: &T) -> Result<()>
     where
         T: VarlitKeyedBlock,

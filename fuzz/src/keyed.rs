@@ -69,10 +69,13 @@ pub fn run(data: &[u8]) {
     let spec = FuzzKeyedFormat::spec();
     let mut writer = varlit::VarlitFile::create(spec, &path).expect("create");
     let mut reader: Option<varlit::VarlitFile> = None;
-    // What the writer sees, and what was last synced (what a reader that
-    // follows, or a reopened writer, sees).
+    // What the writer sees, and what was last published (what a reader that
+    // follows, or a reopened writer, sees). A sync publishes; so does a put
+    // or remove that ends a round (one that filled the change budget or the
+    // ring), with everything staged up to and including it.
     let mut staged = Model::new();
     let mut synced = Model::new();
+    let mut generation = writer.keyed_storage_stats().expect("stats").generation;
     let keys = 24u16;
     for op in data.as_chunks::<2>().0 {
         let key = u16::from(op[1]) % keys;
@@ -102,8 +105,8 @@ pub fn run(data: &[u8]) {
                 synced = staged.clone();
             }
             5 => {
-                // Unsynced changes are not published: a reopened writer sees
-                // the last sync.
+                // Changes since the last publication are not kept: a
+                // reopened writer sees the last sync or round.
                 drop(writer);
                 writer = varlit::VarlitFile::open(spec, &path).expect("reopen");
                 staged = synced.clone();
@@ -120,6 +123,11 @@ pub fn run(data: &[u8]) {
                 }
             },
             _ => check(&writer, &staged, keys),
+        }
+        let now = writer.keyed_storage_stats().expect("stats").generation;
+        if now != generation {
+            synced = staged.clone();
+            generation = now;
         }
     }
     check(&writer, &staged, keys);

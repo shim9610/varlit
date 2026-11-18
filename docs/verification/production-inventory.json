@@ -358,7 +358,7 @@
     }
   },
   "functions": {
-    "catalogue": "f9ad68eb079a8868",
+    "catalogue": "3c88f87dc73a262e",
     "count": 3596
   },
   "schema": 1,
@@ -396,7 +396,7 @@
     "crates/varlit-core/src/file/follow.rs": "1ec2eaceade775af",
     "crates/varlit-core/src/file/header_codec.rs": "e742ea2c3d416455",
     "crates/varlit-core/src/file/header_slots.rs": "9d9bf42f2143300b",
-    "crates/varlit-core/src/file/keyed_access.rs": "f0ee64ee1f46971b",
+    "crates/varlit-core/src/file/keyed_access.rs": "2945d65641646932",
     "crates/varlit-core/src/file/lifecycle.rs": "7bce1bd1dd428245",
     "crates/varlit-core/src/file/locks.rs": "da4f9fe3196bff8a",
     "crates/varlit-core/src/file/mapped_access.rs": "4cc708e2eb033758",
