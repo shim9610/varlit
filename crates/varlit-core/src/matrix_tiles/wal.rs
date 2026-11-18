@@ -736,6 +736,35 @@ pub(crate) fn index_frame(
     out
 }
 
+/// Where a read of `len` bytes at `offset` overlaps `held` bytes buffered
+/// for `held_at`: `(at in the read, at in the buffer, length)`, or `None`
+/// when they do not overlap (or a range's end would not fit a `u64`). The
+/// writer serves its own reads of an open frame's buffered bytes with it.
+pub(crate) fn overlap(
+    offset: u64,
+    len: usize,
+    held_at: u64,
+    held: usize,
+) -> Option<(usize, usize, usize)> {
+    let end = offset.checked_add(len as u64)?;
+    let held_end = held_at.checked_add(held as u64)?;
+    let from = offset.max(held_at);
+    let to = end.min(held_end);
+    if from >= to {
+        return None;
+    }
+    // Each difference is at most `len` or `held`, both `usize`.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "each difference is at most `len` or `held`, which are `usize`"
+    )]
+    Some((
+        (from - offset) as usize,
+        (from - held_at) as usize,
+        (to - from) as usize,
+    ))
+}
+
 #[cfg(kani)]
 #[path = "../verification/matrix_ring.rs"]
 mod ring_proofs;

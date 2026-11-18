@@ -4,7 +4,7 @@
 //! are outside these harnesses.
 use super::{
     ENTRY_HEADER, FRAME_HEADER, FRAMES_AT, FramePlan, HEADER_SLOT, MAX_RING_BYTES, MIN_RING, Ring,
-    RingHeader, stream_entry,
+    RingHeader, overlap, stream_entry,
 };
 
 fn any_ring() -> Ring {
@@ -219,5 +219,34 @@ fn a_streamed_entry_lies_inside_the_frame_body() {
             assert_eq!(target, stored);
         }
         None => assert!(u64::from(len) > remaining),
+    }
+}
+
+/// The writer reads what it staged through the bytes it still buffers: for
+/// any read and any buffered range, the overlap it copies lies inside both,
+/// names the same file offsets in each, and is exactly their intersection,
+/// so every byte the buffer holds for the read is served from it and no
+/// other byte is.
+#[kani::proof]
+fn a_read_through_the_frame_buffer_copies_exactly_the_overlap() {
+    let offset: u64 = kani::any();
+    let len: usize = kani::any();
+    let held_at: u64 = kani::any();
+    let held: usize = kani::any();
+    let fits =
+        offset.checked_add(len as u64).is_some() && held_at.checked_add(held as u64).is_some();
+    let byte: u64 = kani::any();
+    let in_read = byte >= offset && byte - offset < len as u64;
+    let in_held = byte >= held_at && byte - held_at < held as u64;
+    match overlap(offset, len, held_at, held) {
+        Some((dst, src, n)) => {
+            assert!(fits && n > 0);
+            assert!(dst + n <= len && src + n <= held);
+            assert_eq!(offset + dst as u64, held_at + src as u64);
+            let start = offset + dst as u64;
+            let covered = byte >= start && byte - start < n as u64;
+            assert_eq!(covered, in_read && in_held);
+        }
+        None => assert!(!fits || !(in_read && in_held)),
     }
 }

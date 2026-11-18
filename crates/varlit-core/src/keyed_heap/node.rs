@@ -82,8 +82,11 @@ pub(crate) fn kind(page: &[u8]) -> Result<Kind> {
         magic if magic == INTERIOR_MAGIC => Kind::Interior,
         _ => return Err(corrupt("keyed tree page")),
     };
+    // `high` is stored in 16 bits, so a damaged page can name a start of
+    // bodies past its end; every later offset is derived from it.
+    let high = high(page);
     let low = ENTRIES_AT + count(page) * ENTRY_LEN;
-    if low > high(page) || garbage(page) > NODE_BYTES - high(page) {
+    if high > NODE_BYTES || low > high || garbage(page) > NODE_BYTES - high {
         return Err(corrupt("keyed tree page"));
     }
     Ok(kind)
@@ -142,14 +145,26 @@ pub(crate) fn body(page: &[u8], index: usize) -> Result<&[u8]> {
 }
 
 /// Inserts `body` as entry `index`, repacking first when the gap is too
-/// small. `false`, changing nothing, when the page cannot hold it.
-pub(crate) fn insert(page: &mut [u8], index: usize, body: &[u8], scratch: &mut [u8]) -> bool {
+/// small. `Ok(false)`, changing nothing, when the page cannot hold it. The
+/// page must have passed [`kind`]; an entry or a garbage count that does not
+/// add up is an error, and the page is left as it was.
+pub(crate) fn insert(
+    page: &mut [u8],
+    index: usize,
+    body: &[u8],
+    scratch: &mut [u8],
+) -> Result<bool> {
     let n = count(page);
     if index > n || cost(body.len()) > free(page) {
-        return false;
+        return Ok(false);
     }
     if cost(body.len()) > gap(page) {
-        repack(page, scratch);
+        repack(page, scratch)?;
+        // The garbage count promised this room; a damaged one may not have.
+        if cost(body.len()) > gap(page) {
+            page[..NODE_BYTES].copy_from_slice(&scratch[..NODE_BYTES]);
+            return Err(corrupt("keyed tree page"));
+        }
     }
     let offset = high(page) - body.len();
     page[offset..offset + body.len()].copy_from_slice(body);
@@ -159,7 +174,7 @@ pub(crate) fn insert(page: &mut [u8], index: usize, body: &[u8], scratch: &mut [
     set_u16(page, at, if body.is_empty() { 0 } else { offset });
     set_u16(page, at + 2, body.len());
     set_u16(page, HEADER_AT + 4, n + 1);
-    true
+    Ok(true)
 }
 
 /// Removes entry `index`; its body becomes garbage.
@@ -167,13 +182,17 @@ pub(crate) fn remove(page: &mut [u8], index: usize) -> Result<()> {
     let (offset, len) = entry(page, index)?;
     let n = count(page);
     let at = ENTRIES_AT + index * ENTRY_LEN;
+    let garbage = garbage(page) + len;
+    if len != 0 && offset != high(page) && garbage > NODE_BYTES - high(page) {
+        return Err(corrupt("keyed tree page"));
+    }
     page.copy_within(at + ENTRY_LEN..ENTRIES_AT + n * ENTRY_LEN, at);
     set_u16(page, HEADER_AT + 4, n - 1);
     if len == 0 {
     } else if offset == high(page) {
         set_high(page, offset + len);
     } else {
-        set_u16(page, HEADER_AT + 8, garbage(page) + len);
+        set_u16(page, HEADER_AT + 8, garbage);
     }
     Ok(())
 }
@@ -195,30 +214,44 @@ pub(crate) fn replace(
         return Ok(false);
     }
     remove(page, index)?;
-    let inserted = insert(page, index, body, scratch);
-    debug_assert!(inserted, "room was checked");
-    Ok(inserted)
+    if insert(page, index, body, scratch)? {
+        Ok(true)
+    } else {
+        Err(corrupt("keyed tree page"))
+    }
 }
 
 /// Moves every body to the end of the page, in entry order, and clears the
-/// garbage. `scratch` is a page-sized buffer.
-pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) {
+/// garbage. `scratch` is a page-sized buffer, left holding the page as it
+/// was. An entry outside the body area, or bodies that together overrun it,
+/// are an error, and the page is restored.
+pub(crate) fn repack(page: &mut [u8], scratch: &mut [u8]) -> Result<()> {
     let n = count(page);
     scratch[..NODE_BYTES].copy_from_slice(&page[..NODE_BYTES]);
+    let low = ENTRIES_AT + n * ENTRY_LEN;
     let mut high = NODE_BYTES;
     for index in 0..n {
-        let at = ENTRIES_AT + index * ENTRY_LEN;
-        let offset = u16_at(scratch, at);
-        let len = u16_at(scratch, at + 2);
+        let (offset, len) = match entry(scratch, index) {
+            Ok(found) => found,
+            Err(error) => {
+                page[..NODE_BYTES].copy_from_slice(&scratch[..NODE_BYTES]);
+                return Err(error);
+            }
+        };
         if len == 0 {
             continue;
         }
-        high -= len;
+        let Some(next) = high.checked_sub(len).filter(|next| *next >= low) else {
+            page[..NODE_BYTES].copy_from_slice(&scratch[..NODE_BYTES]);
+            return Err(corrupt("keyed tree page"));
+        };
+        high = next;
         page[high..high + len].copy_from_slice(&scratch[offset..offset + len]);
-        set_u16(page, at, high);
+        set_u16(page, ENTRIES_AT + index * ENTRY_LEN, high);
     }
     set_high(page, high);
     set_u16(page, HEADER_AT + 8, 0);
+    Ok(())
 }
 
 /// The first entry for which `probe` is not `Less`: the insertion point of a
@@ -317,7 +350,7 @@ mod tests {
                     let index = (rng(&mut state) % (model.len() as u64 + 1)) as usize;
                     let fits =
                         cost(len) <= CAPACITY - model.iter().map(|b| cost(b.len())).sum::<usize>();
-                    assert_eq!(insert(&mut page, index, &body, &mut scratch), fits);
+                    assert_eq!(insert(&mut page, index, &body, &mut scratch).unwrap(), fits);
                     if fits {
                         model.insert(index, body);
                     }
@@ -392,10 +425,43 @@ mod tests {
         assert!(kind(&page).is_err());
         init(&mut page, Kind::Interior);
         let mut scratch = vec![0u8; NODE_BYTES];
-        assert!(insert(&mut page, 0, b"abc", &mut scratch));
+        assert!(insert(&mut page, 0, b"abc", &mut scratch).unwrap());
         page[ENTRIES_AT] = 0;
         page[ENTRIES_AT + 1] = 0;
         assert!(entry(&page, 0).is_err());
         assert!(entry(&page, 1).is_err());
+    }
+
+    /// A start of bodies past the page's end used to pass the check (the
+    /// garbage bound wrapped in release builds and panicked in debug ones),
+    /// and an insert into such a page then indexed past it.
+    #[test]
+    fn a_start_of_bodies_past_the_page_is_an_error() {
+        let mut page = vec![0u8; NODE_BYTES];
+        init(&mut page, Kind::Leaf);
+        page[HEADER_AT + 6..HEADER_AT + 8].copy_from_slice(&5000u16.to_le_bytes());
+        assert!(kind(&page).is_err());
+    }
+
+    /// Bodies whose lengths together overrun the page fail the repack an
+    /// insert needs, and the page is left as it was rather than written
+    /// out of bounds.
+    #[test]
+    fn an_insert_into_a_page_whose_bodies_overrun_it_changes_nothing() {
+        let mut page = vec![0u8; NODE_BYTES];
+        init(&mut page, Kind::Leaf);
+        let mut scratch = vec![0u8; NODE_BYTES];
+        assert!(insert(&mut page, 0, &[1; 2000], &mut scratch).unwrap());
+        assert!(insert(&mut page, 1, &[2; 2000], &mut scratch).unwrap());
+        // Both entries now claim the same 2000 bytes plus more, and the
+        // garbage count claims room that is not there.
+        let first = u16_at(&page, ENTRIES_AT);
+        set_u16(&mut page, ENTRIES_AT + 4, first);
+        set_u16(&mut page, ENTRIES_AT + 6, NODE_BYTES - first);
+        set_u16(&mut page, HEADER_AT + 8, 1000);
+        assert!(kind(&page).is_ok());
+        let before = page.clone();
+        assert!(insert(&mut page, 2, &[3; 100], &mut scratch).is_err());
+        assert_eq!(page, before);
     }
 }

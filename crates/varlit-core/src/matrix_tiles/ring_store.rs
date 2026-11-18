@@ -356,14 +356,7 @@ struct Buffered<'a> {
 impl TileSource for Buffered<'_> {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
         self.file.read_at(offset, buf)?;
-        let end = offset + buf.len() as u64;
-        let held_end = self.at + self.bytes.len() as u64;
-        let from = offset.max(self.at);
-        let to = end.min(held_end);
-        if from < to {
-            let n = crate::width::index(to - from)?;
-            let dst = crate::width::index(from - offset)?;
-            let src = crate::width::index(from - self.at)?;
+        if let Some((dst, src, n)) = wal::overlap(offset, buf.len(), self.at, self.bytes.len()) {
             buf[dst..dst + n].copy_from_slice(&self.bytes[src..src + n]);
         }
         Ok(())

@@ -792,7 +792,7 @@ impl KeyedHeap {
             } else if replace {
                 node::replace(page, index, cell, scratch)?
             } else {
-                node::insert(page, index, cell, scratch)
+                node::insert(page, index, cell, scratch)?
             }
         };
         if fitted {
@@ -831,16 +831,19 @@ impl KeyedHeap {
             let (left, right_page, scratch) = self.nodes.pair_with_scratch(left_slot, right_slot);
             for moved in m..n {
                 let (offset, len) = node::entry(left, moved)?;
-                let ok = node::insert(right_page, moved - m, &left[offset..offset + len], scratch);
-                debug_assert!(ok, "half a page fits a page");
+                // Half a page fits a page; a cell that does not is a damaged
+                // page, never a cell to drop.
+                if !node::insert(right_page, moved - m, &left[offset..offset + len], scratch)? {
+                    return Err(corrupt("keyed leaf split"));
+                }
             }
             for moved in (m..n).rev() {
                 node::remove(left, moved)?;
             }
             let fitted = if m < n && index <= m {
-                node::insert(left, index, cell, scratch)
+                node::insert(left, index, cell, scratch)?
             } else {
-                node::insert(right_page, index - m, cell, scratch)
+                node::insert(right_page, index - m, cell, scratch)?
             };
             if !fitted {
                 return Err(corrupt("keyed leaf split"));
@@ -918,7 +921,7 @@ impl KeyedHeap {
             let mut first = [0u8; 10];
             first[..8].copy_from_slice(&self.root().0.to_le_bytes());
             let (page, scratch) = self.nodes.with_scratch(slot);
-            if !(node::insert(page, 0, &first, scratch) && node::insert(page, 1, cell, scratch)) {
+            if !(node::insert(page, 0, &first, scratch)? && node::insert(page, 1, cell, scratch)?) {
                 return Err(corrupt("keyed tree root"));
             }
             let height = self.root().1 + 1;
@@ -930,7 +933,7 @@ impl KeyedHeap {
             .load(&mut self.ring, store, path.pages[level], &[])?;
         let limit = self.tuning.node_bytes;
         let (page, scratch) = self.nodes.with_scratch(slot);
-        if used(page) + node::cost(cell.len()) <= limit && node::insert(page, index, cell, scratch)
+        if used(page) + node::cost(cell.len()) <= limit && node::insert(page, index, cell, scratch)?
         {
             return Ok(());
         }
@@ -965,19 +968,21 @@ impl KeyedHeap {
                     up.bytes[..up.len].copy_from_slice(&entry[8..]);
                     let mut first = [0u8; 10];
                     first[..8].copy_from_slice(&entry[..8]);
-                    node::insert(right_page, 0, &first, scratch)
+                    node::insert(right_page, 0, &first, scratch)?
                 } else {
-                    node::insert(right_page, moved - m, entry, scratch)
+                    node::insert(right_page, moved - m, entry, scratch)?
                 };
-                debug_assert!(ok, "half a page fits a page");
+                if !ok {
+                    return Err(corrupt("keyed interior split"));
+                }
             }
             for moved in (m..n).rev() {
                 node::remove(left, moved)?;
             }
             let fitted = if index <= m {
-                node::insert(left, index, cell, scratch)
+                node::insert(left, index, cell, scratch)?
             } else {
-                node::insert(right_page, index - m, cell, scratch)
+                node::insert(right_page, index - m, cell, scratch)?
             };
             if !fitted {
                 return Err(corrupt("keyed interior split"));
@@ -1145,7 +1150,7 @@ impl KeyedHeap {
                 for moved in 0..node::count(right_page) {
                     let (offset, len) = node::entry(right_page, moved)?;
                     let end = node::count(left_page);
-                    if !node::insert(left_page, end, &right_page[offset..offset + len], scratch) {
+                    if !node::insert(left_page, end, &right_page[offset..offset + len], scratch)? {
                         return Err(corrupt("keyed leaf merge"));
                     }
                 }
