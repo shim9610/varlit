@@ -1792,7 +1792,7 @@ impl VarlitDecode for f64 {
 /// governs the encoding.
 #[cfg(feature = "zero-copy")]
 macro_rules! byteorder_codec {
-    ($($wrapper:ident => $plain:ty),+ $(,)?) => {$(
+    ($($wrapper:ident => $plain:ty, $read:ident, $from:expr);+ $(;)?) => {$(
         impl<O: zerocopy::byteorder::ByteOrder> VarlitEncode for zerocopy::byteorder::$wrapper<O> {
             const WIRE_TYPE: WireType = <$plain as VarlitEncode>::WIRE_TYPE;
             const SCHEMA_ID: u64 = <$plain as VarlitEncode>::SCHEMA_ID;
@@ -1812,9 +1812,12 @@ macro_rules! byteorder_codec {
             const WIRE_TYPE: WireType = <$plain as VarlitDecode>::WIRE_TYPE;
             const SCHEMA_ID: u64 = <$plain as VarlitDecode>::SCHEMA_ID;
 
+            // Read as the plain number's codec reads it, without dispatching
+            // through another codec.
             #[inline]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-                Ok(Self::new(<$plain as VarlitDecode>::decode_varlit(decoder)?))
+                let from: fn(_) -> $plain = $from;
+                Ok(Self::new(from(decoder.$read()?)))
             }
         }
 
@@ -1828,9 +1831,16 @@ macro_rules! byteorder_codec {
 }
 #[cfg(feature = "zero-copy")]
 byteorder_codec!(
-    U16 => u16, U32 => u32, U64 => u64, U128 => u128,
-    I16 => i16, I32 => i32, I64 => i64, I128 => i128,
-    F32 => f32, F64 => f64,
+    U16 => u16, read_u16, |v| v;
+    U32 => u32, read_u32, |v| v;
+    U64 => u64, read_u64, |v| v;
+    U128 => u128, read_u128, |v| v;
+    I16 => i16, read_u16, |v: u16| v as i16;
+    I32 => i32, read_u32, |v: u32| v as i32;
+    I64 => i64, read_u64, |v: u64| v as i64;
+    I128 => i128, read_u128, |v: u128| v as i128;
+    F32 => f32, read_u32, f32::from_bits;
+    F64 => f64, read_u64, f64::from_bits;
 );
 
 impl VarlitEncode for Vec<u8> {

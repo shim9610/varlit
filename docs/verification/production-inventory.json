@@ -369,7 +369,7 @@
     "crates/varlit-core/src/adapter.rs": "65ab8f87ed2d760e",
     "crates/varlit-core/src/anchor.rs": "03fd1c00ae7109c1",
     "crates/varlit-core/src/chunks.rs": "4b7fdc96d6089a10",
-    "crates/varlit-core/src/codec.rs": "b673d62aea642519",
+    "crates/varlit-core/src/codec.rs": "6bf07b4aeed09a68",
     "crates/varlit-core/src/codec/raw_fill.rs": "af9087198c42bcd2",
     "crates/varlit-core/src/collections.rs": "2799b69254dcc528",
     "crates/varlit-core/src/compression_buffers.rs": "5c701e03f12d4e92",
