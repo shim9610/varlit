@@ -416,7 +416,7 @@
     "crates/varlit-core/src/file/scan.rs": "ef411cccdafad280",
     "crates/varlit-core/src/file/tests.rs": "a975d73e3e0eea09",
     "crates/varlit-core/src/file/validation_tests.rs": "b70c8465eea9e364",
-    "crates/varlit-core/src/format.rs": "91c36423a071c5c5",
+    "crates/varlit-core/src/format.rs": "df5de32a2a9140e4",
     "crates/varlit-core/src/immediate.rs": "b456cf1a1fdc28f6",
     "crates/varlit-core/src/keyed_heap/cache.rs": "319526eac9387091",
     "crates/varlit-core/src/keyed_heap/heap.rs": "799e59546dc3dcb0",

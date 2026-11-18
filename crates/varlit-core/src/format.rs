@@ -675,6 +675,21 @@ pub enum Endian {
 }
 
 impl Endian {
+    /// The byte order of the machine the code is compiled for.
+    ///
+    /// A raw zero-copy type whose fields are plain integers or floats holds
+    /// them in this order, so it declares `RAW_ENDIAN = Endian::NATIVE`: its
+    /// views then open on a host whose order is the file's and are refused
+    /// with [`Error::ZeroCopyEndianMismatch`](crate::Error::ZeroCopyEndianMismatch)
+    /// on any other, instead of reading swapped values. A type built from
+    /// explicit-endian fields (for example `zerocopy::byteorder::U32<LE>`)
+    /// holds the same bytes on every host and declares that order instead.
+    pub const NATIVE: Self = if cfg!(target_endian = "little") {
+        Self::Little
+    } else {
+        Self::Big
+    };
+
     pub const fn to_byte(self) -> u8 {
         match self {
             Self::Little => 1,
