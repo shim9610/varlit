@@ -1,6 +1,8 @@
 //! Bounded keyed storage on native files: a key has one record, updated in
 //! place, and the file follows the live data rather than the number of
 //! updates (the growth the advisory describes).
+// The test formats declare `integrity: crc32`.
+#![cfg(feature = "integrity")]
 
 use varlit::*;
 
