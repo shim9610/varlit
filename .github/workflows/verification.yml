@@ -53,7 +53,9 @@ jobs:
   kani:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The full proof run alone takes 36-38 minutes on a 4-vCPU machine
+    # (120 harnesses), before the memory and mutation checks that follow it.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

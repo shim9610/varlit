@@ -68,9 +68,12 @@ pub fn publish_file_end(path: &Path) -> std::io::Result<()> {
     let end = bytes.len() as u64;
     publish(&mut bytes, end);
     let at = slots_at(&bytes).expect("the file carries a published end block");
-    use std::os::unix::fs::FileExt;
-    let file = std::fs::OpenOptions::new().write(true).open(path)?;
-    file.write_all_at(&bytes[at..at + 2 * SLOT_LEN], at as u64)?;
+    // Seek and write rather than a positional write: the tests run on
+    // Windows too.
+    use std::io::{Seek, SeekFrom, Write};
+    let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
+    file.seek(SeekFrom::Start(at as u64))?;
+    file.write_all(&bytes[at..at + 2 * SLOT_LEN])?;
     Ok(())
 }
 
