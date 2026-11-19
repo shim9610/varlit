@@ -906,37 +906,44 @@ impl Store {
             free: FreeRoot::default(),
         })
     }
-    pub fn apply(
+    /// `updates` must be unique and in ascending key order.
+    pub fn apply<'a>(
         &mut self,
         base: &Checkpoint,
-        updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
+        updates: impl ExactSizeIterator<Item = (&'a Vec<u8>, &'a [u8; LATEST_LEN])>,
     ) -> DiskIndexResult<Root> {
         if self.version == VERSION_REUSE {
             self.ensure_reuse()?;
             let reader = self.reader(base).tree;
-            let reuse = self.reuse.as_mut().expect("loaded above");
+            let reuse = self
+                .reuse
+                .as_mut()
+                .ok_or_else(|| corrupt("index reuse state missing after load"))?;
             let file = &self
                 .writer
                 .as_ref()
                 .ok_or_else(|| corrupt("index handle is read-only"))?
                 .0;
             return Ok(Root {
-                tree: tree::apply_reusing(
+                tree: tree::apply_with_limit(
                     file,
                     &reader,
                     base.root.tree,
                     updates,
-                    &mut reuse.alloc,
+                    None,
+                    Some(&mut reuse.alloc),
                 )?,
                 slots: base.root.slots,
             });
         }
         Ok(Root {
-            tree: tree::apply(
+            tree: tree::apply_with_limit(
                 self.writer()?,
                 &self.reader(base).tree,
                 base.root.tree,
                 updates,
+                None,
+                None,
             )?,
             slots: base.root.slots,
         })
@@ -956,10 +963,10 @@ impl Store {
 
     /// Applies updates to a tree no checkpoint of this file publishes yet:
     /// the rebuild of a compaction. Reads may reach anything written so far.
-    pub(super) fn apply_unpublished(
+    pub(super) fn apply_unpublished<'a>(
         &mut self,
         root: tree::Root,
-        updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
+        updates: impl ExactSizeIterator<Item = (&'a Vec<u8>, &'a [u8; LATEST_LEN])>,
         max_key: usize,
         cache_bytes: usize,
     ) -> DiskIndexResult<tree::Root> {
@@ -969,8 +976,8 @@ impl Store {
             .with_format(self.format());
         let file = self.writer()?.try_clone()?;
         match self.alloc()? {
-            Some(alloc) => tree::apply_reusing(&file, &reader, root, updates, alloc),
-            None => tree::apply(&file, &reader, root, updates),
+            Some(alloc) => tree::apply_with_limit(&file, &reader, root, updates, None, Some(alloc)),
+            None => tree::apply_with_limit(&file, &reader, root, updates, None, None),
         }
     }
 
@@ -1178,7 +1185,10 @@ impl Store {
             None
         };
         let file = self.writer()?.try_clone()?;
-        let reuse = self.reuse.as_mut().expect("loaded above");
+        let reuse = self
+            .reuse
+            .as_mut()
+            .ok_or_else(|| corrupt("index reuse state missing after load"))?;
         let seq = reuse.next_seq;
         let confirmed = matches!(publication, Publication::Confirmed);
         let mut free_pages = Vec::new();
@@ -1287,7 +1297,10 @@ impl Store {
                 Ok(())
             },
         )?;
-        let reuse = self.reuse.as_mut().expect("loaded above");
+        let reuse = self
+            .reuse
+            .as_mut()
+            .ok_or_else(|| corrupt("index reuse state missing after load"))?;
         reuse.next_seq = seq
             .checked_add(1)
             .ok_or(DiskIndexError::GenerationExhausted)?;

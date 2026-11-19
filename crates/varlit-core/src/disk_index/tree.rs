@@ -12,8 +12,9 @@
 //! allocator owner's decision; see `storage`.
 use super::{DiskIndexError, DiskIndexResult, LATEST_LEN};
 use crate::fallible::Arc;
-use std::cell::RefCell;
 use crate::fcoll::{self, PushBack, Put, Reserve};
+use std::cell::RefCell;
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::fs::File;
 
@@ -109,6 +110,26 @@ fn corrupt(message: &'static str) -> DiskIndexError {
 /// A page reached through an older root was reused by a later generation.
 /// No reader reaches a page through an older root (a stream reader reads its
 /// state once, at open), so this is a damaged sidecar.
+/// `N` bytes at `at`, or a damaged-page error. Keeps page parsing free of
+/// slice-to-array panics on runtime lengths.
+fn field<const N: usize>(bytes: &[u8], at: usize) -> DiskIndexResult<[u8; N]> {
+    bytes
+        .get(at..)
+        .and_then(|rest| rest.first_chunk::<N>())
+        .copied()
+        .ok_or_else(|| corrupt("truncated index field"))
+}
+
+/// A little-endian `u64` at a constant offset of an entry value. The bound is
+/// checked at compile time, so the fallback is never taken.
+fn value_u64<const AT: usize>(value: &[u8; LATEST_LEN]) -> u64 {
+    const { assert!(AT + 8 <= LATEST_LEN) };
+    value
+        .get(AT..)
+        .and_then(|rest| rest.first_chunk::<8>())
+        .map_or(0, |bytes| u64::from_le_bytes(*bytes))
+}
+
 pub(super) fn reclaimed_page() -> DiskIndexError {
     corrupt("index page was reused by a later generation")
 }
@@ -277,10 +298,10 @@ struct Entry {
 impl Entry {
     fn child(&self) -> Root {
         Root {
-            offset: u64::from_le_bytes(self.value[..8].try_into().unwrap()),
-            count: u64::from_le_bytes(self.value[8..16].try_into().unwrap()),
+            offset: value_u64::<0>(&self.value),
+            count: value_u64::<8>(&self.value),
             // Zero in an append-format page, whose branch values end at 16.
-            birth: u64::from_le_bytes(self.value[16..24].try_into().unwrap()),
+            birth: value_u64::<16>(&self.value),
         }
     }
     fn branch(key: Key, root: Root) -> Self {
@@ -329,11 +350,23 @@ impl Default for Cache {
 // charged and cannot be evicted until Drop returns it without allocating.
 // This replaces per-page/per-key Arc allocations with single ownership.
 trait Resident: Sized {
+    /// An empty value that owns no allocation, left behind when a lease
+    /// hands its value back.
+    fn vacant() -> Self;
     fn slots(cache: &mut Cache) -> &mut fcoll::HashMap<u64, Option<Self>>;
     fn charge(&self) -> usize;
     fn tag(offset: u64) -> Cached;
 }
 impl Resident for Node {
+    fn vacant() -> Self {
+        Node {
+            height: 0,
+            birth: 0,
+            count: 0,
+            entries: Vec::new(),
+            key_bytes: Vec::new(),
+        }
+    }
     fn slots(cache: &mut Cache) -> &mut fcoll::HashMap<u64, Option<Self>> {
         &mut cache.pages
     }
@@ -345,6 +378,9 @@ impl Resident for Node {
     }
 }
 impl Resident for Vec<u8> {
+    fn vacant() -> Self {
+        Vec::new()
+    }
     fn slots(cache: &mut Cache) -> &mut fcoll::HashMap<u64, Option<Self>> {
         &mut cache.keys
     }
@@ -356,7 +392,7 @@ impl Resident for Vec<u8> {
     }
 }
 struct Lease<'a, T: Resident> {
-    value: Option<T>,
+    value: T,
     reader: &'a Reader,
     offset: u64,
     cached: bool,
@@ -364,17 +400,19 @@ struct Lease<'a, T: Resident> {
 impl<T: Resident> std::ops::Deref for Lease<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        self.value.as_ref().expect("live cache lease")
+        &self.value
     }
 }
 impl<T: Resident> Drop for Lease<'_, T> {
     fn drop(&mut self) {
         if self.cached {
             let mut cache = self.reader.cache.borrow_mut();
-            let slot = T::slots(&mut cache)
-                .get_mut(&self.offset)
-                .expect("leased cache slot");
-            *slot = self.value.take();
+            // The slot stays reserved while leased and is never evicted, so
+            // it is always here; if it somehow is not, the value is dropped
+            // rather than aborting the reader.
+            if let Some(slot) = T::slots(&mut cache).get_mut(&self.offset) {
+                *slot = Some(std::mem::replace(&mut self.value, T::vacant()));
+            }
         }
     }
 }
@@ -479,10 +517,10 @@ impl Reader {
                     // once the page is at least shaped like one.
                     return Err(reclaimed_page());
                 }
-                u64::from_le_bytes(bytes[20..28].try_into().unwrap())
+                u64::from_le_bytes(field(&bytes, 20)?)
             }
         };
-        let checksum = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+        let checksum = u32::from_le_bytes(field(&bytes, 16)?);
         bytes[16..20].fill(0);
         // Reuse pages are always checksummed: a page being rewritten in place
         // is read torn, and only the checksum tells.
@@ -501,7 +539,7 @@ impl Reader {
             return Err(corrupt("index page has no birth generation"));
         }
         let height = bytes[8];
-        let len = u16::from_le_bytes(bytes[10..12].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(field(&bytes, 10)?) as usize;
         if height > 31 || len == 0 || len > fanout(format, height) || bytes[12..16] != [0; 4] {
             return Err(corrupt("invalid index page shape"));
         }
@@ -525,9 +563,9 @@ impl Reader {
             .chunks_exact(entry_size(format, height))
         {
             let key = Key {
-                offset: u64::from_le_bytes(item[..8].try_into().unwrap()),
-                len: u32::from_le_bytes(item[8..12].try_into().unwrap()) as usize,
-                prefix: item[12..28].try_into().unwrap(),
+                offset: u64::from_le_bytes(field(item, 0)?),
+                len: u32::from_le_bytes(field(item, 8)?) as usize,
+                prefix: field(item, 12)?,
                 decoded: None,
             };
             if key.len == 0 || key.len > self.max_key {
@@ -633,8 +671,7 @@ impl Reader {
                     continue;
                 }
                 let key = &entry.key;
-                let checksum =
-                    u32::from_le_bytes(bytes[at + key.len..at + key.len + 4].try_into().unwrap());
+                let checksum = u32::from_le_bytes(field(&bytes, at + key.len)?);
                 if self.verify_metadata
                     && (crc32fast::hash(&bytes[at..at + key.len]) != checksum
                         || bytes[at..at + 16] != key.prefix)
@@ -684,7 +721,7 @@ impl Reader {
         let mut cache = self.cache.borrow_mut();
         let value = T::slots(&mut cache).get_mut(&offset)?.take()?;
         Some(Lease {
-            value: Some(value),
+            value,
             reader: self,
             offset,
             cached: true,
@@ -699,12 +736,14 @@ impl Reader {
             // Reserve both structures before charging or installing a slot.
             cache.order.reserve_for(1, RESOURCE).map_err(oom)?;
             T::slots(&mut cache).reserve_for(1, RESOURCE).map_err(oom)?;
-            T::slots(&mut cache).put(offset, None, RESOURCE).map_err(oom)?;
+            T::slots(&mut cache)
+                .put(offset, None, RESOURCE)
+                .map_err(oom)?;
             cache.order.push(T::tag(offset), RESOURCE).map_err(oom)?;
             cache.bytes += charge;
         }
         Ok(Lease {
-            value: Some(value),
+            value,
             reader: self,
             offset,
             cached,
@@ -717,7 +756,9 @@ impl Reader {
         if Self::reserve(&mut cache, charge, self.budget) {
             cache.order.reserve_for(1, RESOURCE).map_err(oom)?;
             T::slots(&mut cache).reserve_for(1, RESOURCE).map_err(oom)?;
-            T::slots(&mut cache).put(offset, Some(value), RESOURCE).map_err(oom)?;
+            T::slots(&mut cache)
+                .put(offset, Some(value), RESOURCE)
+                .map_err(oom)?;
             cache.order.push(T::tag(offset), RESOURCE).map_err(oom)?;
             cache.bytes += charge;
         }
@@ -738,14 +779,17 @@ impl Reader {
                 return false;
             }
             remaining -= 1;
-            let tag = cache
-                .order
-                .pop_front()
-                .expect("cache accounting has an owner");
+            let Some(tag) = cache.order.pop_front() else {
+                return false;
+            };
             // A leased (`None`) slot is pinned: put it back at the tail.
             let released = match tag {
                 Cached::Page(offset) => match cache.pages.get(&offset) {
-                    Some(Some(_)) => cache.pages.remove(&offset).flatten().map(|n| Self::charge(&n)),
+                    Some(Some(_)) => cache
+                        .pages
+                        .remove(&offset)
+                        .flatten()
+                        .map(|n| Self::charge(&n)),
                     _ => None,
                 },
                 Cached::Key(offset) => match cache.keys.get(&offset) {
@@ -788,7 +832,7 @@ impl Reader {
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
         let mut bytes = buffer(len)?;
         self.read_key_bytes(key.offset, &mut bytes)?;
-        let checksum = u32::from_le_bytes(bytes[key.len..].try_into().unwrap());
+        let checksum = u32::from_le_bytes(field(&bytes, key.len)?);
         if self.verify_metadata
             && (crc32fast::hash(&bytes[..key.len]) != checksum || bytes[..16] != key.prefix)
         {
@@ -1014,7 +1058,11 @@ impl Reader {
         }
         if let Some((bound, packed)) = upper
             && !self.before(
-                &node.entries.last().unwrap().key,
+                &node
+                    .entries
+                    .last()
+                    .ok_or_else(|| corrupt("empty index node"))?
+                    .key,
                 &node.key_bytes,
                 bound,
                 packed,
@@ -1044,6 +1092,7 @@ impl Reader {
 }
 
 /// Rewrites each affected node once per batch, retaining unchanged subtrees.
+#[cfg(test)]
 pub(super) fn apply(
     file: &File,
     reader: &Reader,
@@ -1055,6 +1104,7 @@ pub(super) fn apply(
 
 /// [`apply`] for a reuse-format tree: pages come from, and are freed to,
 /// `alloc`.
+#[cfg(test)]
 pub(super) fn apply_reusing(
     file: &File,
     reader: &Reader,
@@ -1104,7 +1154,10 @@ pub(super) fn apply_with_limit<'a>(
             .ok_or_else(|| corrupt("index height exhausted"))?;
         branches = writer.nodes(level, branches)?;
     }
-    Ok(branches[0].child())
+    branches
+        .first()
+        .map(Entry::child)
+        .ok_or_else(|| corrupt("index update produced no root"))
 }
 
 struct Writer<'a> {

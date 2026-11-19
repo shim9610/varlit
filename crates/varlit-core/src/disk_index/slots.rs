@@ -303,15 +303,25 @@ impl Directory {
         if key.len() < 5 || key[0] != 1 {
             return Err(bad());
         }
-        let id = u32::from_be_bytes(key[1..5].try_into().unwrap());
+        let id = u32::from_be_bytes(
+            key.get(1..)
+                .and_then(|k| k.first_chunk())
+                .copied()
+                .ok_or_else(bad)?,
+        );
         let Ok(block) = self.blocks.binary_search_by_key(&id, |b| b.id) else {
             return Ok(None);
         };
         if key.len() != 7 {
             return Err(bad());
         }
-        let code = u16::from_le_bytes(key[5..7].try_into().unwrap()) as usize;
-        if code >= self.blocks[block].len {
+        let code = u16::from_le_bytes(
+            key.get(5..)
+                .and_then(|k| k.first_chunk())
+                .copied()
+                .ok_or_else(bad)?,
+        ) as usize;
+        if code >= self.blocks.get(block).ok_or_else(bad)?.len {
             return Err(bad());
         }
         Ok(Some((block, code)))
@@ -365,7 +375,11 @@ impl Reader {
     }
     fn directory(&self) -> DiskIndexResult<Directory> {
         self.ensure_directory()?;
-        self.directory.borrow().as_ref().unwrap().try_clone()
+        self.directory
+            .borrow()
+            .as_ref()
+            .ok_or_else(bad)?
+            .try_clone()
     }
     pub fn get(&self, key: &[u8]) -> DiskIndexResult<Option<Option<[u8; LATEST_LEN]>>> {
         if self.root.offset == 0 {
@@ -376,7 +390,7 @@ impl Reader {
             self.ensure_directory()?;
         }
         let directory = self.directory.borrow();
-        let directory = directory.as_ref().unwrap();
+        let directory = directory.as_ref().ok_or_else(bad)?;
         let Some((block, code)) = directory.find(key)? else {
             return Ok(None);
         };
@@ -660,7 +674,7 @@ impl Working {
     pub fn layout(reader: &Reader) -> DiskIndexResult<Vec<(u32, u32)>> {
         reader.ensure_directory()?;
         let directory = reader.directory.borrow();
-        let blocks = &directory.as_ref().unwrap().blocks;
+        let blocks = &directory.as_ref().ok_or_else(bad)?.blocks;
         let mut layout = Vec::new();
         layout.try_reserve_exact(blocks.len()).map_err(oom)?;
         for b in blocks {

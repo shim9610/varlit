@@ -1,10 +1,21 @@
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::{
-    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fmt, fs,
     hash::Hash,
     path::{Path, PathBuf},
 };
+
+use crate::fcoll::{self, Put, PutSet};
+
+const RESOURCE_TAILS: &str = "index tail map";
+const RESOURCE_REBUILD: &str = "index rebuild batch";
+
+/// A refused container allocation, as the index's own error.
+fn fcoll_error(_: crate::Error) -> DiskIndexError {
+    std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
+}
 
 #[cfg(test)]
 mod oracle;
@@ -909,7 +920,7 @@ fn opened_sidecar_identity(file: &fs::File) -> DiskIndexResult<Vec<u8>> {
 /// map is exactly the persisted collection.
 struct TailCache {
     digest: DiskIndexDigest,
-    tails: BTreeMap<u32, DiskIndexTail>,
+    tails: fcoll::BTreeMap<u32, DiskIndexTail>,
 }
 
 /// Takes the cached tail map when it provably matches the current working
@@ -918,7 +929,7 @@ struct TailCache {
 fn take_tail_cache(
     cache: &mut Option<TailCache>,
     metadata: DiskIndexMetadata,
-) -> Option<BTreeMap<u32, DiskIndexTail>> {
+) -> Option<fcoll::BTreeMap<u32, DiskIndexTail>> {
     let cached = cache.take()?;
     if cached.digest == metadata.working_tail_digest
         && u32::try_from(cached.tails.len()).ok() == Some(metadata.working_tail_count)
@@ -1141,7 +1152,7 @@ impl DiskIndexStore {
         // republishes, so none of them reads as reusable once it is published.
         replacement.set_building(base.metadata.generation.max(1))?;
         let mut root = storage::Root::default();
-        let mut updates = BTreeMap::new();
+        let mut updates = fcoll::BTreeMap::new();
         let mut bytes = 0usize;
         let max_key = self
             .options
@@ -1149,12 +1160,13 @@ impl DiskIndexStore {
             .saturating_add(DiskIndexKeyTag::ENCODED_LEN);
         let cache_bytes = self.options.cache_bytes;
         let mut flush = |root: &mut storage::Root,
-                         updates: &mut BTreeMap<Vec<u8>, [u8; LATEST_LEN]>|
+                         updates: &mut fcoll::BTreeMap<Vec<u8>, [u8; LATEST_LEN]>|
          -> DiskIndexResult<()> {
             if updates.is_empty() {
                 return Ok(());
             }
-            root.tree = replacement.apply_unpublished(root.tree, updates, max_key, cache_bytes)?;
+            root.tree =
+                replacement.apply_unpublished(root.tree, updates.iter(), max_key, cache_bytes)?;
             updates.clear();
             Ok(())
         };
@@ -1171,7 +1183,9 @@ impl DiskIndexStore {
                     bytes = 0;
                 }
                 bytes = bytes.saturating_add(charge);
-                updates.insert(key, value);
+                updates
+                    .put(key, value, RESOURCE_REBUILD)
+                    .map_err(fcoll_error)?;
                 Ok(())
             })?;
         flush(&mut root, &mut updates)?;
@@ -1270,20 +1284,22 @@ impl DiskIndexStore {
             }
             let tails = match take_tail_cache(&mut self.tail_cache, metadata) {
                 Some(tails) => tails,
-                None => self
-                    .storage
-                    .state(&base, None)?
-                    .tails
-                    .into_iter()
-                    .map(|t| (t.block_id, t))
-                    .collect(),
+                None => {
+                    let mut tails = fcoll::BTreeMap::new();
+                    for tail in self.storage.state(&base, None)?.tails {
+                        tails
+                            .put(tail.block_id, tail, RESOURCE_TAILS)
+                            .map_err(fcoll_error)?;
+                    }
+                    tails
+                }
             };
             self.batch = Some(DiskIndexWriteBatch {
                 base,
                 metadata,
                 tails,
-                changed_tails: BTreeSet::new(),
-                pending_latest: BTreeMap::new(),
+                changed_tails: fcoll::BTreeSet::new(),
+                pending_latest: fcoll::BTreeMap::new(),
                 slots: if self.finite_layout.is_empty() {
                     None
                 } else {
@@ -1300,7 +1316,11 @@ impl DiskIndexStore {
                 bytes: 0,
             });
         }
-        Ok(self.batch.as_mut().expect("batch initialized"))
+        self.batch
+            .as_mut()
+            .ok_or(DiskIndexError::CheckpointMismatch(
+                "write batch is unavailable",
+            ))
     }
     pub(crate) fn commit_batch(&mut self) -> DiskIndexResult<()> {
         if let Some(batch) = self.batch.take() {
@@ -1456,14 +1476,14 @@ impl DiskIndexStore {
 pub(crate) struct DiskIndexWriteBatch {
     base: IndexCheckpoint,
     metadata: DiskIndexMetadata,
-    tails: BTreeMap<u32, DiskIndexTail>,
-    changed_tails: BTreeSet<u32>,
+    tails: fcoll::BTreeMap<u32, DiskIndexTail>,
+    changed_tails: fcoll::BTreeSet<u32>,
     /// Latest-table rows staged by this batch. Buffering the encoded rows in
     /// memory keeps the per-record hot path free of page reads: commit
     /// opens `LATEST_TABLE` once and drains the map. Memory stays bounded by
     /// the batch byte budget, whose per-item accounting covers each staged
     /// key and encoded value.
-    pending_latest: BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
+    pending_latest: fcoll::BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
     slots: Option<slots::Working>,
     options: DiskIndexOptions,
     records: usize,
@@ -1487,8 +1507,15 @@ impl DiskIndexWriteBatch {
         self.ensure_batch_capacity(item_bytes)?;
         self.metadata.working = next;
         if let Some(tail) = tail {
-            self.tails.insert(tail.block_id, tail);
-            self.changed_tails.insert(tail.block_id);
+            // Both inserts happen before any state below changes, so a
+            // refused allocation leaves the batch as it was apart from a
+            // tail that may already be staged under its own id.
+            self.tails
+                .put(tail.block_id, tail, RESOURCE_TAILS)
+                .map_err(fcoll_error)?;
+            self.changed_tails
+                .put(tail.block_id, RESOURCE_TAILS)
+                .map_err(fcoll_error)?;
         }
         self.records += 1;
         self.bytes += item_bytes;
@@ -1553,7 +1580,9 @@ impl DiskIndexWriteBatch {
             validate_tail(*tail, self.metadata.working)?;
         }
 
-        let root = store.storage.apply(&self.base, &self.pending_latest)?;
+        let root = store
+            .storage
+            .apply(&self.base, self.pending_latest.iter())?;
         let tails: Vec<_> = self.tails.values().copied().collect();
         crate::scalable_fault_point("append.sidecar_batch_commit");
         let commit = store
@@ -1853,17 +1882,21 @@ fn canonical_tail_map(
     tails: &[DiskIndexTail],
     limit: u32,
     frontier: DiskIndexFrontier,
-) -> DiskIndexResult<BTreeMap<u32, DiskIndexTail>> {
+) -> DiskIndexResult<fcoll::BTreeMap<u32, DiskIndexTail>> {
     if tails.len() as u64 > u64::from(limit) {
         return Err(DiskIndexError::TailLimitExceeded {
             actual: tails.len() as u64,
             limit,
         });
     }
-    let mut map = BTreeMap::new();
+    let mut map = fcoll::BTreeMap::new();
     for tail in tails {
         validate_tail(*tail, frontier)?;
-        if map.insert(tail.block_id, *tail).is_some() {
+        if map
+            .put(tail.block_id, *tail, RESOURCE_TAILS)
+            .map_err(fcoll_error)?
+            .is_some()
+        {
             return Err(DiskIndexError::InvalidTail("duplicate block id"));
         }
     }
@@ -2086,7 +2119,7 @@ fn decode_metadata(bytes: &[u8]) -> DiskIndexResult<DiskIndexMetadata> {
         1 => DiskIndexState::Clean,
         actual => return Err(DiskIndexError::MetadataState { actual }),
     };
-    let plan_digest = DiskIndexDigest(bytes[56..88].try_into().expect("fixed metadata slice"));
+    let plan_digest = DiskIndexDigest(read_array(bytes, 56));
     let mode = match bytes[11] {
         0 if plan_digest.is_zero() => DiskIndexMode::StateOnly,
         0 => {
@@ -2126,11 +2159,11 @@ fn decode_metadata(bytes: &[u8]) -> DiskIndexResult<DiskIndexMetadata> {
     let metadata = DiskIndexMetadata {
         identity: DiskIndexIdentity {
             schema_hash: read_u64(bytes, 16),
-            primary_fingerprint: bytes[24..56].try_into().expect("fixed metadata slice"),
+            primary_fingerprint: read_array(bytes, 24),
         },
         primary_generation: DiskIndexPrimaryGeneration {
             len: read_u64(bytes, 256),
-            digest: DiskIndexDigest(bytes[264..296].try_into().expect("fixed metadata slice")),
+            digest: DiskIndexDigest(read_array(bytes, 264)),
         },
         mode,
         state,
@@ -2141,12 +2174,8 @@ fn decode_metadata(bytes: &[u8]) -> DiskIndexResult<DiskIndexMetadata> {
         tail_limit: read_u32(bytes, 176),
         committed_tail_count: read_u32(bytes, 180),
         working_tail_count: read_u32(bytes, 184),
-        committed_tail_digest: DiskIndexDigest(
-            bytes[192..224].try_into().expect("fixed metadata slice"),
-        ),
-        working_tail_digest: DiskIndexDigest(
-            bytes[224..256].try_into().expect("fixed metadata slice"),
-        ),
+        committed_tail_digest: DiskIndexDigest(read_array(bytes, 192)),
+        working_tail_digest: DiskIndexDigest(read_array(bytes, 224)),
     };
     validate_metadata(metadata)?;
     Ok(metadata)
@@ -2296,16 +2325,27 @@ fn tail_digest(tails: impl IntoIterator<Item = DiskIndexTail> + Clone) -> DiskIn
     DiskIndexDigest(digest)
 }
 
+/// `N` bytes at `offset`. Every caller has already checked the record's
+/// exact length, so the zero fallback is never taken; it exists so a
+/// fixed-layout read has no panic path.
+fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> [u8; N] {
+    bytes
+        .get(offset..)
+        .and_then(|rest| rest.first_chunk::<N>())
+        .copied()
+        .unwrap_or([0; N])
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(bytes[offset..offset + 2].try_into().expect("fixed slice"))
+    u16::from_le_bytes(read_array(bytes, offset))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("fixed slice"))
+    u32::from_le_bytes(read_array(bytes, offset))
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("fixed slice"))
+    u64::from_le_bytes(read_array(bytes, offset))
 }
 
 /// Private temporary index used when an in-memory operation outgrows its
