@@ -36,6 +36,37 @@ mod imp {
 
 pub(crate) use imp::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
+// Test seam: while armed, every allocation made inside a B-tree map or set
+// insert is refused by the test allocator, and nothing else is. Lets a test
+// put an allocation failure exactly on the B-tree path.
+#[cfg(test)]
+thread_local! {
+    static BTREE_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `operation` with B-tree insert allocations refused.
+#[cfg(test)]
+pub(crate) fn with_btree_allocation_failure<T>(operation: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BTREE_FAULT.with(|armed| armed.set(false));
+        }
+    }
+    BTREE_FAULT.with(|armed| armed.set(true));
+    let _reset = Reset;
+    operation()
+}
+
+#[inline(always)]
+fn btree_alloc<T>(insert: impl FnOnce() -> T) -> T {
+    #[cfg(test)]
+    if BTREE_FAULT.with(std::cell::Cell::get) {
+        return crate::pib_probe::with_allocation_refusal(1, insert);
+    }
+    insert()
+}
+
 /// An empty hash map. Infallible in both builds: no allocation, and the
 /// hasher is `std`'s.
 pub(crate) fn hash_map<K, V>() -> HashMap<K, V> {
@@ -82,7 +113,7 @@ impl<K: Eq + Hash, V, S: BuildHasher> Put<K, V> for std::collections::HashMap<K,
 impl<K: Ord, V> Put<K, V> for std::collections::BTreeMap<K, V> {
     #[inline]
     fn put(&mut self, key: K, value: V, _: &'static str) -> Result<Option<V>> {
-        Ok(self.insert(key, value))
+        Ok(btree_alloc(|| self.insert(key, value)))
     }
 }
 
@@ -90,7 +121,7 @@ impl<K: Ord, V> Put<K, V> for std::collections::BTreeMap<K, V> {
 impl<T: Ord> PutSet<T> for std::collections::BTreeSet<T> {
     #[inline]
     fn put(&mut self, value: T, _: &'static str) -> Result<bool> {
-        Ok(self.insert(value))
+        Ok(btree_alloc(|| self.insert(value)))
     }
 }
 
@@ -116,7 +147,7 @@ impl<K: Eq + Hash, V, S: BuildHasher> Put<K, V> for jzap::collections::HashMap<K
 impl<K: Ord, V> Put<K, V> for jzap::collections::BTreeMap<K, V> {
     #[inline]
     fn put(&mut self, key: K, value: V, resource: &'static str) -> Result<Option<V>> {
-        self.try_insert(key, value)
+        btree_alloc(|| self.try_insert(key, value))
             .map_err(|rejected| refused(resource, rejected.error))
     }
 }
@@ -125,8 +156,7 @@ impl<K: Ord, V> Put<K, V> for jzap::collections::BTreeMap<K, V> {
 impl<T: Ord> PutSet<T> for jzap::collections::BTreeSet<T> {
     #[inline]
     fn put(&mut self, value: T, resource: &'static str) -> Result<bool> {
-        self.try_insert(value)
-            .map_err(|rejected| refused(resource, rejected.error))
+        btree_alloc(|| self.try_insert(value)).map_err(|rejected| refused(resource, rejected.error))
     }
 }
 
@@ -178,5 +208,51 @@ impl<T> Reserve for jzap::deque::VecDeque<T> {
     fn reserve_for(&mut self, additional: usize, resource: &'static str) -> Result<()> {
         self.try_reserve(additional)
             .map_err(|error| refused(resource, error))
+    }
+}
+
+/// Runs the named test in a child process with `VARLIT_BTREE_FAULT_CHILD`
+/// set and returns how it ended. The `std` build aborts on a refused B-tree
+/// allocation, which would take the whole test binary down with it.
+#[cfg(test)]
+pub(crate) fn run_fault_child(test: &str) -> std::process::ExitStatus {
+    std::process::Command::new(std::env::current_exe().expect("test binary path"))
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env("VARLIT_BTREE_FAULT_CHILD", "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("spawn the test binary")
+}
+
+#[cfg(test)]
+pub(crate) fn in_fault_child() -> bool {
+    std::env::var_os("VARLIT_BTREE_FAULT_CHILD").is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The facade map itself: a refused node allocation.
+    #[test]
+    fn refused_btree_node_allocation() {
+        if cfg!(not(feature = "unstable-jzap")) && !in_fault_child() {
+            use std::os::unix::process::ExitStatusExt;
+            let status = run_fault_child("fcoll::tests::refused_btree_node_allocation");
+            // std cannot report it: the process aborts (SIGABRT).
+            assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}");
+            return;
+        }
+        let mut map: BTreeMap<u64, u64> = BTreeMap::new();
+        let refused = with_btree_allocation_failure(|| map.put(1, 10, "test map"));
+        assert!(
+            matches!(refused, Err(Error::AllocationFailed { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(map.len(), 0);
+        // The map is untouched and usable once memory is back.
+        assert_eq!(map.put(1, 10, "test map").unwrap(), None);
+        assert_eq!(map.get(&1), Some(&10));
     }
 }

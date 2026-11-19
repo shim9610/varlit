@@ -367,6 +367,32 @@ impl SequenceSet {
 mod replay_tests {
     use super::*;
 
+    /// An allocation failure placed exactly on the scan's sequence set (a
+    /// B-tree set, empty at the first insert). `std` aborts; with
+    /// `unstable-jzap` the insert reports it, the set is unchanged, and the
+    /// same sequence is accepted on retry rather than called a duplicate.
+    #[test]
+    fn btree_allocation_failure_on_the_sequence_set() -> Result<()> {
+        if cfg!(not(feature = "unstable-jzap")) && !crate::fcoll::in_fault_child() {
+            use std::os::unix::process::ExitStatusExt;
+            let status = crate::fcoll::run_fault_child(
+                "file::native_scan::replay_tests::btree_allocation_failure_on_the_sequence_set",
+            );
+            assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}");
+            return Ok(());
+        }
+        let mut set = SequenceSet::new()?;
+        let refused = crate::fcoll::with_btree_allocation_failure(|| set.insert(5));
+        assert!(
+            matches!(refused, Err(Error::AllocationFailed { .. })),
+            "{refused:?}"
+        );
+        set.insert(5)?;
+        assert!(set.insert(5).is_err(), "a real duplicate is still refused");
+        set.insert(6)?;
+        Ok(())
+    }
+
     #[test]
     fn replay_rewinds_rows_and_commit_state_before_reusing_storage() -> Result<()> {
         let spec = FormatSpec::builder()

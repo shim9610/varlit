@@ -3593,4 +3593,47 @@ mod tests {
         ));
         assert!(!path.exists());
     }
+
+    /// An allocation failure placed exactly on the sidecar's B-tree path (the
+    /// write batch's tail map and changed-tail set, empty at the first
+    /// append, so the insert must allocate a node).
+    ///
+    /// `std` aborts the process. `unstable-jzap` returns the error: the
+    /// process lives, the writer refuses further use, and the file reopens
+    /// and takes new records.
+    #[test]
+    fn btree_allocation_failure_on_the_sidecar_batch() -> Result<()> {
+        if cfg!(not(feature = "unstable-jzap")) && !crate::fcoll::in_fault_child() {
+            use std::os::unix::process::ExitStatusExt;
+            let status = crate::fcoll::run_fault_child(
+                "stream::tests::btree_allocation_failure_on_the_sidecar_batch",
+            );
+            assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}");
+            return Ok(());
+        }
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("btree-fault.varlit");
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
+        {
+            let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+            let refused =
+                crate::fcoll::with_btree_allocation_failure(|| writer.push_info(&TestBlock(1)));
+            let error = refused.expect_err("the tail map insert must be refused");
+            assert!(
+                error.to_string().contains("out of memory")
+                    || error.to_string().contains("failed to reserve"),
+                "{error}"
+            );
+        }
+        // Same process, same file: it reopens, recovers and keeps working.
+        let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+        writer.push_info(&TestBlock(2))?;
+        writer.sync()?;
+        drop(writer);
+        let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
+        let blocks = reader.blocks::<TestBlock>()?.collect::<Result<Vec<_>>>()?;
+        assert_eq!(blocks.last(), Some(&TestBlock(2)), "{blocks:?}");
+        assert!(blocks.len() <= 2, "{blocks:?}");
+        Ok(())
+    }
 }
