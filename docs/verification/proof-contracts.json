@@ -10,6 +10,7 @@
       "sources": [
         "crates/varlit-core/src/verification/record_extent.rs",
         "crates/varlit-core/src/file.rs",
+        "crates/varlit-core/src/file/record_index_entry.rs",
         "crates/varlit-core/src/native_layout.rs",
         "crates/varlit-core/src/verification/generated_file.rs"
       ],
@@ -414,7 +415,8 @@
       "sources": [
         "crates/varlit-core/src/verification/matrix_geometry.rs",
         "crates/varlit-core/src/matrix_tiles/geometry.rs",
-        "crates/varlit-core/src/format.rs"
+        "crates/varlit-core/src/format.rs",
+        "crates/varlit-core/src/format/spec_validation.rs"
       ],
       "scope": "slot indexing for tiles with sides up to 63, slot byte ranges for every admitted cell count at four fixed strides, and Morton directory keys for arbitrary tile coordinates; and the end offset of a page-aligned metadata region for arbitrary offsets and lengths",
       "limits": "Bounded: a product of two unknowns does not decide in the proof budget, so slot indexing is proved for small tiles and slot byte ranges for strides 1, 8, 61 and 65532 only. Other strides, the largest tile shapes, that distinct cells get distinct slots, and the reduction of a cell key to a tile coordinate and an in-tile row and column are checked by native tests (matrix_tiles::tests::every_key_has_one_slot_in_one_tile_at_every_admitted_shape). Directory pages, tile allocation and bitmap contents are covered by native tests.",

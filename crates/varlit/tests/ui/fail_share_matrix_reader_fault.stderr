@@ -14,7 +14,7 @@ note: required because it appears within the type `VarlitFile`
   | pub struct VarlitFile {
   |            ^^^^^^^^^^
 note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/reader.rs
   |
   | pub struct VarlitReader {
   |            ^^^^^^^^^^^^
@@ -43,7 +43,7 @@ note: required because it appears within the type `VarlitFile`
   | pub struct VarlitFile {
   |            ^^^^^^^^^^
 note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/reader.rs
   |
   | pub struct VarlitReader {
   |            ^^^^^^^^^^^^
@@ -72,7 +72,7 @@ note: required because it appears within the type `VarlitFile`
   | pub struct VarlitFile {
   |            ^^^^^^^^^^
 note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/reader.rs
   |
   | pub struct VarlitReader {
   |            ^^^^^^^^^^^^
@@ -111,7 +111,7 @@ note: required because it appears within the type `VarlitFile`
   | pub struct VarlitFile {
   |            ^^^^^^^^^^
 note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/reader.rs
   |
   | pub struct VarlitReader {
   |            ^^^^^^^^^^^^
@@ -157,7 +157,7 @@ note: required because it appears within the type `VarlitFile`
   | pub struct VarlitFile {
   |            ^^^^^^^^^^
 note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/reader.rs
   |
   | pub struct VarlitReader {
   |            ^^^^^^^^^^^^
@@ -203,7 +203,7 @@ note: required because it appears within the type `VarlitFile`
   | pub struct VarlitFile {
   |            ^^^^^^^^^^
 note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/reader.rs
   |
   | pub struct VarlitReader {
   |            ^^^^^^^^^^^^
@@ -239,7 +239,7 @@ note: required because it appears within the type `varlit_core::disk_index::Scra
 note: required because it appears within the type `Option<varlit_core::disk_index::ScratchIndex>`
  --> $RUST/core/src/option.rs
 note: required because it appears within the type `varlit_core::file::KeyedTailMap`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/tails.rs
   |
   | struct KeyedTailMap {
   |        ^^^^^^^^^^^^
@@ -250,7 +250,7 @@ note: required because it appears within the type `hashbrown::map::HashMap<u32, 
 note: required because it appears within the type `HashMap<u32, varlit_core::file::KeyedTailMap>`
  --> $RUST/std/src/collections/hash/map.rs
 note: required because it appears within the type `varlit_core::file::KeyedTails`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/tails.rs
   |
   | struct KeyedTails {
   |        ^^^^^^^^^^
@@ -260,7 +260,7 @@ note: required because it appears within the type `VarlitFile`
   | pub struct VarlitFile {
   |            ^^^^^^^^^^
 note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/reader.rs
   |
   | pub struct VarlitReader {
   |            ^^^^^^^^^^^^

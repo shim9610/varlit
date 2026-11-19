@@ -1,6 +1,9 @@
 #[path = "support/pages.rs"]
 mod pages;
 
+#[path = "support/source_tree.rs"]
+mod source_tree;
+
 #[cfg(any(feature = "integrity", feature = "mmap"))]
 use std::fs::OpenOptions;
 use std::fs::{File, metadata, remove_file};
@@ -1698,8 +1701,8 @@ fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
          to the policy that scopes it"
     );
 
-    let file_rs = std::fs::read_to_string(root.join("crates/varlit-core/src/file.rs"))
-        .expect("crates/varlit-core/src/file.rs is readable");
+    // With the files `file.rs` includes, where `VarlitWriter` lives.
+    let file_rs = source_tree::expanded_source(&root.join("crates/varlit-core/src/file.rs"));
     assert!(
         file_rs.contains("Allocator Failure And Published Outcomes"),
         "the rustdoc on write_matrix_cell_durable is the copy a user reads from \

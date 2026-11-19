@@ -9,8 +9,10 @@
 //! "it compiles" or "cargo doc succeeds" check passes both before and after the
 //! move and proves nothing.
 
-use std::fs;
 use std::path::{Path, PathBuf};
+
+#[path = "support/source_tree.rs"]
+mod source_tree;
 
 fn format_rs() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -45,7 +47,8 @@ fn doc_block_above(text: &str, signature: &str) -> String {
 #[test]
 fn the_effective_policy_accessors_carry_their_own_rustdoc() {
     let path = format_rs();
-    let text = fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    // With the files `format.rs` includes, where its `impl` blocks live.
+    let text = source_tree::expanded_source(&path);
 
     let integrity = doc_block_above(&text, "pub const fn effective_integrity_verification");
     assert!(

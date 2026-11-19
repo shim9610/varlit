@@ -89,7 +89,12 @@
       "covered_by": "native tests"
     },
     {
-      "source": "crates/varlit-core/src/file.rs",
+      "source": "crates/varlit-core/src/file/reader.rs",
+      "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
+      "covered_by": "native tests and ASan with the mmap feature"
+    },
+    {
+      "source": "crates/varlit-core/src/file/writer.rs",
       "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
       "covered_by": "native tests and ASan with the mmap feature"
     },

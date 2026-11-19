@@ -97,23 +97,8 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "derive_index_state(_1: impl Iterator<Item = Result<RecordIndexEntry>>, _2: bool) -> std::result::Result<DerivedIndexState, error::Error> [body:d0d43141529a6ba3]",
+            "caller": "derive_index_state(_1: impl Iterator<Item = Result<RecordIndexEntry>>, _2: bool) -> std::result::Result<DerivedIndexState, error::Error> [body:33ec8c9909ec15fa]",
             "target": "file::RecordIndexEntry::physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame(_1: &mut RecordMap<'_>) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:27081c79ed0535a3]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame_from(_1: &WalkedRecords, _2: &mut u64) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:ce4d0466fe6c35ef]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::note(_1: &mut RewriteSummary, _2: &file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:ef26f6c6201dddf3]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
@@ -158,6 +143,21 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::walk_to_boundary(_1: &file::VarlitFile, _2: u64, _3: u64) -> std::result::Result<(), error::Error> [body:4fe70c60d57973d4]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/record_maps.rs>::frame(_1: &mut RecordMap<'_>) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:65b551d5ca64a533]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/record_maps.rs>::frame_from(_1: &WalkedRecords, _2: &mut u64) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:8c1f09545651b82e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/tails.rs>::note(_1: &mut RewriteSummary, _2: &file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:1e56fc568e8a05b0]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -237,7 +237,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "validate_generation_file_inner(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &dyn file::RecordDirectory, _5: bool) -> std::result::Result<(), error::Error> [body:f28d30ea47abc427]",
+            "caller": "validate_generation_file_inner(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &dyn file::RecordDirectory, _5: bool) -> std::result::Result<(), error::Error> [body:e2d022316e383a4d]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -279,23 +279,8 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "derive_index_state(_1: impl Iterator<Item = Result<RecordIndexEntry>>, _2: bool) -> std::result::Result<DerivedIndexState, error::Error> [body:d0d43141529a6ba3]",
+            "caller": "derive_index_state(_1: impl Iterator<Item = Result<RecordIndexEntry>>, _2: bool) -> std::result::Result<DerivedIndexState, error::Error> [body:33ec8c9909ec15fa]",
             "target": "file::RecordIndexEntry::physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame(_1: &mut RecordMap<'_>) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:27081c79ed0535a3]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame_from(_1: &WalkedRecords, _2: &mut u64) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:ce4d0466fe6c35ef]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::note(_1: &mut RewriteSummary, _2: &file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:ef26f6c6201dddf3]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
@@ -350,6 +335,21 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::walk_to_boundary(_1: &file::VarlitFile, _2: u64, _3: u64) -> std::result::Result<(), error::Error> [body:4fe70c60d57973d4]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/record_maps.rs>::frame(_1: &mut RecordMap<'_>) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:65b551d5ca64a533]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/record_maps.rs>::frame_from(_1: &WalkedRecords, _2: &mut u64) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:8c1f09545651b82e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/tails.rs>::note(_1: &mut RewriteSummary, _2: &file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:1e56fc568e8a05b0]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -434,7 +434,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "validate_generation_file_inner(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &dyn file::RecordDirectory, _5: bool) -> std::result::Result<(), error::Error> [body:f28d30ea47abc427]",
+            "caller": "validate_generation_file_inner(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &dyn file::RecordDirectory, _5: bool) -> std::result::Result<(), error::Error> [body:e2d022316e383a4d]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -994,27 +994,27 @@
       "callers": {
         "default": [
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1181,27 +1181,27 @@
         ],
         "all": [
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:9760395ebd2728c9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1668,12 +1668,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:30a3de65caf0e2ad]",
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:59810bd8e0add2e8]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           },
           {
-            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:30a3de65caf0e2ad]",
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:59810bd8e0add2e8]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           }
@@ -1905,12 +1905,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:aa837d63b43e5c12]",
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:5c1c80d47f0c2b69]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           },
           {
-            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:aa837d63b43e5c12]",
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:5c1c80d47f0c2b69]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           }
@@ -1981,16 +1981,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::new() -> std::result::Result<file::ReadAhead, error::Error> [body:d430519abc2c5be4]",
-            "target": "try_box",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:cfd5cd7380683cda]",
-            "target": "try_box",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:b9e83b330e147ebd]",
             "target": "try_box",
             "result": "model/caller-specific"
@@ -2002,6 +1992,16 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:4f83a65e11b91218]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/record_maps.rs>::new() -> std::result::Result<file::ReadAhead, error::Error> [body:d430519abc2c5be4]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/rewrite.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:cfd5cd7380683cda]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2128,16 +2128,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::new() -> std::result::Result<file::ReadAhead, error::Error> [body:d430519abc2c5be4]",
-            "target": "try_box",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:cfd5cd7380683cda]",
-            "target": "try_box",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:b9e83b330e147ebd]",
             "target": "try_box",
             "result": "model/caller-specific"
@@ -2149,6 +2139,16 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:4f83a65e11b91218]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/record_maps.rs>::new() -> std::result::Result<file::ReadAhead, error::Error> [body:d430519abc2c5be4]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/rewrite.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:cfd5cd7380683cda]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2501,18 +2501,8 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store.rs}, _2: &mut dyn store::TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
-            "target": "Ring::room",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open(_1: &mut dyn store::TileStore, _2: (u64, u64), _3: u64) -> std::result::Result<RingStore, error::Error> [body:738e7455db0ffef3]",
             "target": "Ring::within",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
-            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
@@ -2523,6 +2513,16 @@
           {
             "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:58a5d85776b6aca0]",
             "target": "overlap",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store/checkpoint.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store/checkpoint.rs}, _2: &mut dyn store::TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
+            "target": "Ring::room",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store/staging.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
+            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
@@ -2573,18 +2573,8 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store.rs}, _2: &mut dyn store::TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
-            "target": "Ring::room",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open(_1: &mut dyn store::TileStore, _2: (u64, u64), _3: u64) -> std::result::Result<RingStore, error::Error> [body:738e7455db0ffef3]",
             "target": "Ring::within",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
-            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
@@ -2595,6 +2585,16 @@
           {
             "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store.rs>::read_at(_1: &Buffered<'_>, _2: u64, _3: &mut [u8]) -> std::result::Result<(), error::Error> [body:58a5d85776b6aca0]",
             "target": "overlap",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store/checkpoint.rs>::checkpoint_choice::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/ring_store/checkpoint.rs}, _2: &mut dyn store::TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:d51fa2c8928c9b47]",
+            "target": "Ring::room",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "ring_store::<impl at crates/varlit-core/src/matrix_tiles/ring_store/staging.rs>::open_frame(_1: &mut RingStore, _2: &mut dyn store::TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:1b3a854604b40338]",
+            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
