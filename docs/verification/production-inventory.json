@@ -363,8 +363,8 @@
   },
   "schema": 1,
   "sources": {
-    "Cargo.lock": "92bdd6ce1498d00c",
-    "Cargo.toml": "845d716b76df7a38",
+    "Cargo.lock": "08c0de1dd7cc2cc0",
+    "Cargo.toml": "1773a3f078cd1c81",
     "crates/varlit-core/Cargo.toml": "c356bb13d056741e",
     "crates/varlit-core/src/adapter.rs": "65ab8f87ed2d760e",
     "crates/varlit-core/src/anchor.rs": "03fd1c00ae7109c1",
@@ -518,7 +518,7 @@
     "crates/varlit-macros/src/modules/block_derive.rs": "72b5f902088963fb",
     "crates/varlit-macros/src/modules/format_emit.rs": "c4be6c4b45ef8837",
     "crates/varlit-macros/src/modules/format_parse.rs": "e976a431c4d7f944",
-    "crates/varlit/Cargo.toml": "e9edf72166fef800",
+    "crates/varlit/Cargo.toml": "f4673d7680f796ac",
     "crates/varlit/src/lib.rs": "15c85b60ac6311e9"
   }
 }

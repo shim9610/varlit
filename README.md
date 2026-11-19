@@ -1,6 +1,6 @@
 # Varlit
 
-Version: **0.13.0-alpha.1** (pre-release) · Rust **1.95+** · MIT OR Apache-2.0
+Version: **0.13.0-alpha.2** (pre-release) · Rust **1.95+** · MIT OR Apache-2.0
 
 Varlit defines typed binary block formats in Rust. Declare the block layouts and
 policies, append application-sized blocks, and let independent readers follow
@@ -9,10 +9,10 @@ indexes, explicit durability, recovery and optional compression or memory mappin
 
 ```toml
 [dependencies]
-varlit = { version = "0.13.0-alpha.1", features = ["integrity"] }
+varlit = { version = "0.13.0-alpha.2", features = ["integrity"] }
 ```
 
-0.13.0 is not published yet. `0.13.0-alpha.1` is a pre-release on the main
+0.13.0 is not published yet. `0.13.0-alpha.2` is a pre-release on the main
 branch: depend on it from git (`varlit = { git = "https://github.com/shim9610/varlit", features = ["integrity"] }`),
 and expect the API and the file layouts new in 0.13 to change before the
 release. The last published version is 0.12.1.

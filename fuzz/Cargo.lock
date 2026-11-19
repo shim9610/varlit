@@ -326,7 +326,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "varlit"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 dependencies = [
  "varlit-core",
  "varlit-macros",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "varlit-core"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 dependencies = [
  "crc32fast",
  "libc",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "varlit-macros"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

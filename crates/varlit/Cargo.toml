@@ -32,8 +32,8 @@ scalable-fault-injection = [
 ]
 
 [dependencies]
-varlit-core = { path = "../varlit-core", version = "0.13.0-alpha.1" }
-varlit-macros = { path = "../varlit-macros", version = "0.13.0-alpha.1" }
+varlit-core = { path = "../varlit-core", version = "0.13.0-alpha.2" }
+varlit-macros = { path = "../varlit-macros", version = "0.13.0-alpha.2" }
 
 [dev-dependencies]
 proptest.workspace = true

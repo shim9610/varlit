@@ -4,9 +4,9 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
-## 0.13.0-alpha.1 - unreleased
+## 0.13.0-alpha.2 - unreleased
 
-Not yet published. `0.13.0-alpha.1` is the version on the main branch while
+Not yet published. `0.13.0-alpha.2` is the version on the main branch while
 the tiled matrix storage is still being tested: the API and the file layouts
 introduced here may change before 0.13.0, and a file written by a
 pre-release is not guaranteed to open with the release.
