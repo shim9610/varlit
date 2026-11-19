@@ -173,6 +173,12 @@ impl SnapshotFile {
         Ok(self.file.try_clone()?)
     }
 
+    /// The file object's current logical length, read through this handle
+    /// without duplicating it.
+    pub(crate) fn file_len(&self) -> Result<u64> {
+        Ok(self.file.len()?)
+    }
+
     #[inline]
     /// [`PrimaryFile::will_need`] for a range inside this snapshot; a range
     /// outside it is ignored, since the read that follows reports it.

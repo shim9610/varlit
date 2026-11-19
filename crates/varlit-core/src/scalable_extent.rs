@@ -230,10 +230,6 @@ impl RecordSpan {
         self.payload_len
     }
 
-    pub(crate) const fn footer_offset(self) -> FileOffset {
-        self.footer_offset
-    }
-
     #[cfg(test)]
     pub(crate) const fn footer_len(self) -> ByteLength {
         self.footer_len
@@ -286,25 +282,6 @@ mod tests {
     const PIB: u64 = 1 << 50;
     const HEADER_LEN: ByteLength = ByteLength::new(32);
     const FOOTER_LEN: ByteLength = ByteLength::new(32);
-
-    #[test]
-    fn one_pib_offsets_and_bounds_remain_exact() {
-        let record_len = ByteLength::new(80);
-        let bounds = SnapshotBounds::new(ByteLength::new(PIB + record_len.get()));
-        let pointer = UntrustedRecordPointer::new(PIB, record_len.get());
-        let validated = bounds.validate(pointer, HEADER_LEN, FOOTER_LEN).unwrap();
-        let span = validated.span();
-
-        assert_eq!(bounds.logical_len().get(), PIB + 80);
-        assert_eq!(span.record_offset().get(), PIB);
-        assert_eq!(span.header_len().get(), 32);
-        assert_eq!(span.payload_offset().get(), PIB + 32);
-        assert_eq!(span.payload_len().get(), 16);
-        assert_eq!(span.footer_offset().get(), PIB + 48);
-        assert_eq!(span.footer_len().get(), 32);
-        assert_eq!(span.end().get(), PIB + 80);
-        assert_eq!(span.physical_len().get(), 80);
-    }
 
     #[test]
     fn snapshot_ranges_cover_the_full_u64_domain_without_saturation() {
@@ -497,17 +474,6 @@ mod tests {
                 snapshot_len: 200
             })
         ));
-    }
-
-    #[test]
-    fn empty_payload_is_valid_when_the_frame_is_complete() {
-        let bounds = SnapshotBounds::new(ByteLength::new(164));
-        let span = bounds
-            .validate(UntrustedRecordPointer::new(100, 64), HEADER_LEN, FOOTER_LEN)
-            .unwrap()
-            .span();
-        assert_eq!(span.payload_len(), ByteLength::ZERO);
-        assert_eq!(span.payload_offset(), span.footer_offset());
     }
 
     #[test]

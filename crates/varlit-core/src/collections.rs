@@ -41,17 +41,6 @@ pub(crate) struct MaterializationBudget {
     remaining: u64,
 }
 
-/// A callback may charge/decode against this ledger, but cannot reset, clone
-/// or replace the underlying budget. The borrow remains private to this module.
-pub(crate) struct DecodeBudget<'a> {
-    budget: &'a mut MaterializationBudget,
-}
-impl DecodeBudget<'_> {
-    pub(crate) fn decode<T: VarlitDecode>(&mut self, bytes: &[u8], endian: Endian) -> Result<T> {
-        self.budget.decode(bytes, endian)
-    }
-}
-
 impl MaterializationBudget {
     pub(crate) fn new(spec: FormatSpec) -> Self {
         let limit = match spec.read_limits.resolve().max_materialized_bytes {
@@ -97,10 +86,6 @@ impl MaterializationBudget {
         })
     }
 
-    pub(crate) fn decode_view(&mut self) -> DecodeBudget<'_> {
-        DecodeBudget { budget: self }
-    }
-
     pub(crate) fn remaining(&self) -> u64 {
         self.remaining
     }
@@ -116,6 +101,18 @@ impl MaterializationBudget {
         out: &mut T,
     ) -> Result<()> {
         Decoder::decode_from_slice_accounted_into(bytes, endian, &mut self.remaining, out)
+    }
+
+    /// Decodes a part of a keyed-storage record from all of `bytes` into
+    /// `out`, charged to this budget.
+    pub(crate) fn decode_keyed_into<T: crate::VarlitKeyedBlock>(
+        &mut self,
+        bytes: &[u8],
+        endian: Endian,
+        out: &mut T,
+        part: crate::codec::KeyedPart<'_, T::Key>,
+    ) -> Result<()> {
+        Decoder::decode_keyed_accounted_into(bytes, endian, &mut self.remaining, out, part)
     }
 }
 

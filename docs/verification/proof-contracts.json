@@ -10,6 +10,7 @@
       "sources": [
         "crates/varlit-core/src/verification/record_extent.rs",
         "crates/varlit-core/src/file.rs",
+        "crates/varlit-core/src/file/record_index_entry.rs",
         "crates/varlit-core/src/native_layout.rs",
         "crates/varlit-core/src/verification/generated_file.rs"
       ],
@@ -170,15 +171,13 @@
     {
       "id": "materialization",
       "harnesses": [
-        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes",
-        "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
+        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes"
       ],
       "sources": [
         "crates/varlit-core/src/verification/materialization.rs",
-        "crates/varlit-core/src/collections.rs",
-        "crates/varlit-core/src/verification/decoder_callers.rs"
+        "crates/varlit-core/src/collections.rs"
       ],
-      "scope": "full-width inductive budget step; actual MaterializationBudget::decode twice across short input, callback errors and retry",
+      "scope": "full-width inductive budget step: consume, failed charge and reset",
       "limits": "Budget reset requires prior record release; not a whole-process live-memory bound",
       "specification": {
         "requires": "0<=remaining<=limit; returning codecs read/charge through Decoder and do not manipulate its private state.",
@@ -388,17 +387,18 @@
         "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid",
         "matrix_tiles::wal::ring_proofs::a_placed_frame_never_overwrites_a_kept_frame",
         "matrix_tiles::wal::ring_proofs::room_promised_by_a_checkpoint_is_room_placement_finds",
-        "matrix_tiles::wal::ring_proofs::a_frame_entry_lies_inside_the_frame_body"
+        "matrix_tiles::wal::ring_proofs::a_streamed_entry_lies_inside_the_frame_body",
+        "matrix_tiles::wal::ring_proofs::a_read_through_the_frame_buffer_copies_exactly_the_overlap"
       ],
       "sources": [
         "crates/varlit-core/src/verification/matrix_ring.rs",
         "crates/varlit-core/src/matrix_tiles/wal.rs"
       ],
-      "scope": "which stored write-ahead ring headers a tiled matrix believes; the offset arithmetic of a believed header and of each frame a scan steps over; where a writer places its next frame relative to the frames it keeps; and the bounds of each entry parsed from a frame body, for arbitrary field values, ring placements admitted by Ring::within, ring offsets and frame lengths",
-      "limits": "Checksums, I/O, checkpoint ordering, which generations a checkpoint applies and crash atomicity are covered by native tests (in-memory write-prefix models and a killed writer process), not proofs. Frame stepping and frame placement are single steps; the induction over a whole scan or a sequence of publications is argued in the harness comments, not mechanised. Entry parsing is proved on bodies of up to 40 bytes.",
+      "scope": "which stored write-ahead ring headers a tiled matrix believes; the offset arithmetic of a believed header and of each frame a scan steps over; where a writer places its next frame relative to the frames it keeps; and the bounds of each entry a scan streams from a frame body, for arbitrary field values, ring placements admitted by Ring::within, ring offsets and frame lengths; and the overlap a writer serves from its open frame's buffered bytes",
+      "limits": "Checksums, I/O, checkpoint ordering, which generations a checkpoint applies and crash atomicity are covered by native tests (in-memory write-prefix models and a killed writer process), not proofs. Frame stepping and frame placement are single steps; the induction over a whole scan or a sequence of publications is argued in the harness comments, not mechanised. Entry parsing is proved for any entry header and any count of bytes left in the body; the stream reading frames through a fixed buffer is covered by native tests.",
       "specification": {
         "requires": "Eight arbitrary u64 header fields; a ring whose length is within the format bounds and whose end offset fits u64; arbitrary ring offsets and frame lengths.",
-        "ensures": "A header is believed exactly when reclaimed <= checkpointed <= mark <= published and published and seq are below u64::MAX, so the next generation and sequence are representable. Offsets of a header that fits the frame area are word-aligned, map to logical offsets inside the ring record, and are less than the area apart. A stepped frame lies wholly inside the frame area and the next offset is inside it and word-aligned. A placed frame lies inside the frame area, covers no byte of a kept frame and leaves the cursor different from the tail; a frame is refused as too large only when an empty ring could not hold it; room a checkpoint plans for is room placement then finds. A parsed entry's header and bytes lie inside the frame body and the next entry starts after it.",
+        "ensures": "A header is believed exactly when reclaimed <= checkpointed <= mark <= published and published and seq are below u64::MAX, so the next generation and sequence are representable. Offsets of a header that fits the frame area are word-aligned, map to logical offsets inside the ring record, and are less than the area apart. A stepped frame lies wholly inside the frame area and the next offset is inside it and word-aligned. A placed frame lies inside the frame area, covers no byte of a kept frame and leaves the cursor different from the tail; a frame is refused as too large only when an empty ring could not hold it; room a checkpoint plans for is room placement then finds. A parsed entry's header and bytes lie inside the frame body and the next entry starts after it. A read served through the open frame's buffer copies exactly the intersection of the read and the buffered range, at the same file offsets in both.",
         "on_error": "A header with unordered or saturated generations is not believed; a frame that is short, unaligned or past the frame area is not stepped over. An entry whose header or bytes would pass the end of the body is not parsed.",
         "frame": "Pure functions of their arguments; nothing is read or written.",
         "progress": "No loops; each check is constant work. A stepped frame advances by at least a frame header and checksum."
@@ -415,7 +415,8 @@
       "sources": [
         "crates/varlit-core/src/verification/matrix_geometry.rs",
         "crates/varlit-core/src/matrix_tiles/geometry.rs",
-        "crates/varlit-core/src/format.rs"
+        "crates/varlit-core/src/format.rs",
+        "crates/varlit-core/src/format/spec_validation.rs"
       ],
       "scope": "slot indexing for tiles with sides up to 63, slot byte ranges for every admitted cell count at four fixed strides, and Morton directory keys for arbitrary tile coordinates; and the end offset of a page-aligned metadata region for arbitrary offsets and lengths",
       "limits": "Bounded: a product of two unknowns does not decide in the proof budget, so slot indexing is proved for small tiles and slot byte ranges for strides 1, 8, 61 and 65532 only. Other strides, the largest tile shapes, that distinct cells get distinct slots, and the reduction of a cell key to a tile coordinate and an in-tile row and column are checked by native tests (matrix_tiles::tests::every_key_has_one_slot_in_one_tile_at_every_admitted_shape). Directory pages, tile allocation and bitmap contents are covered by native tests.",
@@ -425,6 +426,74 @@
         "on_error": "Tile coordinates that do not fit 32 bits are refused with InvalidMatrixLayout. A region whose end is not a u64 offset is refused instead of wrapping.",
         "frame": "Pure functions of their arguments; nothing is read or written.",
         "progress": "No loops; each computation is constant work."
+      }
+    },
+    {
+      "id": "keyed-heap",
+      "harnesses": [
+        "keyed_heap::heap_proofs::the_entry_search_finds_the_insertion_point",
+        "keyed_heap::heap_proofs::a_separator_lies_between_its_keys",
+        "keyed_heap::heap_proofs::varints_round_trip",
+        "keyed_heap::heap_proofs::a_cell_keeps_what_fits_and_the_rest_fills_overflow_pages",
+        "keyed_heap::heap_proofs::a_page_that_passes_its_check_keeps_every_entry_inside_it",
+        "keyed_heap::heap_proofs::repack_0",
+        "keyed_heap::heap_proofs::insert_0",
+        "keyed_heap::heap_proofs::repack_1",
+        "keyed_heap::heap_proofs::insert_1",
+        "keyed_heap::heap_proofs::repack_2",
+        "keyed_heap::heap_proofs::insert_2",
+        "keyed_heap::heap_proofs::repack_3",
+        "keyed_heap::heap_proofs::insert_3",
+        "keyed_heap::heap_proofs::repack_4",
+        "keyed_heap::heap_proofs::insert_4",
+        "keyed_heap::heap_proofs::repack_5",
+        "keyed_heap::heap_proofs::insert_5",
+        "keyed_heap::heap_proofs::repack_6",
+        "keyed_heap::heap_proofs::insert_6",
+        "keyed_heap::heap_proofs::repack_7",
+        "keyed_heap::heap_proofs::insert_7",
+        "keyed_heap::heap_proofs::repack_8",
+        "keyed_heap::heap_proofs::insert_8"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/keyed_heap.rs",
+        "crates/varlit-core/src/keyed_heap/node.rs",
+        "crates/varlit-core/src/keyed_heap/tree.rs",
+        "crates/varlit-core/src/keyed_heap/heap.rs",
+        "crates/varlit-core/src/keyed_heap/heap/pages.rs",
+        "crates/varlit-core/src/keyed_heap/heap/rebalance.rs"
+      ],
+      "scope": "the binary search over every sorted entry array of up to eight entries and every target; the separator between every pair of keys of up to four bytes; varints for every u64; how much of every record below 2^48 bytes a leaf cell keeps, and that the rest fills whole overflow pages; and, for any bytes a tree page holds, the check a page read from disk must pass, and that a repack or an insert into a checked page of up to two entries never leaves the page",
+      "limits": "Tree pages are proved on 64-byte pages of the same layout (every page function bounds itself by the page's length; the tree's pages are 4096 bytes), for any bytes, and repack and insert for every entry count such a page can hold (0 to 8), one harness per count so each fits the solver's memory. Splits, merges, separators of streamed keys, overflow chains, the free page list and blocks, crash atomicity and reader snapshots go through the write-ahead ring and are covered by native tests (keyed_heap::node::tests: a page against a list model and damaged pages; keyed_heap::tests: a model over splits, deletes and reopens on deep trees of small pages, keys and values of every length around every cell and overflow boundary, random histories with every structure checked, every crash prefix of a generation and of its publication, pages reused after deletes and rewrites, reader expiry) and the keyed_storage integration and fuzz targets, not proofs.",
+      "specification": {
+        "requires": "Sorted entry arrays of up to eight entries; keys of up to four bytes with low < high; any u64; record lengths below 2^48; any 64 bytes as a page, with every entry count it can hold (0 to 8) for repack and insert, and bodies of up to four bytes to insert.",
+        "ensures": "The search returns the first entry not less than the target and whether it is equal. A separator S satisfies low < S <= high. Varints round-trip. A leaf cell keeps a record whole up to MAX_LOCAL bytes and otherwise between MIN_LOCAL and MAX_LOCAL, leaving whole overflow pages when it can. A page that passes node::kind has its body area inside the page, and every entry it yields lies inside the body area. A repack of a checked page keeps it checked with its count and no garbage; an insert that succeeds makes the body entry `index` with its length, one more entry, and a page that still passes its check.",
+        "on_error": "A repack or insert that fails, or an insert that does not fit, leaves the page exactly as it was; entry bounds that do not hold are errors, never a panic or an out-of-bounds access.",
+        "frame": "Pure functions of their arguments and the page buffers they are given.",
+        "progress": "Loops bounded by the entry count (at most 8 on a 64-byte page), by key and varint lengths, and by eight words in the page comparison."
+      }
+    },
+    {
+      "id": "published-end",
+      "harnesses": [
+        "published_end::proofs::a_slot_round_trips",
+        "published_end::proofs::the_visible_length_is_bounded_by_the_file_and_the_published_end",
+        "published_end::proofs::a_torn_slot_write_falls_back_to_the_previous_end",
+        "published_end::proofs::the_newest_valid_slot_decides",
+        "published_end::proofs::a_known_length_is_what_measuring_would_give"
+      ],
+      "sources": [
+        "crates/varlit-core/src/published_end/proofs.rs",
+        "crates/varlit-core/src/published_end.rs"
+      ],
+      "scope": "VPUB slot encoding, slot choice and the reader's visible length",
+      "limits": "A torn slot is assumed to fail its checksum; that the writer publishes only after a durable publication's barrier is held by an integration test, not here",
+      "specification": {
+        "requires": "The writer writes slot seq % 2 with increasing sequences and non-decreasing ends.",
+        "ensures": "A reader is told no more than the file and the newest valid published end; a torn write falls back to an earlier, no larger end. Skipping the length measurement when the bound lies within the last measured length gives the same answer while the file has not shrunk.",
+        "on_error": "Unreadable slots keep the reader's last bound.",
+        "frame": "The append log start is never hidden.",
+        "progress": "Pure, loop-bounded functions."
       }
     }
   ],

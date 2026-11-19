@@ -11,17 +11,17 @@ bytes are unchanged.
 ## API and modes
 
 ```rust
-use varlit::{DiskIndexOptions, ReadLimits, ReadValidation};
+use varlit::{ReadLimits, ReadValidation, StreamOptions};
 
 let limits = ReadLimits::MISSING.with_read_validation(ReadValidation::TRUSTED);
 // Given a declared `spec` and input `path`:
 // let reader = spec.open_reader_with_resource_limits(path, limits)?;
 
-let options = DiskIndexOptions {
+let options = StreamOptions {
     limits: ReadLimits::MISSING.with_read_validation(ReadValidation::CRC_ONLY),
-    ..DiskIndexOptions::default()
+    ..StreamOptions::default()
 };
-// VarlitIndexedReader::open(spec, path, options, plan)?;
+// let reader = MyFormat::open_stream_reader(path, options)?;
 ```
 
 | Mode | Additional structure checks | Data CRC |
@@ -52,26 +52,18 @@ fields; it does not reread those fields. Consequently, a later header mutation
 can go undetected in CRC-only mode: the captured metadata is trusted. Both CRC32
 policies, including `Crc32WithHeader`, retain their original checksum calculation.
 
-Indexed uncompressed point reads in `TRUSTED` derive the payload span directly
-from the confirmed sidecar's physical descriptor. They do not read the native
-header or footer. CRC-only additionally reads a footer once where the stored CRC
-covers links absent from the sidecar. Compressed candidates need one native
-frame read because the sidecar does not store their uncompressed-length hint;
-payload access does not repeat it. Trusted pointer/tombstone lookup does not
-materialize a payload just to recheck a key.
-
 Typed stream/follow cursors parse each incoming frame once and then use its
 captured metadata for the returned payload. Trust does not make a stream
 self-indexing: identifying the next record still requires its framing. Native
 resident/demand-directory access may also need an initial frame read to learn
 fields absent from an offset-only directory. The one-payload-read promise is
-about captured entries and uncompressed indexed candidates, not every possible
-open or query.
+about captured entries, not every possible open or query. (The indexed primary,
+whose point reads derived payload spans from its sidecar, was removed.)
 
-Structure-off skips optional disk-index page/key CRC checks and padding/prefix
+Structure-off skips optional sidecar page CRC checks and padding/prefix
 comparisons, and omits the eager whole-matrix metadata reporting pass. Required
-page shape, key extents, child descent, traversal fuel and bounded cache admission
-remain. Index writer/maintenance readers retain metadata checks. Matrix scalar,
+page shape, extents, traversal fuel and bounded cache admission remain. Sidecar
+writer and maintenance reads retain metadata checks. Matrix scalar,
 run, column, growing chunk, compressed-slot and mapped payload paths honor the
 data-CRC selection without changing stored layout or cell width. Immutable mmap
 payload certificates are allocated only when an optional check is selected.
@@ -79,8 +71,8 @@ payload certificates are allocated only when an optional check is selected.
 `IntegrityVerification::{AtOpen, OnDemand}` schedules selected record checks.
 With both checks off, `AtOpen` does not force a payload-verification scan or
 exclude the existing digest/segment open routes. With a check selected it keeps
-its admission behavior. Explicit `verify_all`, recovery admission and index
-reconstruction/source validation do not inherit a trusted payload-read choice.
+its admission behavior. Explicit `verify_all`, recovery admission and stream
+bootstrap do not inherit a trusted payload-read choice.
 
 ## Guards that remain
 

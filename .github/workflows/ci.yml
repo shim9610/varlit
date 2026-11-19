@@ -79,9 +79,7 @@ jobs:
       - name: Build load example
         run: cargo build --locked --release -p varlit --features integrity --example scalable_load
       - name: Execute real-byte load smoke with eight readers
-        run: python3 scripts/load_scalable.py --suite large --only indexed-r8-20g --total-gib 0.0625 --epoch-mib 8 --read-seconds 1 --output "$VARLIT_STORAGE_RUN/load-smoke" --data-root "$VARLIT_STORAGE_RUN/load-smoke-data"
-      - name: Verify fixed reader work and snapshot traces
-        run: python3 scripts/load_scalable.py --suite large --only indexed-r8-20g --total-gib 0.0625 --epoch-mib 8 --reader-checks-per-epoch 32 --read-seconds 1 --output "$VARLIT_STORAGE_RUN/load-fixed-smoke" --data-root "$VARLIT_STORAGE_RUN/load-fixed-smoke-data"
+        run: python3 scripts/load_scalable.py --suite large --only stream-r8-20g --total-gib 0.0625 --epoch-mib 8 --output "$VARLIT_STORAGE_RUN/load-smoke" --data-root "$VARLIT_STORAGE_RUN/load-smoke-data"
       - name: Preserve contract evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -90,7 +88,6 @@ jobs:
           path: |
             ${{ env.VARLIT_STORAGE_RUN }}/contracts/
             ${{ env.VARLIT_STORAGE_RUN }}/load-smoke/
-            ${{ env.VARLIT_STORAGE_RUN }}/load-fixed-smoke/
           if-no-files-found: error
           retention-days: 14
 
@@ -160,10 +157,12 @@ jobs:
           python3 -m unittest discover -s tools/storage-bench -p 'test_*.py'
       - run: cargo fmt --all -- --check
       - run: cargo fmt --manifest-path tools/storage-bench/Cargo.toml -- --check
-      - name: Format native implementation files included in their owning module
-        run: rustfmt --edition 2024 --check crates/varlit-core/src/file/*.rs
-      # cargo fmt does not traverse include! source files.
-      - run: rustfmt --edition 2024 --check crates/varlit/tests/support/publication_histories.rs
+      - name: Format implementation files included in their owning module
+        run: |
+          rustfmt --edition 2024 --check crates/varlit-core/src/file/*.rs \
+            crates/varlit-core/src/format/*.rs \
+            crates/varlit-core/src/matrix_tiles/api/*.rs \
+            crates/varlit-core/src/matrix_tiles/ring_store/*.rs
 
   # Discover configurations from Cargo metadata. Adding a feature adds both
   # Clippy and a native singleton test job without editing this workflow.
@@ -801,6 +800,58 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu --workspace --all-features \
             --lib --tests --no-fail-fast
 
+  s390x:
+    # Big-endian support is checked under emulation, not on hardware: the
+    # workspace is cross-built for s390x and its library and integration
+    # tests run under QEMU's user mode (registered with binfmt, so tests that
+    # re-execute themselves work too). Every integer in a file is converted
+    # with an explicit byte order, which `enforcement_gates` holds in the
+    # source; this job is what runs the paths on a big-endian target,
+    # including those Miri's interpreter is too slow for. Tests run one at a
+    # time: QEMU's user mode crashes itself, about once in fifty runs, when
+    # several threads unwind at once (`decoder_contracts`; never serially and
+    # never natively). Debug info is left out to keep the cross build within
+    # the runner's disk.
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: test (all-features, s390x big-endian, QEMU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      RUST_TEST_THREADS: 1
+      CARGO_TARGET_S390X_UNKNOWN_LINUX_GNU_LINKER: s390x-linux-gnu-gcc
+      CARGO_TARGET_S390X_UNKNOWN_LINUX_GNU_RUNNER: qemu-s390x -L /usr/s390x-linux-gnu
+      QEMU_LD_PREFIX: /usr/s390x-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: s390x-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: s390x
+      - name: Install the s390x cross toolchain and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user qemu-user-binfmt gcc-s390x-linux-gnu \
+            libc6-dev-s390x-cross
+      - name: Register QEMU for s390x executables
+        # Tests that re-execute themselves need the kernel to hand s390x
+        # binaries to QEMU; the package registers it, and this makes sure.
+        run: |
+          if [ ! -e /proc/sys/fs/binfmt_misc/qemu-s390x ]; then
+            sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc || true
+            sudo sh -c 'cat /usr/lib/binfmt.d/qemu-s390x.conf > /proc/sys/fs/binfmt_misc/register'
+          fi
+          test -e /proc/sys/fs/binfmt_misc/qemu-s390x
+      - name: Test as big-endian binaries
+        env:
+          VARLIT_SKIP_UI_SNAPSHOTS: 1
+        run: |
+          cargo test --locked --target s390x-unknown-linux-gnu --workspace --all-features \
+            --lib --tests --no-fail-fast
+
   required-gate:
     # Keep this name stable: main protection requires this aggregate check.
     if: always() && github.repository == 'shim9610/varlit' && !github.event.repository.private
@@ -821,6 +872,7 @@ jobs:
       - storage-contracts
       - msrv
       - i686
+      - s390x
       - renamed-dependency
       - public-api
       - rustdoc

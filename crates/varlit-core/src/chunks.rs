@@ -65,7 +65,8 @@ impl ChunkedBytes {
                 let stored_len =
                     u32::try_from(compressed.len()).map_err(|_| Error::InvalidChunkedBytes)?;
                 let at = CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN;
-                encoded[at..at + 4].copy_from_slice(&(chunk.len() as u32).to_le_bytes());
+                encoded[at..at + 4]
+                    .copy_from_slice(&crate::width::field32(chunk.len())?.to_le_bytes());
                 encoded[at + 4..at + 8].copy_from_slice(&stored_len.to_le_bytes());
                 encoded[at + 8..at + 12].copy_from_slice(&crc32_bytes(chunk)?.to_le_bytes());
                 encoded
@@ -215,7 +216,7 @@ impl ChunkedBytes {
                     let actual = crc.finalize();
                     if actual != entry.crc32 {
                         return Err(Error::ChunkChecksumMismatch {
-                            chunk_index: index as u32,
+                            chunk_index: u32::try_from(index).unwrap_or(u32::MAX),
                             expected: entry.crc32,
                             actual,
                         });
@@ -229,6 +230,89 @@ impl ChunkedBytes {
             }
             Ok(())
         }
+    }
+
+    /// Decode the whole payload into `writer`, one verified chunk at a time.
+    ///
+    /// Each chunk is decompressed into one reusable buffer, its length and
+    /// checksum are checked, and only then is it written. A chunk that fails
+    /// either check is never written, and nothing is written after it. Unlike
+    /// [`Self::stream_range`], everything that reaches `writer` has already
+    /// passed its chunk's checks.
+    ///
+    /// A declared total above `max_uncompressed_len` is refused before any
+    /// output, as in [`Self::decode_to_vec_limited`]. Decoded-output buffering
+    /// is one chunk (the container's chunk length), not the whole payload; the
+    /// encoded container stays resident in `self`.
+    ///
+    /// A later chunk's failure, or a writer error, leaves the chunks written
+    /// before it in `writer`; each of those passed its own checks, but the
+    /// payload as a whole did not. Write to a staging destination and publish it
+    /// only after `Ok`. Writer errors are returned as [`Error::Io`]. On success
+    /// the result is the number of bytes written, which equals
+    /// [`Self::decoded_len`]. `writer` is not flushed.
+    ///
+    /// ```no_run
+    /// # fn example(chunks: &varlit_core::ChunkedBytes) -> varlit_core::Result<()> {
+    /// let mut staged = std::io::BufWriter::new(std::fs::File::create("payload.pending")?);
+    /// chunks.decode_into(&mut staged, 64 * 1024 * 1024 * 1024)?;
+    /// std::io::Write::flush(&mut staged)?;
+    /// std::fs::rename("payload.pending", "payload")?;
+    /// # Ok(()) }
+    /// ```
+    pub fn decode_into<W: std::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+        max_uncompressed_len: u64,
+    ) -> Result<u64> {
+        let header = parse_header(&self.encoded)?;
+        if header.uncompressed_len > max_uncompressed_len {
+            return Err(Error::DecompressedLengthLimitExceeded {
+                actual: header.uncompressed_len,
+                limit: max_uncompressed_len,
+            });
+        }
+        let frame_sizes_known = validate_chunked_bytes(&self.encoded, true)?;
+        let mut stored_at = table_extent(header.chunk_count as usize, self.encoded.len())
+            .ok_or(Error::InvalidChunkedBytes)?;
+        let mut decompressor = (header.chunk_count != 0)
+            .then(crate::compression_buffers::Decompressor::new)
+            .transpose()?;
+        let mut written = 0u64;
+        for index in 0..header.chunk_count as usize {
+            let entry = parse_entry(&self.encoded, CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN)?;
+            let stored_end = stored_at
+                .checked_add(entry.stored_len as usize)
+                .ok_or(Error::InvalidChunkedBytes)?;
+            let stored = self
+                .encoded
+                .get(stored_at..stored_end)
+                .ok_or(Error::InvalidChunkedBytes)?;
+            stored_at = stored_end;
+            let decoder = decompressor.as_mut().ok_or(Error::InvalidChunkedBytes)?;
+            let chunk = decoder.decompress_chunk(
+                stored,
+                entry.uncompressed_len as usize,
+                frame_sizes_known,
+            )?;
+            if chunk.len() as u64 != u64::from(entry.uncompressed_len) {
+                return Err(Error::DecompressedLengthMismatch {
+                    expected: u64::from(entry.uncompressed_len),
+                    actual: chunk.len() as u64,
+                });
+            }
+            let actual = crc32_bytes(chunk)?;
+            if actual != entry.crc32 {
+                return Err(Error::ChunkChecksumMismatch {
+                    chunk_index: u32::try_from(index).unwrap_or(u32::MAX),
+                    expected: entry.crc32,
+                    actual,
+                });
+            }
+            writer.write_all(chunk)?;
+            written += chunk.len() as u64;
+        }
+        Ok(written)
     }
 
     pub fn decode_to_vec(&self) -> Result<Vec<u8>> {
@@ -316,7 +400,7 @@ impl ChunkedBytes {
                 }
                 if actual != entry.crc32 {
                     return Err(Error::ChunkChecksumMismatch {
-                        chunk_index: index as u32,
+                        chunk_index: u32::try_from(index).unwrap_or(u32::MAX),
                         expected: entry.crc32,
                         actual,
                     });
@@ -555,7 +639,7 @@ fn parse_header(encoded: &[u8]) -> Result<ChunkedHeader> {
         return Err(Error::InvalidChunkedBytes);
     }
     Ok(ChunkedHeader {
-        chunk_len: chunk_len as u32,
+        chunk_len: u32::try_from(chunk_len).map_err(|_| Error::InvalidChunkedBytes)?,
         uncompressed_len: u64::from_le_bytes(encoded[16..24].try_into().expect("slice")),
         chunk_count: u32::from_le_bytes(encoded[24..28].try_into().expect("slice")),
     })

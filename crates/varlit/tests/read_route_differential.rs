@@ -1,4 +1,4 @@
-//! Differential coverage of owned, indexed, streaming and mapped reads.
+//! Differential coverage of owned, streaming and mapped reads.
 //! Mappings only exist while the test file is immutable, including after damage.
 #![cfg(all(feature = "integrity", feature = "compression-zstd", feature = "mmap"))]
 #[path = "support/pages.rs"]
@@ -28,11 +28,11 @@ struct Empty {
 varlit_format! { pub struct Format {
     magic:b"ROUTES"; version:1; endian:little; schema_hash:computed; blocks:[Blob,Empty];
 } }
-static PLAN: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Blob>()];
 fn rejected<T>(label: &str, result: varlit::Result<T>, checks: &mut usize) {
     assert!(result.is_err(), "corruption accepted by {label}");
     *checks += 1;
 }
+
 #[test]
 fn read_routes_agree_on_valid_and_corrupt_payloads()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -58,17 +58,12 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                             )
                             .with_compression_policy(mode)
                             .with_computed_schema_hash();
-                        let plan = DiskIndexPlan::canonical(spec, PLAN)?;
                         let value = Blob {
                             id: 7,
                             bytes: vec![41; len],
                         };
-                        let mut writer = VarlitIndexedWriter::create(
-                            spec,
-                            &path,
-                            DiskIndexOptions::default(),
-                            plan,
-                        )?;
+                        let mut writer =
+                            VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
                         writer.push_info(&value)?;
                         writer.sync()?;
                         drop(writer);
@@ -78,12 +73,8 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                             .find(|e| e.block_id == Blob::ID)
                             .unwrap()
                             .clone();
-                        let indexed = VarlitIndexedReader::open(
-                            spec,
-                            &path,
-                            DiskIndexOptions::default(),
-                            plan,
-                        )?;
+                        let streamed =
+                            VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
                         let mut got = Blob::empty();
                         let mut scratch = Vec::new();
                         reader.read_block_at::<Blob>(
@@ -92,9 +83,7 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                             &mut got,
                         )?;
                         assert_eq!(got, value);
-                        assert!(indexed.get::<Blob>(&7, &mut got)?);
-                        assert_eq!(got, value);
-                        let mut stream = indexed.blocks::<Blob>()?;
+                        let mut stream = streamed.blocks::<Blob>()?;
                         assert!(stream.next_into(&mut got)?);
                         assert_eq!(got, value);
                         let mut stored = Vec::new();
@@ -158,14 +147,8 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                             &mut checks,
                         );
                         rejected(
-                            "indexed get",
-                            indexed.get::<Blob>(&7, &mut got),
-                            &mut checks,
-                        );
-                        rejected("indexed lookup", indexed.lookup::<Blob>(&7), &mut checks);
-                        rejected(
                             "streaming decode",
-                            indexed.blocks::<Blob>()?.next_into(&mut got),
+                            streamed.blocks::<Blob>()?.next_into(&mut got),
                             &mut checks,
                         );
                         // The damaged bytes remain immutable for all subsequent mappings.

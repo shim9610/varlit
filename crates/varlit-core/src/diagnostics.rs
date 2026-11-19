@@ -944,6 +944,8 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::ZeroCopyPayloadSizeMismatch { .. }
         | Error::ZeroCopyAlignmentMismatch { .. }
         | Error::KeyedChainRequiresKeyedApi { .. }
+        | Error::KeyedStorageRequiresPut { .. }
+        | Error::KeyedStorageBusy
         | Error::NoResidentDirectory { .. }
         // Caller usage rather than file data: the file is fine, and so is the
         // directory — they just belong to different generations of it.
@@ -1065,7 +1067,7 @@ pub fn error_hint(error: &Error) -> &'static str {
         )
     {
         return "the sidecar does not describe this generation of the primary file; \
-                republish it with rebuild_disk_index (never trust it)";
+                rebuild it with bootstrap_stream_checkpoint (never trust it)";
     }
     match classify_error(error) {
         DiagnosticDomain::FormatDefinition => "inspect the format declaration and generated schema",
@@ -1315,7 +1317,7 @@ pub(crate) fn remove_path_if_same_object(
             file.as_raw_handle() as HANDLE,
             FileDispositionInfo,
             (&raw const disposition).cast(),
-            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            crate::width::small32(std::mem::size_of::<FILE_DISPOSITION_INFO>()),
         )
     };
     if status == 0 {

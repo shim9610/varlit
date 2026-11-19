@@ -1,4 +1,5 @@
-// Native file mapped access operations.
+// Mapping a native file's payloads, cells and windows into memory (`mmap`
+// feature). Included into `file.rs` with `include!`, so it shares its scope.
 
 impl VarlitFile {
     /// Maps only the stored payload of a record from this captured generation.
@@ -481,11 +482,17 @@ impl VarlitFile {
             .read_limits
             .check(ReadLimitKey::MmapLen, physical_len)?;
         let (tiles, source) = self.tiles_read()?;
-        let entries = tiles.overlay_entries()?;
-        let patched: u64 = entries.iter().map(|(_, _, len)| u64::from(*len)).sum();
+        // Counted first, against the limit, then laid onto the private
+        // mapping chunk by chunk: no list of them is kept.
+        let (mut patches, mut patched) = (0u64, 0u64);
+        tiles.for_each_overlay(&source, &mut |_, _, len| {
+            patches += 1;
+            patched += u64::from(len);
+            Ok(())
+        })?;
         self.spec.read_limits.check(
             ReadLimitKey::MaterializedBytes,
-            patched.div_ceil(4096).saturating_add(entries.len() as u64) * 4096,
+            patched.div_ceil(4096).saturating_add(patches) * 4096,
         )?;
         let map_len = usize::try_from(physical_len).map_err(|_| Error::LengthOverflow {
             value: physical_len,
@@ -499,47 +506,50 @@ impl VarlitFile {
                 .map_copy(file.raw())?
         };
         let layout = self.file.anchor_layout();
-        let mut bytes = Vec::new();
-        for (target, at, len) in entries {
-            bytes.clear();
-            bytes
-                .try_reserve_exact(len as usize)
-                .map_err(|_| Error::AllocationFailed {
-                    resource: "matrix mapping patch",
-                    requested: u64::from(len),
-                })?;
-            bytes.resize(len as usize, 0);
-            crate::matrix_tiles::store::TileSource::read_at(&source, at, &mut bytes)?;
-            let mut write = |physical: u64, from: usize, n: usize| -> Result<()> {
-                let start = crate::width::index(physical)?;
-                mapping
-                    .get_mut(start..start + n)
-                    .ok_or(Error::MmapPayloadOutOfBounds {
-                        offset: physical,
-                        len: n as u64,
-                    })?
-                    .copy_from_slice(&bytes[from..from + n]);
-                Ok(())
-            };
-            match layout {
-                None => write(target, 0, len as usize)?,
-                Some(layout) => layout.split(target, u64::from(len), |segment| {
-                    if let crate::anchor::Segment::Data {
-                        physical,
-                        logical,
-                        len,
-                    } = segment
-                    {
-                        write(
-                            physical,
-                            crate::width::index(logical - target)?,
-                            crate::width::index(len)?,
-                        )?;
-                    }
+        let mut chunk = [0u8; 4096];
+        tiles.for_each_overlay(&source, &mut |target, at, len| {
+            let mut done = 0u64;
+            while done < u64::from(len) {
+                let n = crate::width::bounded(u64::from(len) - done, chunk.len());
+                crate::matrix_tiles::store::TileSource::read_at(
+                    &source,
+                    at + done,
+                    &mut chunk[..n],
+                )?;
+                let piece_at = target + done;
+                let mut write = |physical: u64, from: usize, n: usize| -> Result<()> {
+                    let start = crate::width::index(physical)?;
+                    mapping
+                        .get_mut(start..start + n)
+                        .ok_or(Error::MmapPayloadOutOfBounds {
+                            offset: physical,
+                            len: n as u64,
+                        })?
+                        .copy_from_slice(&chunk[from..from + n]);
                     Ok(())
-                })?,
+                };
+                match layout {
+                    None => write(piece_at, 0, n)?,
+                    Some(layout) => layout.split(piece_at, n as u64, |segment| {
+                        if let crate::anchor::Segment::Data {
+                            physical,
+                            logical,
+                            len,
+                        } = segment
+                        {
+                            write(
+                                physical,
+                                crate::width::index(logical - piece_at)?,
+                                crate::width::index(len)?,
+                            )?;
+                        }
+                        Ok(())
+                    })?,
+                }
+                done += n as u64;
             }
-        }
+            Ok(())
+        })?;
         let mmap = mapping.make_read_only()?;
         let logical_len = layout.map_or(mmap.len() as u64, |layout| {
             layout.logical_len(mmap.len() as u64)

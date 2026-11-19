@@ -17,7 +17,7 @@
 //!   referencing are reused only once `DiskIndexOptions::reclaim_after` further
 //!   generations are confirmed: crash recovery returns to the newest confirmed
 //!   generation, never an older one, and a reader still holding an older
-//!   generation by then sees [`DiskIndexError::PageReclaimed`] rather than
+//!   generation by then sees a damaged-sidecar error rather than
 //!   rewritten bytes. A writer that opens truncates the file back to the
 //!   confirmed generation's high-water mark: whatever lies past it was written
 //!   by a generation that never confirmed.
@@ -97,14 +97,7 @@ pub(super) struct Reader {
     pub tree: tree::Reader,
     pub slots: slots::Reader,
 }
-impl Reader {
-    pub fn get(&self, root: Root, key: &[u8]) -> DiskIndexResult<Option<[u8; LATEST_LEN]>> {
-        if let Some(value) = self.slots.get(key)? {
-            return Ok(value);
-        }
-        self.tree.get(root.tree, key)
-    }
-}
+impl Reader {}
 
 #[derive(Clone)]
 pub(super) struct Checkpoint {
@@ -270,12 +263,14 @@ impl Store {
         create_version: u32,
     ) -> DiskIndexResult<Self> {
         let writer = if writable {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(create)
-                .truncate(false)
-                .open(path)?;
+            let file = crate::primary_file::open_data_file(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(create)
+                    .truncate(false),
+                path,
+            )?;
             match crate::file::try_lock_native_guard(&file) {
                 Ok(()) => {}
                 Err(crate::file::WriterGuardLockError::WouldBlock) => {
@@ -288,7 +283,10 @@ impl Store {
             None
         };
         // Independent read-only file description; snapshots cannot retain a writer lock.
-        let file = crate::fallible::try_arc(File::open(path)?)?;
+        let file = crate::fallible::try_arc(crate::primary_file::open_data_file(
+            std::fs::OpenOptions::new().read(true),
+            path,
+        )?)?;
         if let Some(writer) = &writer
             && opened_sidecar_identity(&writer.0)? != opened_sidecar_identity(&file)?
         {
@@ -797,7 +795,7 @@ impl Store {
         bytes[16..24].copy_from_slice(&root.tree.offset.to_le_bytes());
         bytes[24..32].copy_from_slice(&root.tree.count.to_le_bytes());
         bytes[32..332].copy_from_slice(&encode_metadata(metadata));
-        bytes[332..336].copy_from_slice(&(tails.len() as u32).to_le_bytes());
+        bytes[332..336].copy_from_slice(&crate::width::field32(tails.len())?.to_le_bytes());
         bytes[336..344].copy_from_slice(&root.slots.offset.to_le_bytes());
         bytes[344..348].copy_from_slice(&root.slots.count.to_le_bytes());
         let checksum = crc32fast::hash(&bytes[..348]);
@@ -1141,7 +1139,7 @@ impl Store {
             page[..8].copy_from_slice(FREE_MAGIC);
             let next = pages.get(i + 1).copied().unwrap_or(0);
             page[8..16].copy_from_slice(&next.to_le_bytes());
-            page[16..20].copy_from_slice(&(chunk.len() as u32).to_le_bytes());
+            page[16..20].copy_from_slice(&crate::width::field32(chunk.len())?.to_le_bytes());
             for (j, (offset, tag)) in chunk.iter().enumerate() {
                 let entry = FREE_HEADER + j * FREE_ENTRY;
                 page[entry..entry + 8].copy_from_slice(&offset.to_le_bytes());
@@ -1209,7 +1207,7 @@ impl Store {
         bytes[16..24].copy_from_slice(&root.tree.offset.to_le_bytes());
         bytes[24..32].copy_from_slice(&root.tree.count.to_le_bytes());
         bytes[32..332].copy_from_slice(&encode_metadata(metadata));
-        bytes[332..336].copy_from_slice(&(tails.len() as u32).to_le_bytes());
+        bytes[332..336].copy_from_slice(&crate::width::field32(tails.len())?.to_le_bytes());
         bytes[336..344].copy_from_slice(&root.slots.offset.to_le_bytes());
         bytes[344..348].copy_from_slice(&root.slots.count.to_le_bytes());
         bytes[348..356].copy_from_slice(&root.tree.birth.to_le_bytes());

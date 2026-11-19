@@ -1,4 +1,6 @@
-// Native file header slots operations.
+// Header slots and header tails: the mutable region after the file header, its
+// blocks, and sealing it. Included into `file.rs` with `include!`, so it shares
+// that module's scope.
 
 impl VarlitFile {
     /// Where the `VBTT` region sits and the cold bytes that retire it, or
@@ -263,7 +265,7 @@ impl VarlitFile {
             HeaderSlotIntegrity::Rolling => true,
             HeaderSlotIntegrity::Sealed => view.is_sealed(),
         };
-        if verify && view.checksum != view.expected_checksum(self.header_slots_capacity()) {
+        if verify && view.checksum != view.expected_checksum(self.spec.header_slots.capacity) {
             return Err(Error::ChecksumMismatch {
                 offset: extent.payload_offset,
             });
@@ -333,7 +335,7 @@ impl VarlitFile {
                 rebuilt.extend_from_slice(&id.to_le_bytes());
                 rebuilt.extend_from_slice(&version.to_le_bytes());
                 rebuilt.extend_from_slice(&0u16.to_le_bytes());
-                rebuilt.extend_from_slice(&(existing.len() as u32).to_le_bytes());
+                rebuilt.extend_from_slice(&crate::width::field32(existing.len())?.to_le_bytes());
                 rebuilt.extend_from_slice(existing);
                 Ok(())
             },

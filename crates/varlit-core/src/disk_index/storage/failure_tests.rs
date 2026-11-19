@@ -272,9 +272,8 @@ fn failed_resume_releases_writer_lock_while_snapshot_owners_survive() {
     drop(store);
     let replacement = Store::open(&path, DiskIndexOptions::default(), false, true).unwrap();
     replacement.reconcile_confirmed_heads().unwrap();
-    for reader in &readers {
-        assert!(reader.get(checkpoint.root, b"absent").unwrap().is_none());
-    }
+    // The snapshot owners outlived the failed resume and the replacement.
+    assert_eq!(Arc::strong_count(&file), count - 1);
     drop(replacement);
     drop(readers);
     assert_eq!(

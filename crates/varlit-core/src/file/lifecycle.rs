@@ -1,4 +1,6 @@
-// Native file lifecycle operations.
+// Creating and opening native files: create, open for writing, read-only, scan
+// and lazy opens, and the checks each runs before handing back a file. Included
+// into `file.rs` with `include!`, so it shares that module's scope.
 
 fn lazy_metadata_error(error: Error, source: LazyOpenSource) -> Error {
     match error {
@@ -76,7 +78,10 @@ impl VarlitFile {
         } else {
             options.create(true);
         }
-        let mut file = PrimaryFile::new(options.open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(&mut options, &path)?,
+            None,
+        );
         // bind the single-writer object lock before any destructive
         // initialization. Opening with `.truncate(true)` would clear the new
         // object inside the pre-bind window where a concurrent creator that
@@ -109,14 +114,19 @@ impl VarlitFile {
             // directory entry is not durable until the first durability
             // request syncs the parent directory.
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             pending_pathname_parent_sync: true,
             opened_after_crash: false,
             poison: PoisonFlag::healthy(),
             _lock: None,
         };
+        // Keyed storage's metadata is the first record of the log, where an
+        // open looks for it.
+        file.create_keyed_storage()?;
         file.write_embedded_manifest_if_needed()?;
         file.mark_writer_open()?;
+        file.open_published_end()?;
         Ok(file)
     }
 
@@ -194,7 +204,10 @@ impl VarlitFile {
         } else {
             options.create(true);
         }
-        let mut file = PrimaryFile::new(options.open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(&mut options, &path)?,
+            None,
+        );
         // bind the single-writer object lock before any destructive
         // initialization; see `create_impl`.
         lock.bind_native(file.raw(), &path)?;
@@ -231,6 +244,7 @@ impl VarlitFile {
             // directory entry is not durable until the first durability
             // request syncs the parent directory.
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             pending_pathname_parent_sync: true,
             opened_after_crash: false,
@@ -240,6 +254,7 @@ impl VarlitFile {
         file.create_tiles(&dims, creation_nonce)?;
         file.write_embedded_manifest_if_needed()?;
         file.mark_writer_open()?;
+        file.open_published_end()?;
         Ok(file)
     }
 
@@ -329,8 +344,10 @@ impl VarlitFile {
         lock: &mut WriterLock,
         scratch: &mut B,
     ) -> Result<Self> {
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         lock.bind_native(file.raw(), &path)?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
@@ -383,6 +400,7 @@ impl VarlitFile {
             sequence_state,
             block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             segment_cursor,
             uncommitted_since_commit: false,
@@ -401,6 +419,7 @@ impl VarlitFile {
         if let Some(from) = pending_mark {
             opened.recover_marked_tail(from)?;
         }
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -469,8 +488,17 @@ impl VarlitFile {
         spec.validate()?;
         ensure_native_open_limits(spec)?;
         let path = path.as_ref().to_path_buf();
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)?,
+            None,
+        );
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // A reader stops at the published end: what a writer has written but
+        // not yet published (a durable commit whose barrier has not
+        // returned) is not there for it.
+        if let Some(slots_at) = published_end_slots_at(header_len, &header_extensions)? {
+            file.bound_by_published_end(slots_at, header_len);
+        }
         // Logical: measured once the header has installed the anchor layout.
         check_open_file_len(spec, &file)?;
         let append_start = header_len;
@@ -542,6 +570,7 @@ impl VarlitFile {
             sequence_state,
             block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             segment_cursor,
             uncommitted_since_commit: false,
@@ -557,6 +586,8 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        // Read-only opens return at once; a writer takes over the end.
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -758,8 +789,10 @@ impl VarlitFile {
         lock: &mut WriterLock,
         source: LazyOpenSource,
     ) -> Result<Self> {
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), path)?,
+            None,
+        );
         lock.bind_native(file.raw(), path)?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
@@ -813,6 +846,7 @@ impl VarlitFile {
             segment_cursor: SegmentCursor::new_empty(),
             block_tails: digest.block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
@@ -830,6 +864,8 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        // Read-only opens return at once; a writer takes over the end.
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -838,8 +874,17 @@ impl VarlitFile {
         path: &Path,
         source: LazyOpenSource,
     ) -> Result<Self> {
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true), path)?,
+            None,
+        );
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // A reader stops at the published end: what a writer has written but
+        // not yet published (a durable commit whose barrier has not
+        // returned) is not there for it.
+        if let Some(slots_at) = published_end_slots_at(header_len, &header_extensions)? {
+            file.bound_by_published_end(slots_at, header_len);
+        }
         // Logical: measured once the header has installed the anchor layout.
         let captured_len = check_open_file_len(spec, &file)?;
         let append_start = header_len;
@@ -873,6 +918,7 @@ impl VarlitFile {
             segment_cursor: SegmentCursor::new_empty(),
             block_tails: digest.block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
@@ -890,6 +936,8 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        // Read-only opens return at once; a writer takes over the end.
+        opened.open_published_end()?;
         Ok(opened)
     }
 
@@ -930,8 +978,10 @@ impl VarlitFile {
         scratch: &mut B,
     ) -> Result<(Self, RecoveryReport)> {
         let spec = spec.with_strict_read_validation();
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         lock.bind_native(file.raw(), &path)?;
         let original_len = file.len()?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
@@ -977,6 +1027,7 @@ impl VarlitFile {
             sequence_state,
             block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             segment_cursor,
             uncommitted_since_commit: false,
@@ -992,6 +1043,7 @@ impl VarlitFile {
             _lock: None,
         };
         opened.open_tiles_now()?;
+        opened.open_published_end()?;
         Ok((opened, report))
     }
 }

@@ -53,7 +53,9 @@ jobs:
   kani:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 120 harnesses: the full proof run took 12-14 minutes of a 21-minute job
+    # with 99, and the 18 per-count keyed page harnesses add about six.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

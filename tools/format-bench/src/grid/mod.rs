@@ -11,18 +11,20 @@
 //! - Objective: total read time. Write time and size are reported. Runs under
 //!   the harness memory cap (data ~4x the memory available).
 //!
-//! Chunk shape (from the candidate shapes below, all 32 KiB), how chunks are
-//! keyed, stored and found is each adapter's choice (`candidates`). A shape
+//! Every engine stores the array in its native chunked layout (a Varlit
+//! matrix, an HDF5 chunked dataset, SQLite rows by chunk id, Parquet pages);
+//! the chunk shape (from the candidate shapes below, all 32 KiB) is the
+//! tuning knob (`candidates`). A shape
 //! deeper than one time step must be completed across several arriving
 //! steps (read-modify-write or buffering); engines that cannot do that fail
 //! that candidate.
 use crate::common::*;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "hdf5")]
 mod h5;
 mod pq;
 mod sq;
-mod vl_keyed;
 mod vl_matrix;
 
 pub const CE: usize = 8192; // elements per chunk, every candidate shape
@@ -40,11 +42,18 @@ pub fn chunk_shape(name: &str) -> Result<Ix> {
 }
 pub const SHAPES: &[&str] = &["bal", "plane", "cube", "time"];
 
+/// Read once: some callers ask per element.
 pub fn shape() -> Ix {
-    match std::env::var("FB_GRID").as_deref() {
+    static SHAPE: std::sync::OnceLock<Ix> = std::sync::OnceLock::new();
+    *SHAPE.get_or_init(|| match std::env::var("FB_GRID").as_deref() {
         Ok("small") => [16, 8, 4, 8, 128, 128],
-        _ => [64, 8, 4, 16, 256, 512],
-    }
+        _ => {
+            let step = 8 * 4 * 16 * 256 * 512 * 4;
+            let time =
+                data_gb().map_or(64, |gb| ((gb * 1e9 / step as f64).round() as usize).max(8));
+            [time, 8, 4, 16, 256, 512]
+        }
+    })
 }
 /// Elements per time step.
 pub fn step_len() -> usize {
@@ -210,23 +219,15 @@ pub fn prepare(count: &Ix, out: &mut Vec<f32>) {
 
 pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
-        "varlit" => &[
-            "matrix-bal",
-            "matrix-plane",
-            "matrix-cube",
-            "matrix-time",
-            "keyed-bal",
-            "keyed-plane",
-            "keyed-cube",
-            "keyed-time",
-        ],
+        // A dense array: one matrix cell per chunk. The shapes are tuning
+        // knobs, the same for every engine.
+        "varlit" => &["matrix-bal", "matrix-plane", "matrix-cube", "matrix-time"],
         "sqlite" | "hdf5" | "parquet" => SHAPES,
         _ => return Err(format!("unknown engine {engine}").into()),
     })
 }
-pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
+pub fn adapter_files(engine: &str, _cand: &str) -> &'static str {
     match engine {
-        "varlit" if cand.starts_with("keyed") => "src/grid/vl_keyed.rs",
         "varlit" => "src/grid/vl_matrix.rs",
         "sqlite" => "src/grid/sq.rs",
         "hdf5" => "src/grid/h5.rs",
@@ -237,9 +238,9 @@ pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
 fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn GridWrite>> {
     let shape_of = |c: &str| Ck::new(c.rsplit('-').next().unwrap());
     match engine {
-        "varlit" if cand.starts_with("keyed") => vl_keyed::create(p, shape_of(cand)?),
         "varlit" => vl_matrix::create(p, shape_of(cand)?),
         "sqlite" => sq::create(p, shape_of(cand)?),
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::create(p, shape_of(cand)?),
         "parquet" => pq::create(p, shape_of(cand)?),
         _ => Err("engine".into()),
@@ -248,9 +249,9 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn GridWrite>> {
 fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn GridRead>> {
     let shape_of = |c: &str| Ck::new(c.rsplit('-').next().unwrap());
     match engine {
-        "varlit" if cand.starts_with("keyed") => vl_keyed::open(p, shape_of(cand)?),
         "varlit" => vl_matrix::open(p, shape_of(cand)?),
         "sqlite" => sq::open(p, shape_of(cand)?),
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::open(p, shape_of(cand)?),
         _ => pq::open(p, shape_of(cand)?),
     }

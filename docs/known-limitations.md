@@ -30,9 +30,17 @@ overhead or total process memory. Some caller output operations still require
 materialization.
 
 Overwrites do not grow a tiled matrix, and tiles, once appended, are never
-removed; there is no matrix compaction (`compact_matrix()` was removed in
-0.13.0). A tiled matrix does not rely on sparse files, allocation maps or hole
-punching.
+removed; there is no matrix compaction. A single publication larger than half
+the write-ahead ring streams through overflow records and an on-disk index:
+the file grows by about the largest such publication: its staged bytes,
+each restage of a unit (a tile's commit bitmap after every cell write)
+included, and about 24 to 48 bytes of index per staged unit. Those records are reused by later large publications, a
+reopened writer included, and their free space takes new tiles and directory
+pages; nothing returns them to the filesystem (`compact_matrix()` was
+removed in 0.13.0). Starting such a publication first puts every published
+generation in place, so a reader more than one generation behind gets
+`MatrixSnapshotExpired` and must `follow()`. A tiled matrix does not rely on
+sparse files, allocation maps or hole punching.
 
 Dimensions are fixed at creation unless explicitly declared growing. Generic
 channel-selective reads of interleaved payloads are not provided; use planar
@@ -56,6 +64,38 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
 <a id="21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index"></a>
 <a id="23-keyed-merge-and-compact-are-resident-only-and-explicitly-not-petabyte-scale"></a>
 <a id="3-streamindexed-api-status"></a>
+<a id="3-stream-api-status"></a>
+
+## Keyed storage
+
+- **Opt-in for now.** Formats keep appending keyed blocks to the log unless
+  they declare `keyed_storage: in_place`. Keyed history
+  (`keyed_offset_chain`, `keyed_chain`, tombstones) is removed in one later
+  change with a converter; until then both exist
+  ([design](design/bounded-keyed-storage.md#implementation-order)).
+- **Range reads follow byte order.** `range_keyed` visits keys in the order
+  of their big-endian bytes: numeric for unsigned integer key fields, not
+  for signed ones (negatives come after positives) or strings (shorter
+  first). There are no secondary indexes: an application keeps its own.
+- **Not with matrices.** A format cannot declare both keyed storage and
+  matrix blocks yet: each keeps its metadata as the first record.
+- **Pages are at least half full.** The B-tree splits a full page in half
+  and merges neighbours that fit one page, so leaves hold between half and
+  all of a page; values over 1 KiB fill overflow pages but the last.
+- **Readers expire more often.** To reuse freed pages without putting the
+  ring in place, the writer raises the ring's mark to its last publication
+  once freed pages wait past the ratio, and at the end of every round: a
+  reader older than that gets `MatrixSnapshotExpired` and must `follow`.
+- **Deletes leave pages in the file.** Freed pages wait in a free list that
+  new keys take from before the file grows; the file itself does not
+  shrink. Rebuild a file that shrank for good.
+- **Two barriers per publication with updates.** New values written straight
+  to the file are made durable before the commit frame, so a `sync` that
+  wrote any costs two barriers instead of one, and every few publications a
+  checkpoint adds two more.
+- **Records larger than the change budget** are written in one round for
+  now; the streamed replacement and the `Refuse` policy are not implemented
+  yet ([design](design/bounded-keyed-storage.md#bounds-at-the-extremes)).
 
 ## Native scans and temporary storage
 
@@ -67,8 +107,15 @@ every native open or mark constant time.
 Native generated keyed writers may prime one tail map per keyed block, costing
 `Theta(block types * records)` at construction. Tail maps spill at their nominal
 budget, with a 2 MiB in-memory batch per block. `max_keyed_tail_bytes` is per
-block, not a global sum. Stream/indexed handles avoid those construction scans.
+block, not a global sum. Stream handles avoid those construction scans.
 Explicit requests for an owned full key map can still exceed admission limits.
+
+There is no disk-backed lookup by key. The indexed primary (`.vki` sidecar,
+`key_index`) was removed; keyed lookup is resident only, and every keyed update
+or delete appends a record, so the file grows with updates until an explicit
+keyed compaction. Stream readers have no lookup by key. The replacement is
+described in [bounded keyed storage](design/bounded-keyed-storage.md) and is
+not implemented.
 
 External merge and rewrites require scratch disk, a complete rewrite generation
 and per-record/key workspace. `VARLIT_SPILL_DIR` selects disposable spill storage;
@@ -111,12 +158,37 @@ open, or use a commit-marker policy.
 `flush()` alone does not publish a matrix generation; `sync()` or explicit
 Immediate does. See [durability](durability-model.md) for each storage policy.
 
-Indexed compaction retains old files until old owners close. On Windows,
+Stream sidecar compaction retains old files until old owners close. On Windows,
 companion replacement requires filesystem support for the native POSIX
 rename semantics used by the implementation. Failure returns an OS error and
 poisons the writer; reconcile and reopen. Lock files coordinate cooperating
 writers. Unsupported native locking returns an error; advisory locks do not
 prevent arbitrary external file changes.
+
+## Files and I/O progress
+
+Path-based opens accept only regular files. A FIFO, socket, device or
+directory is refused with an `Io` error of kind `InvalidInput`, and on Unix the
+refusal does not wait: the data file, its lock marker and its sidecars are
+opened with `O_NONBLOCK`, which returns at once for a FIFO with no peer and is
+ignored for regular files, and the file type is checked on the open handle,
+not on the path. Opening a FIFO for writing with no reader can instead fail
+with `ENXIO`. A symbolic link to a regular file is followed for the data file,
+as before.
+
+Once a regular file is open, every read, write, `fsync` and lock is an ordinary
+blocking system call. Varlit assumes each call eventually returns, and does not
+time it out. A hung network mount, a stalled FUSE server or a failing disk can
+block a call indefinitely; nothing in the library ends that wait. `Interrupted`
+is retried without limit, so a signal storm that interrupts every call keeps
+the operation retrying.
+
+Cancellation is cooperative. `ScanCancellationToken` is checked between
+records and at progress callbacks during scans, bootstrap and rebuild; it is
+not observed inside a system call, and other operations have no cancellation
+point. A caller that needs a deadline runs the operation on a thread or in a
+process it can abandon or terminate, and treats the file as it would after a
+crash: a writer's next open recovers to the last publication.
 
 <a id="7-resource-limits-what-they-do-and-do-not-bound"></a>
 <a id="71-limit-accounting-is-nominal-not-peak-rss"></a>
@@ -197,20 +269,25 @@ support for them is unstable:
   files beyond 4 GiB can be read record by record; a single value, buffer or
   mapping cannot exceed the address space, and nothing here was run on a
   32-bit device or on a 32-bit architecture other than x86.
-- **Big-endian.** No CI job executes big-endian code natively. Miri interprets
-  the unsafe modules and the byte-order-sensitive unit tests (wire layouts,
-  row packers, snapshot codecs) for `s390x-unknown-linux-gnu`. File formats
-  use explicit byte orders; the one place that depends on the host's is the
-  bulk numeric vector decode, which swaps bytes when the two differ. The
-  matrix tile tests, the integration tests and every feature-gated path are
-  not interpreted for a big-endian target.
+- **Big-endian.** Big-endian code runs under emulation, not on hardware: CI
+  cross-builds the workspace for `s390x-unknown-linux-gnu` and runs its
+  library and integration tests under QEMU's user mode, one test at a time
+  (the emulator crashes, rarely, when several threads unwind at once), and
+  Miri interprets the unsafe modules and the byte-order-sensitive unit tests
+  there. File formats use explicit byte orders, which `enforcement_gates`
+  holds in the source; the one place that depends on the host's is the bulk
+  numeric vector decode, which swaps bytes when the two differ. The compile
+  snapshot tests are left out there, as on every job but MSRV.
 - **Raw views on another byte order.** A zero-copy raw view checks the
   implementer's `RAW_ENDIAN` against the file's byte order, not against the
   host's. A struct of plain integer fields declared `RAW_ENDIAN = Little`
-  passes that check on a big-endian host and reads swapped values; such a
-  type is only correct where the host's byte order is the declared one.
-  Use explicit-endian field types (for example `zerocopy::byteorder`) for
-  views that must work on both. Single-feature,
+  passes that check on a big-endian host and reads swapped values; declare
+  `Endian::NATIVE` for such a type, so the view is refused there instead, and
+  use `raw_fixed_or_decode` / `raw_cell_or_decode` to get the value in its
+  place. Plain fields also need aligned payloads, which records and matrix
+  slots generally are not; the same calls copy such values out. Types built
+  from `zerocopy::byteorder` numbers (alignment 1, stated order) are viewed in
+  place on every host. Single-feature,
 pairwise and all-feature runs do not enumerate every higher-order configuration.
 Runner images and some compiler jobs roll over time.
 

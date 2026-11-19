@@ -13,7 +13,10 @@ For every variant (a dict of FB_* requirement settings) and engine:
      is rejected with its reason and the next-best tuned candidate is measured
      instead; the rejections are reported. Each run waits for a healthy disk.
 Every run executes inside a 4 GiB memory cgroup (page cache included) and its
-data directory is deleted as soon as the metrics are read. The effort of each
+data directory is deleted as soon as the metrics are read. With a systemd user
+manager the cgroup is a transient scope; without one, set FB_CGROUP to an
+existing cgroup directory whose memory limit is 4 GiB (cgroup v1 memory
+controller or v2) and each run is moved into it. The effort of each
 chosen adapter (non-comment lines, structures the application had to build) is
 recorded next to the results.
 """
@@ -24,7 +27,8 @@ HERE = Path(__file__).resolve().parent
 BIN = HERE / "target/release/varlit-format-bench"
 MEMCAP = "4G"
 GATE = 0.7  # probe seconds; healthy disk ~0.48 s
-OBJECTIVE = {"cells": ("batches_per_s", "max"), "oltp": ("total_s", "min"), "analytics": ("query_s", "min"),
+OBJECTIVE = {"cells": ("batches_per_s", "max"), "oltp": ("total_s", "min"), "oltp-sparse": ("total_s", "min"),
+             "analytics": ("query_s", "min"),
              "mixed": ("realtime_factor", "max"), "grid": ("reads_s", "min")}
 # Requirement checks on measured rows: a violated requirement is a FAIL even
 # when the run completed (the numbers stay for reference).
@@ -40,11 +44,13 @@ TUNE_ENV = {"mixed": {"FB_WINDOWS": "3000", "FB_ALL_READERS": "4"}}
 MEASURE_ENV = {"mixed": {"FB_WINDOWS": "60000", "FB_PACE": "1", "FB_ALL_READERS": "4"}}
 VARIANTS = {"cells": [{"FB_LOSS_MS": "0"}, {"FB_LOSS_MS": "1000"}],
             "oltp": [{"FB_DIST": "uniform"}, {"FB_DIST": "zipf"}],
+            "oltp-sparse": [{"FB_DIST": "uniform"}, {"FB_DIST": "zipf"}],
             "analytics": [{}],
             "mixed": [{"FB_FRESH_MS": "10", "FB_LOSS_MS": "0"}, {"FB_FRESH_MS": "100", "FB_LOSS_MS": "1000"}],
             "grid": [{}]}
 ENGINES = {"cells": ["varlit", "sqlite", "hdf5", "parquet"],
            "oltp": ["varlit", "sqlite", "hdf5", "parquet"],
+           "oltp-sparse": ["varlit", "sqlite", "hdf5"],
            "analytics": ["varlit", "sqlite", "hdf5", "parquet"],
            "mixed": ["varlit", "sqlite", "hdf5", "parquet"],
            "grid": ["varlit", "sqlite", "hdf5", "parquet"]}
@@ -66,8 +72,15 @@ def run_one(scen, engine, cand, env, out, timeout):
     d = out / "run"
     shutil.rmtree(d, ignore_errors=True)
     unit = f"fb-{os.getpid()}-{int(time.time() * 1000)}"
-    cmd = ["systemd-run", "--user", "--scope", "-q", f"--unit={unit}", "-p", f"MemoryMax={MEMCAP}", "-p", "MemorySwapMax=0",
-           str(BIN), "bench", scen, engine, str(d)]
+    cgroup = os.environ.get("FB_CGROUP")
+    if cgroup:
+        # Join the capped cgroup, then become the benchmark process.
+        oom_before = cgroup_ooms(cgroup)
+        cmd = ["sh", "-c", 'echo $$ > "$0/cgroup.procs" && exec "$@"', cgroup,
+               str(BIN), "bench", scen, engine, str(d)]
+    else:
+        cmd = ["systemd-run", "--user", "--scope", "-q", f"--unit={unit}", "-p", f"MemoryMax={MEMCAP}", "-p", "MemorySwapMax=0",
+               str(BIN), "bench", scen, engine, str(d)]
     # Temporary files go to the same disk, never to a memory-backed /tmp.
     tmp = out / "tmp"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -77,7 +90,8 @@ def run_one(scen, engine, cand, env, out, timeout):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, env=e, timeout=timeout)
     except subprocess.TimeoutExpired:
-        subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], check=False)
+        if not cgroup:
+            subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], check=False)
         return {"failed": f"timeout {timeout}s"}
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -85,13 +99,15 @@ def run_one(scen, engine, cand, env, out, timeout):
     if p.returncode != 0:
         lines = [l for l in p.stderr.strip().splitlines() if l.strip()]
         why = lines[-1] if lines else f"exit {p.returncode}"
-        res = subprocess.run(["systemctl", "--user", "show", "-p", "Result", "--value", f"{unit}.scope"],
-                             capture_output=True, text=True).stdout.strip()
+        res = ("oom-kill" if cgroup_ooms(cgroup) > oom_before else "") if cgroup else subprocess.run(
+            ["systemctl", "--user", "show", "-p", "Result", "--value", f"{unit}.scope"],
+            capture_output=True, text=True).stdout.strip()
         if res == "oom-kill":
             why = f"killed under memory pressure (cap {MEMCAP}, oom-kill)"
         elif p.returncode in (-9, 137):
             why = f"killed (signal 9): {why}"
-        subprocess.run(["systemctl", "--user", "reset-failed", f"{unit}.scope"], capture_output=True)
+        if not cgroup:
+            subprocess.run(["systemctl", "--user", "reset-failed", f"{unit}.scope"], capture_output=True)
         return {"failed": why, "stderr": p.stderr[-3000:]}
     r = json.loads(p.stdout.strip().splitlines()[-1])
     fc = [l for l in p.stderr.splitlines() if l.startswith("first corrupt read:")]
@@ -99,6 +115,18 @@ def run_one(scen, engine, cand, env, out, timeout):
         r["first_corrupt"] = fc[0]
     r["wall_s"] = time.time() - t
     return r
+
+
+def cgroup_ooms(cgroup):
+    """OOM kills recorded by the cgroup (v2 memory.events, v1 memory.oom_control)."""
+    for name, key in [("memory.events", "oom_kill"), ("memory.oom_control", "oom_kill")]:
+        f = Path(cgroup) / name
+        if f.exists():
+            for line in f.read_text().splitlines():
+                k, _, v = line.partition(" ")
+                if k == key:
+                    return int(v)
+    return 0
 
 
 def effort(scen, engine, cand):
@@ -127,6 +155,8 @@ def main():
     ap.add_argument("--objective")
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--env", action="append", default=[], help="extra K=V for every run (e.g. FB_SMALL=1)")
+    ap.add_argument("--measure-env", action="append", default=[],
+                    help="extra K=V for measured runs only, after the scenario's own (e.g. FB_WINDOWS=14400)")
     a = ap.parse_args()
     scen = a.scenario
     out = Path(a.out).resolve()
@@ -142,6 +172,7 @@ def main():
     variants = json.loads(a.variants) if a.variants else VARIANTS[scen]
     engines = a.engines.split(",") if a.engines else ENGINES[scen]
     extra = dict(kv.split("=", 1) for kv in a.env)
+    measure_extra = dict(kv.split("=", 1) for kv in a.measure_env)
     state_f = out / "state.json"
     st = json.loads(state_f.read_text()) if state_f.exists() else {"tuning": [], "measured": []}
 
@@ -209,7 +240,7 @@ def main():
         for v, eng in need:
             c = chosen(v, eng)
             wait_healthy(out, log)
-            r = run_one(scen, eng, c, {**MEASURE_ENV.get(scen, {}), **extra, **v}, out, a.timeout)
+            r = run_one(scen, eng, c, {**MEASURE_ENV.get(scen, {}), **extra, **measure_extra, **v}, out, a.timeout)
             r.update(variant=vkey(v), engine=eng, cand=c, rep=done(v, eng))
             log(f"rep{r['rep']} {vkey(v)} {eng}/{c}: " + (r.get("failed") or f"{metric}={r[metric]:.4g}"))
             if r.get("failed"):

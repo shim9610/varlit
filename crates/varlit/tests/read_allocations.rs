@@ -9,10 +9,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use varlit::{
-    DiskIndexOptions, FormatSpec, MatrixDimensions, MatrixKey, StreamOptions, VarlitEmpty,
-    varlit_format,
-};
+use varlit::{FormatSpec, MatrixDimensions, MatrixKey, StreamOptions, VarlitEmpty, varlit_format};
 
 struct CountingAllocator;
 
@@ -92,7 +89,7 @@ varlit_format! {
         magic: b"RALLOCPL"; version: 1; endian: little; integrity: crc32_with_header;
         blocks {
             fixed Tick(id = 1) { at: u64, value: f64 }
-            variable Blob(id = 2, key = [id], key_index = disk) {
+            variable Blob(id = 2, key = [id]) {
                 id: u64, name: String, bytes: Vec<u8>, samples: Vec<u32>,
             }
         }
@@ -382,82 +379,6 @@ fn settled_compressed_reads_allocate_nothing() -> varlit::Result<()> {
 }
 
 #[test]
-fn settled_indexed_and_stream_reads_allocate_nothing() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("indexed");
-    {
-        let mut w = Plain::create_indexed_writer(&path, DiskIndexOptions::default())?;
-        for (i, len) in SIZES.iter().enumerate() {
-            w.push_blob(&blob!(Blob, i as u64, *len))?;
-        }
-        w.sync()?;
-    }
-    let r = Plain::open_indexed_reader(&path, DiskIndexOptions::default())?;
-    let mut cases: Vec<Case> = Vec::new();
-    let mut out = Blob::empty();
-    cases.push((
-        "get short".into(),
-        steady(8, || r.get_blob(&0, &mut out).map(drop))?,
-    ));
-    cases.push((
-        "get chunked".into(),
-        steady(8, || r.get_blob(&1, &mut out).map(drop))?,
-    ));
-    cases.push((
-        "lookup_entry".into(),
-        steady(8, || r.lookup_entry::<Blob>(&1).map(drop))?,
-    ));
-    let entry = r.lookup_entry::<Blob>(&1)?.expect("present");
-    let mut buf = vec![0u8; 4096];
-    cases.push((
-        "indexed read_record_into".into(),
-        steady(4, || {
-            let mut page = r.read_record_into(&entry, &mut buf)?;
-            while let Some(next) = page.next {
-                page = r.read_record_from(next, &mut buf)?;
-            }
-            Ok(())
-        })?,
-    ));
-    cases.push((
-        "indexed view_block + decode_field".into(),
-        steady(8, || {
-            let view = r.view_block::<Blob>(&entry)?;
-            assert_eq!(r.decode_field::<u64>(&entry, view.id)?, 1);
-            Ok(())
-        })?,
-    ));
-    cases.push((
-        "indexed verify_all".into(),
-        steady(4, || r.verify_all().map(drop))?,
-    ));
-    drop(r);
-    let path = dir.path().join("stream");
-    {
-        let mut w = Plain::create_stream_writer(&path, StreamOptions::default())?;
-        // Two records of each size: the cursor settles on the first pair.
-        for (i, len) in SIZES.iter().chain(SIZES.iter()).enumerate() {
-            w.push_blob(&blob!(Blob, i as u64, *len))?;
-        }
-        w.sync()?;
-    }
-    let stream = Plain::open_stream_reader(&path, StreamOptions::default())?;
-    let mut cursor = stream.blobs()?;
-    // A cursor is single-pass: settle on the first record, count the second.
-    assert!(cursor.next_into(&mut out)?);
-    assert!(cursor.next_into(&mut out)?);
-    let before = ALLOCATIONS.with(Cell::get);
-    assert!(cursor.next_into(&mut out)?);
-    assert!(cursor.next_into(&mut out)?);
-    cases.push((
-        "stream next_into".into(),
-        ALLOCATIONS.with(Cell::get) - before,
-    ));
-    report("indexed", &cases);
-    Ok(())
-}
-
-#[test]
 fn settled_matrix_reads_allocate_nothing() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("grid");
@@ -566,5 +487,35 @@ fn settled_matrix_reads_allocate_nothing() -> varlit::Result<()> {
         })?,
     ));
     report("matrix", &cases);
+    Ok(())
+}
+
+#[test]
+fn settled_stream_reads_allocate_nothing() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut cases: Vec<Case> = Vec::new();
+    let mut out = Blob::empty();
+    let path = dir.path().join("stream");
+    {
+        let mut w = Plain::create_stream_writer(&path, StreamOptions::default())?;
+        // Two records of each size: the cursor settles on the first pair.
+        for (i, len) in SIZES.iter().chain(SIZES.iter()).enumerate() {
+            w.push_blob(&blob!(Blob, i as u64, *len))?;
+        }
+        w.sync()?;
+    }
+    let stream = Plain::open_stream_reader(&path, StreamOptions::default())?;
+    let mut cursor = stream.blobs()?;
+    // A cursor is single-pass: settle on the first record, count the second.
+    assert!(cursor.next_into(&mut out)?);
+    assert!(cursor.next_into(&mut out)?);
+    let before = ALLOCATIONS.with(Cell::get);
+    assert!(cursor.next_into(&mut out)?);
+    assert!(cursor.next_into(&mut out)?);
+    cases.push((
+        "stream next_into".into(),
+        ALLOCATIONS.with(Cell::get) - before,
+    ));
+    report("stream", &cases);
     Ok(())
 }

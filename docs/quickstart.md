@@ -2,7 +2,7 @@
 
 This example stores a stream of numeric samples in application blocks. It uses
 one writer, a buffered append batch and a reader opened while the writer is
-still alive. Install Varlit 0.13.0-alpha.1 with the `integrity` feature as shown in the
+still alive. Install Varlit 0.13.0-alpha.2 with the `integrity` feature as shown in the
 [README](../README.md).
 
 ## Write blocks, then read published data
@@ -80,9 +80,11 @@ physical blocks and from the number of publications.
 
 ## Choose the next guide
 
-- Need block-key lookup: use [indexed handles](scalable-io.md), with a group key
-  and slot/range inside the returned block. Declared finite key domains avoid a
-  general key tree where the domain is bounded.
+- Need block-key lookup: use a keyed block with the resident reader/writer
+  ([API reference](api-reference.md)), with a group key and slot/range inside
+  the returned block. Lookup is resident and each update appends a record;
+  stream readers have no lookup by key. Disk-backed keyed storage is
+  [designed, not implemented](design/bounded-keyed-storage.md).
 - Need direct cell addressing: use [matrix declarations](format-author-guide.md).
 - Need a small, directly indexed native file: see the [API reference](api-reference.md).
 - Need checks or limits: start with the [read-policy table](api-reference.md#read-validation).

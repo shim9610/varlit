@@ -69,8 +69,9 @@ fn is_test_gate_attribute(trimmed: &str) -> bool {
 ///
 /// 1. the item introduced by a test-gate attribute must either open a brace at
 ///    the attribute's own indentation or end in `;` within
-///    `MAX_ITEM_HEADER_LINES` (further attributes and doc comments in between
-///    are allowed, because that is how the catalogues are written);
+///    `MAX_ITEM_HEADER_LINES`, or be a one-line field ending in `,` (further
+///    attributes and doc comments in between are allowed, because that is how
+///    the catalogues are written);
 /// 2. every skip that starts must end before the file does.
 ///
 /// `the_shipped_code_stripper_removes_test_modules_and_nothing_else` pins the
@@ -120,11 +121,19 @@ fn crate_shipped_code(name: &str) -> String {
                 awaiting_item = None;
                 continue;
             }
+            // A struct field, or a field of a struct expression, gated on its
+            // own: one line ending in `,`, and only as the item's first line,
+            // so a wrapped signature's parameters never match.
+            if seen == 0 && line.ends_with(',') && line.starts_with(&indent) {
+                awaiting_item = None;
+                continue;
+            }
             assert!(
                 seen < MAX_ITEM_HEADER_LINES,
                 "{name}:{number}: a `#[cfg(test)]` item is still unresolved {seen} lines in, at \
                  `{}`. This stripper understands a braced item opening at the attribute's own \
-                 indentation and a statement ending in `;`. Teach `crate_shipped_code` about \
+                 indentation, a statement ending in `;` and a one-line field ending in `,`. \
+                 Teach `crate_shipped_code` about \
                  the new shape — do not leave it, because every gate built on this helper \
                  would silently narrow.",
                 line.trim()
@@ -246,7 +255,10 @@ fn no_writer_keeps_its_own_poison_boolean() {
         "file.rs",
         "layout.rs",
         "stream.rs",
-        "indexed.rs",
+        // Keyed storage's writer engine, which replaced the indexed primary.
+        "keyed_heap/heap.rs",
+        "keyed_heap/heap/pages.rs",
+        "keyed_heap/heap/rebalance.rs",
         "matrix.rs",
         "disk_index.rs",
     ] {
@@ -342,7 +354,14 @@ fn a_permit_can_only_be_minted_from_the_writers_own_poison_flag() {
 
     // Belt and braces: no module may hold a `PoisonFlag` anywhere but in a
     // writer's own field, so a decoy flag does not even come into being.
-    for module in ["file.rs", "layout.rs", "stream.rs", "indexed.rs"] {
+    for module in [
+        "file.rs",
+        "layout.rs",
+        "stream.rs",
+        "keyed_heap/heap.rs",
+        "keyed_heap/heap/pages.rs",
+        "keyed_heap/heap/rebalance.rs",
+    ] {
         let source = crate_code(module);
         for (number, line) in source.lines().enumerate() {
             if !line.contains("PoisonFlag::healthy()") {
@@ -878,7 +897,9 @@ fn no_file_length_ceiling_is_enforced() {
         "layout.rs",
         "matrix.rs",
         "stream.rs",
-        "indexed.rs",
+        "keyed_heap/heap.rs",
+        "keyed_heap/heap/pages.rs",
+        "keyed_heap/heap/rebalance.rs",
     ] {
         let source = crate_source(module);
         assert!(
@@ -907,5 +928,51 @@ fn no_file_length_ceiling_is_enforced() {
     assert!(
         !layout.contains("        ReadLimitKey::FileLen,"),
         "`ensure_layout_open_limits` must not require a `file_len` declaration"
+    );
+}
+
+/// Byte order is never the host's. Every on-disk and on-wire integer is
+/// converted with an explicit `to_le`/`to_be` (or `from_*`) so a file reads
+/// alike on every platform; big-endian targets are tested under QEMU and
+/// Miri, but only a sample of paths, so the property itself is held here:
+/// shipped code names the host-order conversions and reinterpretations only
+/// at the reviewed places below, each counted. Every one of them is
+/// byte-order neutral or converts to the declared order at once:
+///
+/// - `adapter.rs`: `i8` to and from its one byte.
+/// - `codec.rs`: `RawNumeric::to_native`, which turns bytes filled in place
+///   into the declared endianness.
+///
+/// A new use fails until it is reviewed and added with its reason.
+#[test]
+fn shipped_code_never_uses_host_byte_order() {
+    const HOST_ORDER: [&str; 4] = ["to_ne_bytes", "from_ne_bytes", "transmute", "align_to"];
+    const REVIEWED: [(&str, &str, usize); 3] = [
+        ("adapter.rs", "to_ne_bytes", 1),
+        ("adapter.rs", "from_ne_bytes", 1),
+        ("codec.rs", "to_ne_bytes", 1),
+    ];
+    let mut found = Vec::new();
+    for module in crate_modules() {
+        let code = crate_shipped_code(&module)
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for spelling in HOST_ORDER {
+            let count = code.matches(spelling).count();
+            if count > 0 {
+                found.push((module.clone(), spelling, count));
+            }
+        }
+    }
+    let expected: Vec<(String, &str, usize)> = REVIEWED
+        .iter()
+        .map(|(module, spelling, count)| ((*module).to_owned(), *spelling, *count))
+        .collect();
+    assert_eq!(
+        found, expected,
+        "host byte order in shipped code: convert with an explicit endianness, or review the \
+         use and add it to this gate with its reason"
     );
 }

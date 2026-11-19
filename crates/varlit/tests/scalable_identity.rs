@@ -16,10 +16,9 @@ use std::fs;
 use std::path::Path;
 
 use varlit::{
-    BlockDescriptor, BlockKind, Decoder, DiskIndexOptions, DiskIndexPlan, DiskIndexedBlock,
-    Encoder, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits,
-    RecoveryPolicy, Result, VarlitBlock, VarlitDecode, VarlitEncode, VarlitIndexedReader,
-    VarlitIndexedWriter, VarlitKeyedBlock, VarlitStreamWriter, WireType, rebuild_disk_index,
+    BlockDescriptor, BlockKind, Decoder, Encoder, Endian, Error, FormatSpec, IndexPolicy,
+    IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result, VarlitBlock, VarlitDecode,
+    VarlitEncode, VarlitKeyedBlock, VarlitStreamWriter, WireType,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,51 +70,6 @@ impl VarlitKeyedBlock for Item {
     }
 }
 
-/// Same block id and version as [`Item`], but a different schema fingerprint:
-/// the impostor a descriptor could previously carry into a format that never
-/// declared it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Impostor {
-    key: u64,
-    value: String,
-}
-
-impl VarlitEncode for Impostor {
-    const WIRE_TYPE: WireType = <(u64, String) as VarlitEncode>::WIRE_TYPE;
-
-    fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
-        (self.key, self.value.clone()).encode_varlit(encoder)
-    }
-}
-
-impl VarlitDecode for Impostor {
-    const WIRE_TYPE: WireType = <(u64, String) as VarlitDecode>::WIRE_TYPE;
-
-    fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        // Reaching this proves a captured codec was handed file bytes before
-        // the descriptor's schema identity was validated.
-        let _ = decoder;
-        panic!("impostor decoder must never run")
-    }
-}
-
-impl VarlitBlock for Impostor {
-    const ID: u32 = Item::ID;
-    const VERSION: u16 = Item::VERSION;
-    const KIND: BlockKind = BlockKind::Variable;
-    const ENDIAN: Option<Endian> = None;
-    const SCHEMA_FINGERPRINT: u64 = 0x494D_504F_5354_4F52;
-    const IS_KEYED: bool = true;
-}
-
-impl VarlitKeyedBlock for Impostor {
-    type Key = u64;
-
-    fn key(&self) -> Self::Key {
-        self.key
-    }
-}
-
 static BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
     id: Item::ID,
     name: "IdentityItem",
@@ -123,25 +77,6 @@ static BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
     kind: Item::KIND,
     fields: &[],
 }];
-
-static INDEXED: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Item>()];
-static INDEXED_IMPOSTOR: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Impostor>()];
-
-fn spec() -> FormatSpec {
-    FormatSpec::new(
-        b"VIDN",
-        1,
-        Endian::Little,
-        0,
-        IndexPolicy::KeyedOffsetChain,
-        IntegrityPolicy::None,
-        RecoveryPolicy::Strict,
-        ManifestPolicy::None,
-        BLOCKS,
-    )
-    .with_read_limits(ReadLimits::STANDARD)
-    .with_block_identities(IDENTITIES)
-}
 
 static IDENTITIES: &[(u32, Option<Endian>, bool, u64)] = &[(
     Item::ID,
@@ -168,42 +103,11 @@ fn stream_spec() -> FormatSpec {
     .with_block_identities(IDENTITIES)
 }
 
-fn plan() -> DiskIndexPlan {
-    DiskIndexPlan::canonical(spec(), INDEXED).unwrap()
-}
-
 fn item(key: u64, value: &str) -> Item {
     Item {
         key,
         value: value.into(),
     }
-}
-
-/// Builds an indexed primary with two records whose payload lengths are equal
-/// for every key, so two primaries built with different keys have byte-equal
-/// lengths.
-fn build_primary(path: &Path, keys: [u64; 2]) -> Result<()> {
-    build_primary_with_filler(path, 0, keys)
-}
-
-/// Same as [`build_primary`], but writes `filler` leading records that are
-/// byte-identical across every call first.
-///
-/// With enough filler the two primaries agree on far more than the bounded
-/// primary-generation window, so a witness computed over a leading prefix
-/// cannot separate them; only a per-create nonce can.
-fn build_primary_with_filler(path: &Path, filler: u64, keys: [u64; 2]) -> Result<()> {
-    let options = DiskIndexOptions::default();
-    let mut writer = VarlitIndexedWriter::create(spec(), path, options, plan())?;
-    for index in 0..filler {
-        writer.push_info(&item(1_000_000 + index, "fixed-width-value"))?;
-    }
-    for key in keys {
-        writer.push_info(&item(key, "fixed-width-value"))?;
-    }
-    writer.sync()?;
-    drop(writer);
-    Ok(())
 }
 
 /// Records enough leading filler that the two primaries share far more than
@@ -220,299 +124,18 @@ fn rewrite_in_place(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn same_object_equal_length_rewrite_is_refused_and_rebuild_recovers() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let first = directory.path().join("first.varlit");
-    let second = directory.path().join("second.varlit");
-    let options = DiskIndexOptions::default();
-
-    build_primary(&first, [10, 11])?;
-    build_primary(&second, [20, 21])?;
-
-    // Normal create/reopen still works before anything is tampered with.
-    {
-        let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
-        assert_eq!(
-            filled(|o| reader.get::<Item>(&10, o))?,
-            Some(item(10, "fixed-width-value"))
-        );
-        assert_eq!(reader.historical_distinct_keys()?, 2);
+/// Creates a stream primary holding `keys`, byte-identical across calls except
+/// for the per-create nonce.
+fn build_primary(path: &Path, keys: [u64; 2]) -> Result<()> {
+    let mut writer =
+        VarlitStreamWriter::create(stream_spec(), path, varlit::StreamOptions::default())?;
+    for key in keys {
+        writer.push_info(&item(key, "fixed-width-value"))?;
     }
-
-    let first_bytes = fs::read(&first)?;
-    let second_bytes = fs::read(&second)?;
-    assert_eq!(
-        first_bytes.len(),
-        second_bytes.len(),
-        "probe requires equal-length primaries"
-    );
-    assert_ne!(first_bytes, second_bytes);
-
-    // Rewrite the first primary in place with the second's bytes. The OS file
-    // object, the file header and the schema hash are all unchanged; only the
-    // logical generation of the contents differs.
-    {
-        use std::io::{Seek, SeekFrom, Write};
-        let mut file = fs::OpenOptions::new().write(true).open(&first)?;
-        file.seek(SeekFrom::Start(0))?;
-        file.write_all(&second_bytes)?;
-        file.sync_all()?;
-    }
-    assert_eq!(fs::read(&first)?, second_bytes);
-
-    // The retained sidecar belongs to the previous generation and must be
-    // refused rather than accepted with stale contents.
-    let reader = VarlitIndexedReader::open(spec(), &first, options, plan());
-    match reader {
-        Err(Error::DiskIndex(error))
-            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
-        other => panic!("stale sidecar accepted by the reader: {:?}", other.err()),
-    }
-    let writer = VarlitIndexedWriter::open(spec(), &first, options, plan());
-    match writer {
-        Err(Error::DiskIndex(error))
-            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
-        other => panic!("stale sidecar accepted by the writer: {:?}", other.err()),
-    }
-
-    // Rebuild is the documented recovery: it republishes a sidecar for the
-    // generation actually on disk.
-    let report = rebuild_disk_index(spec(), &first, options, plan())?;
-    // Two user records, the leading internal creation-nonce record and the
-    // sync marker that closed them.
-    assert_eq!(report.records, 4);
-    let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
-    assert_eq!(
-        filled(|o| reader.get::<Item>(&20, o))?,
-        Some(item(20, "fixed-width-value"))
-    );
-    assert_eq!(filled(|o| reader.get::<Item>(&10, o))?, None);
-    assert_eq!(reader.historical_distinct_keys()?, 2);
+    writer.sync()?;
     Ok(())
 }
 
-#[test]
-fn stream_state_sidecar_refuses_a_rewritten_primary() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let first = directory.path().join("stream-first.varlit");
-    let second = directory.path().join("stream-second.varlit");
-    let options = varlit::StreamOptions::default();
-
-    for (path, keys) in [(&first, [1u64, 2u64]), (&second, [3, 4])] {
-        let mut writer = VarlitStreamWriter::create(stream_spec(), path, options)?;
-        for key in keys {
-            writer.push_info(&item(key, "fixed-width-value"))?;
-        }
-        writer.sync()?;
-    }
-
-    let second_bytes = fs::read(&second)?;
-    assert_eq!(fs::read(&first)?.len(), second_bytes.len());
-    {
-        use std::io::{Seek, SeekFrom, Write};
-        let mut file = fs::OpenOptions::new().write(true).open(&first)?;
-        file.seek(SeekFrom::Start(0))?;
-        file.write_all(&second_bytes)?;
-        file.sync_all()?;
-    }
-
-    let opened = VarlitStreamWriter::open(stream_spec(), &first, options);
-    match opened {
-        Err(Error::DiskIndex(error))
-            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
-        other => panic!("stale stream state sidecar accepted: {:?}", other.err()),
-    }
-    Ok(())
-}
-
-/// consumer half. Sidecar publication cannot be made atomic against a
-/// process that replaces the primary *pathname* without taking the writer lock,
-/// so the library narrows the interval and retires a sidecar it published for a
-/// replaced primary. What keeps that a rebuild-cost problem rather than a
-/// wrong-data problem is this: a sidecar whose primary was swapped wholesale for
-/// a different file object is refused by consumers on identity, before any
-/// indexed lookup can be answered from it.
-///
-/// The existing rewrite tests replace a primary's *contents* in place, keeping
-/// the OS object. This one replaces the object itself, which is the shape a
-/// pathname mutator produces.
-#[test]
-fn stream_state_sidecar_refuses_a_wholesale_primary_replacement() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let first = directory.path().join("swap-first.varlit");
-    let second = directory.path().join("swap-second.varlit");
-    let options = varlit::StreamOptions::default();
-
-    for (path, keys) in [(&first, [1u64, 2u64]), (&second, [3, 4])] {
-        let mut writer = VarlitStreamWriter::create(stream_spec(), path, options)?;
-        for key in keys {
-            writer.push_info(&item(key, "fixed-width-value"))?;
-        }
-        writer.sync()?;
-    }
-
-    // The whole file object behind the pathname is replaced; the state sidecar
-    // published for the original object stays where it was.
-    fs::rename(&second, &first)?;
-
-    match VarlitStreamWriter::open(stream_spec(), &first, options) {
-        Err(Error::DiskIndex(error)) => assert!(
-            matches!(*error, varlit::DiskIndexError::IdentityMismatch)
-                || matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch),
-            "unexpected sidecar rejection: {error:?}"
-        ),
-        other => panic!(
-            "a sidecar for a replaced primary was accepted: {:?}",
-            other.err()
-        ),
-    }
-    Ok(())
-}
-
-/// The residual half of  an adversarial re-verification found: a
-/// generation witness computed over a bounded leading window only separates two
-/// primaries that diverge *inside* that window.
-///
-/// Here the two primaries carry 400 byte-identical leading records, so they
-/// agree on ~38 KiB — nine times the 4096-byte window — and diverge only far
-/// past it. Against a witness-only implementation this rewrite was accepted at
-/// both reader and writer open, exposing a stale `historical_distinct_keys` and
-/// turning lookups into `CheckpointMismatch`/`None`. The per-create nonce
-/// stamped inside the primary makes the refusal independent of where the two
-/// generations happen to diverge.
-#[test]
-fn rewrite_that_shares_the_generation_window_is_still_refused() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let first = directory.path().join("wide-first.varlit");
-    let second = directory.path().join("wide-second.varlit");
-    let options = DiskIndexOptions::default();
-
-    build_primary_with_filler(&first, WINDOW_DEFEATING_FILLER, [10, 11])?;
-    build_primary_with_filler(&second, WINDOW_DEFEATING_FILLER, [20, 21])?;
-
-    let first_bytes = fs::read(&first)?;
-    let second_bytes = fs::read(&second)?;
-    assert_eq!(
-        first_bytes.len(),
-        second_bytes.len(),
-        "probe requires equal-length primaries"
-    );
-    assert!(
-        first_bytes.len() > 4 * 4096,
-        "probe requires a primary far larger than the generation window, got {}",
-        first_bytes.len()
-    );
-    // Everything except the leading creation-nonce record and the two trailing
-    // key records is shared, so a prefix witness of any bounded size that skips
-    // the nonce would match.
-    let shared_suffix_start = first_bytes
-        .iter()
-        .zip(second_bytes.iter())
-        .enumerate()
-        .skip(4096)
-        .find(|(_, (left, right))| left != right)
-        .map_or(first_bytes.len(), |(index, _)| index);
-    assert!(
-        shared_suffix_start > 4 * 4096,
-        "probe requires the divergence to sit far past the generation window, got {shared_suffix_start}"
-    );
-
-    {
-        let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
-        assert_eq!(
-            filled(|o| reader.get::<Item>(&10, o))?,
-            Some(item(10, "fixed-width-value"))
-        );
-    }
-    let historical_before =
-        VarlitIndexedReader::open(spec(), &first, options, plan())?.historical_distinct_keys()?;
-
-    rewrite_in_place(&first, &second_bytes)?;
-    assert_eq!(fs::read(&first)?, second_bytes);
-
-    match VarlitIndexedReader::open(spec(), &first, options, plan()) {
-        Err(Error::DiskIndex(error))
-            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
-        other => panic!(
-            "stale sidecar accepted by the reader past the generation window: {:?}",
-            other.err()
-        ),
-    }
-    match VarlitIndexedWriter::open(spec(), &first, options, plan()) {
-        Err(Error::DiskIndex(error))
-            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
-        other => panic!(
-            "stale sidecar accepted by the writer past the generation window: {:?}",
-            other.err()
-        ),
-    }
-
-    // Rebuild remains the documented recovery, and it reports the generation
-    // actually on disk rather than the stale one.
-    rebuild_disk_index(spec(), &first, options, plan())?;
-    let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
-    assert_eq!(
-        filled(|o| reader.get::<Item>(&20, o))?,
-        Some(item(20, "fixed-width-value"))
-    );
-    assert_eq!(filled(|o| reader.get::<Item>(&10, o))?, None);
-    assert_eq!(reader.historical_distinct_keys()?, historical_before);
-    Ok(())
-}
-
-/// The stream half of the same residual gap.
-#[test]
-fn stream_state_sidecar_refuses_a_rewrite_beyond_the_generation_window() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let first = directory.path().join("wide-stream-first.varlit");
-    let second = directory.path().join("wide-stream-second.varlit");
-    let options = varlit::StreamOptions::default();
-
-    for (path, keys) in [(&first, [1u64, 2u64]), (&second, [3, 4])] {
-        let mut writer = VarlitStreamWriter::create(stream_spec(), path, options)?;
-        for index in 0..WINDOW_DEFEATING_FILLER {
-            writer.push_info(&item(1_000_000 + index, "fixed-width-value"))?;
-        }
-        for key in keys {
-            writer.push_info(&item(key, "fixed-width-value"))?;
-        }
-        writer.sync()?;
-    }
-
-    let first_bytes = fs::read(&first)?;
-    let second_bytes = fs::read(&second)?;
-    assert_eq!(first_bytes.len(), second_bytes.len());
-    assert!(first_bytes.len() > 4 * 4096);
-    let divergence = first_bytes
-        .iter()
-        .zip(second_bytes.iter())
-        .enumerate()
-        .skip(4096)
-        .find(|(_, (left, right))| left != right)
-        .map_or(first_bytes.len(), |(index, _)| index);
-    assert!(
-        divergence > 4 * 4096,
-        "probe requires divergence past the generation window, got {divergence}"
-    );
-
-    rewrite_in_place(&first, &second_bytes)?;
-
-    match VarlitStreamWriter::open(stream_spec(), &first, options) {
-        Err(Error::DiskIndex(error))
-            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
-        other => panic!(
-            "stale stream state sidecar accepted past the generation window: {:?}",
-            other.err()
-        ),
-    }
-    Ok(())
-}
-
-/// Pins the mechanism itself rather than only its effect: every create stamps a
-/// distinct nonce inside the primary, at a fixed offset, readable through the
-/// ordinary metadata API. Two primaries built from identical inputs must still
-/// differ, and they must differ inside the generation window.
 #[test]
 fn every_create_stamps_a_distinct_nonce_inside_the_primary() -> Result<()> {
     let directory = tempfile::tempdir()?;
@@ -584,41 +207,128 @@ fn every_create_stamps_a_distinct_nonce_inside_the_primary() -> Result<()> {
 }
 
 #[test]
-fn mismatched_descriptor_plan_is_rejected_before_any_decode() {
-    #[cfg(feature = "scalable-fault-injection")]
-    varlit::DiskIndexRebuildReport::reset_scaling_counters();
+fn stream_state_sidecar_refuses_a_rewritten_primary() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let first = directory.path().join("stream-first.varlit");
+    let second = directory.path().join("stream-second.varlit");
+    let options = varlit::StreamOptions::default();
 
-    let rejected = DiskIndexPlan::canonical(spec(), INDEXED_IMPOSTOR);
-    assert!(
-        matches!(
-            rejected,
-            Err(varlit::DiskIndexError::Primary(
-                Error::BlockSchemaFingerprintMismatch { .. }
-            ))
-        ),
-        "impostor descriptor plan accepted: {rejected:?}"
-    );
+    for (path, keys) in [(&first, [1u64, 2u64]), (&second, [3, 4])] {
+        let mut writer = VarlitStreamWriter::create(stream_spec(), path, options)?;
+        for key in keys {
+            writer.push_info(&item(key, "fixed-width-value"))?;
+        }
+        writer.sync()?;
+    }
 
-    // The report counted exactly one concrete decoder invocation on primary
-    // bytes before any schema-identity rejection; the contract is zero.
-    #[cfg(feature = "scalable-fault-injection")]
-    assert_eq!(
-        varlit::DiskIndexRebuildReport::descriptor_decoder_calls(),
-        0,
-        "a captured codec ran before schema identity was validated"
-    );
+    let second_bytes = fs::read(&second)?;
+    assert_eq!(fs::read(&first)?.len(), second_bytes.len());
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = fs::OpenOptions::new().write(true).open(&first)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&second_bytes)?;
+        file.sync_all()?;
+    }
+
+    let opened = VarlitStreamWriter::open(stream_spec(), &first, options);
+    match opened {
+        Err(Error::DiskIndex(error))
+            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
+        other => panic!("stale stream state sidecar accepted: {:?}", other.err()),
+    }
+    Ok(())
 }
 
+/// The consumer half. Sidecar publication cannot be made atomic against a
+/// process that replaces the primary *pathname* without taking the writer lock,
+/// so the library narrows the interval and retires a sidecar it published for a
+/// replaced primary. What keeps that a rebuild-cost problem rather than a
+/// wrong-data problem is this: a sidecar whose primary was swapped wholesale for
+/// a different file object is refused by consumers on identity, before any
+/// indexed lookup can be answered from it.
+///
+/// The existing rewrite tests replace a primary's *contents* in place, keeping
+/// the OS object. This one replaces the object itself, which is the shape a
+/// pathname mutator produces.
 #[test]
-fn matching_descriptor_plan_still_builds_and_indexes() -> Result<()> {
+fn stream_state_sidecar_refuses_a_wholesale_primary_replacement() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("valid-plan.varlit");
-    build_primary(&path, [5, 6])?;
-    let reader = VarlitIndexedReader::open(spec(), &path, DiskIndexOptions::default(), plan())?;
-    assert_eq!(
-        filled(|o| reader.get::<Item>(&5, o))?,
-        Some(item(5, "fixed-width-value"))
+    let first = directory.path().join("swap-first.varlit");
+    let second = directory.path().join("swap-second.varlit");
+    let options = varlit::StreamOptions::default();
+
+    for (path, keys) in [(&first, [1u64, 2u64]), (&second, [3, 4])] {
+        let mut writer = VarlitStreamWriter::create(stream_spec(), path, options)?;
+        for key in keys {
+            writer.push_info(&item(key, "fixed-width-value"))?;
+        }
+        writer.sync()?;
+    }
+
+    // The whole file object behind the pathname is replaced; the state sidecar
+    // published for the original object stays where it was.
+    fs::rename(&second, &first)?;
+
+    match VarlitStreamWriter::open(stream_spec(), &first, options) {
+        Err(Error::DiskIndex(error)) => assert!(
+            matches!(*error, varlit::DiskIndexError::IdentityMismatch)
+                || matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch),
+            "unexpected sidecar rejection: {error:?}"
+        ),
+        other => panic!(
+            "a sidecar for a replaced primary was accepted: {:?}",
+            other.err()
+        ),
+    }
+    Ok(())
+}
+
+/// The stream half of the same residual gap.
+#[test]
+fn stream_state_sidecar_refuses_a_rewrite_beyond_the_generation_window() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let first = directory.path().join("wide-stream-first.varlit");
+    let second = directory.path().join("wide-stream-second.varlit");
+    let options = varlit::StreamOptions::default();
+
+    for (path, keys) in [(&first, [1u64, 2u64]), (&second, [3, 4])] {
+        let mut writer = VarlitStreamWriter::create(stream_spec(), path, options)?;
+        for index in 0..WINDOW_DEFEATING_FILLER {
+            writer.push_info(&item(1_000_000 + index, "fixed-width-value"))?;
+        }
+        for key in keys {
+            writer.push_info(&item(key, "fixed-width-value"))?;
+        }
+        writer.sync()?;
+    }
+
+    let first_bytes = fs::read(&first)?;
+    let second_bytes = fs::read(&second)?;
+    assert_eq!(first_bytes.len(), second_bytes.len());
+    assert!(first_bytes.len() > 4 * 4096);
+    let divergence = first_bytes
+        .iter()
+        .zip(second_bytes.iter())
+        .enumerate()
+        .skip(4096)
+        .find(|(_, (left, right))| left != right)
+        .map_or(first_bytes.len(), |(index, _)| index);
+    assert!(
+        divergence > 4 * 4096,
+        "probe requires divergence past the generation window, got {divergence}"
     );
+
+    rewrite_in_place(&first, &second_bytes)?;
+
+    match VarlitStreamWriter::open(stream_spec(), &first, options) {
+        Err(Error::DiskIndex(error))
+            if matches!(*error, varlit::DiskIndexError::PrimaryGenerationMismatch) => {}
+        other => panic!(
+            "stale stream state sidecar accepted past the generation window: {:?}",
+            other.err()
+        ),
+    }
     Ok(())
 }
 
@@ -670,70 +380,6 @@ fn stream_restore_refuses_missing_confirmed_heads_without_truncating_the_primary
             "recovery republished a stale checkpoint"
         );
         assert_eq!(pinned.verify_all()?, 4);
-    }
-    Ok(())
-}
-
-#[test]
-fn indexed_restore_refuses_missing_confirmed_heads_without_truncating_the_primary() -> Result<()> {
-    for dirty in [false, true] {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("head-damage.varlit");
-        let options = DiskIndexOptions::default();
-        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, plan())?;
-        for key in [10, 11] {
-            writer.push_info(&item(key, "confirmed"))?;
-        }
-        writer.sync()?;
-        let pinned = VarlitIndexedReader::open(spec(), &path, options, plan())?;
-        if dirty {
-            writer.push_info(&item(12, "unconfirmed"))?;
-            writer.flush()?;
-        }
-        drop(writer);
-        let mut sidecar = path.as_os_str().to_os_string();
-        sidecar.push(".vki");
-        let sidecar = std::path::PathBuf::from(sidecar);
-        let primary_before = fs::read(&path)?;
-        let mut damaged = fs::read(&sidecar)?;
-        damaged[4096 + 8] ^= 1;
-        fs::write(&sidecar, &damaged)?;
-        let reader = VarlitIndexedReader::open(spec(), &path, options, plan())?;
-        assert_eq!(
-            filled(|o| reader.get::<Item>(&10, o))?,
-            Some(item(10, "confirmed"))
-        );
-        assert_eq!(
-            filled(|o| reader.get::<Item>(&11, o))?,
-            Some(item(11, "confirmed"))
-        );
-        drop(reader);
-        damaged[8192 + 8] ^= 1;
-        fs::write(&sidecar, &damaged)?;
-        assert!(VarlitIndexedReader::open(spec(), &path, options, plan()).is_err());
-        assert!(VarlitIndexedWriter::open(spec(), &path, options, plan()).is_err());
-        assert!(
-            VarlitIndexedWriter::restore_checkpoint_and_open(spec(), &path, options, plan())
-                .is_err()
-        );
-        assert_eq!(
-            fs::read(&path)?,
-            primary_before,
-            "recovery truncated confirmed records"
-        );
-        assert_eq!(
-            fs::read(&sidecar)?,
-            damaged,
-            "recovery republished a stale checkpoint"
-        );
-        assert_eq!(
-            filled(|o| pinned.get::<Item>(&10, o))?,
-            Some(item(10, "confirmed"))
-        );
-        assert_eq!(
-            filled(|o| pinned.get::<Item>(&11, o))?,
-            Some(item(11, "confirmed"))
-        );
     }
     Ok(())
 }

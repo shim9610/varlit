@@ -223,15 +223,25 @@ jobs:
         run: python3 scripts/check_miri.py --target s390x-unknown-linux-gnu --output target/miri-report/s390x
       # Nothing executes big-endian code natively in CI, so Miri is also the
       # only place the byte-order-sensitive safe code runs on such a target:
-      # the wire layouts, the row packers and the snapshot codecs. The matrix
+      # the wire layouts, the row packers, the snapshot codecs and keyed
+      # storage's layouts and tree pages (a file's keys must order alike on
+      # every platform; its model tests run natively). The matrix
       # tile tests are left out for their cost under an interpreter; their
-      # encoding uses explicit little-endian conversions throughout.
+      # encoding uses explicit little-endian conversions throughout. Of keyed
+      # storage's tree tests only those that run under Miri are named: the
+      # others are `cfg_attr(miri, ignore)` for their thousands of ring
+      # writes, and the runner requires every selected test to execute.
       - name: byte-order-sensitive unit tests under Miri, big-endian
         run: |
           python3 scripts/check_miri.py --target s390x-unknown-linux-gnu \
             --prefix native_layout:: --prefix format:: --prefix anchor:: \
             --prefix packed_rows:: --prefix spill_rows:: --prefix snapshot:: \
             --prefix scalable_extent:: --prefix sync_marker:: \
+            --prefix keyed_heap::node:: --prefix keyed_heap::cache:: \
+            --prefix keyed_heap::tests::a_few_puts_and_deletes_match_a_model \
+            --prefix keyed_heap::tests::a_reader_keeps_its_generation_until_it_follows \
+            --prefix keyed_heap::tests::block_types_have_their_own_trees \
+            --prefix keyed_heap::tests::the_state_layout_is_the_same_bytes_on_every_platform \
             --output target/miri-report/s390x-logic
       - name: ownership refusal, callback errors and real cleanup under Miri
         run: python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership

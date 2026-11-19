@@ -459,6 +459,84 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
             });
             quote!(#(#comparisons)&&*)
         };
+        // Keyed storage keeps the key fields once, in the record's key: its
+        // value is every other field, and a read takes the key fields from
+        // the key it looked up.
+        let value_fields: Vec<&FieldDescriptor> = descriptors
+            .iter()
+            .filter(|field| !key_fields.contains(&field.name))
+            .collect();
+        let value_fixed_encode = value_fields.iter().map(|field| {
+            let name = &field.name;
+            quote!(::varlit::__core::VarlitEncode::encode_varlit(&self.#name, encoder)?;)
+        });
+        let value_variable_encode = value_fields.iter().map(|field| {
+            let name = &field.name;
+            let ty = &field.ty;
+            let field_id = field.field_id;
+            quote!(::varlit::__core::encode_field_in_place::<#ty>(encoder, #field_id, &self.#name)?;)
+        });
+        let key_assign = key_fields.iter().enumerate().map(|(position, name)| {
+            if key_fields.len() == 1 {
+                quote!(::core::clone::Clone::clone_from(&mut out.#name, key);)
+            } else {
+                let index = syn::Index::from(position);
+                quote!(::core::clone::Clone::clone_from(&mut out.#name, &key.#index);)
+            }
+        });
+        let key_decode = key_fields
+            .iter()
+            .map(|name| quote!(decoder.decode_value_into(&mut out.#name)?;));
+        let value_fixed_decode = value_fields.iter().map(|field| {
+            let name = &field.name;
+            quote!(decoder.decode_value_into(&mut out.#name)?;)
+        });
+        let value_seen = value_fields.iter().map(|field| {
+            let var = seen_ident(&field.name);
+            quote!(let mut #var = false;)
+        });
+        let value_arms = value_fields.iter().map(|field| {
+            let name = &field.name;
+            let var = seen_ident(name);
+            let ty = &field.ty;
+            let field_id = field.field_id;
+            let field_name = field.name.to_string();
+            quote! {
+                #field_id => {
+                    if header.wire_type != <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE {
+                        return Err(::varlit::__core::Error::WireTypeMismatch {
+                            field: #field_name,
+                            expected: <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE,
+                            actual: header.wire_type,
+                        });
+                    }
+                    decoder.decode_nested_into(payload, &mut out.#name)?;
+                    #var = true;
+                }
+            }
+        });
+        let value_finish = value_fields.iter().map(|field| {
+            let name = &field.name;
+            let var = seen_ident(name);
+            let field_id = field.field_id;
+            let field_name = name.to_string();
+            if field.default {
+                quote! {
+                    if !#var {
+                        out.#name = ::core::default::Default::default();
+                    }
+                }
+            } else {
+                quote! {
+                    if !#var {
+                        return Err(::varlit::__core::Error::MissingField {
+                            field: #field_name,
+                            field_id: #field_id,
+                        });
+                    }
+                }
+            }
+        });
         quote! {
             impl ::varlit::__core::VarlitKeyedBlock for #ident {
                 type Key = #key_type;
@@ -469,6 +547,67 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
 
                 fn key_eq(&self, other: &Self::Key) -> bool {
                     #key_eq_value
+                }
+
+                fn __varlit_encode_value(
+                    &self,
+                    encoder: &mut ::varlit::__core::Encoder,
+                ) -> ::varlit::__core::Result<()> {
+                    let _ = &encoder;
+                    match <Self as ::varlit::__core::VarlitBlock>::KIND {
+                        ::varlit::__core::BlockKind::Variable => {
+                            #(#value_variable_encode)*
+                        }
+                        _ => {
+                            #(#value_fixed_encode)*
+                        }
+                    }
+                    ::core::result::Result::Ok(())
+                }
+
+                fn __varlit_decode_value_into(
+                    key: &Self::Key,
+                    out: &mut Self,
+                    decoder: &mut ::varlit::__core::Decoder<'_>,
+                ) -> ::varlit::__core::Result<()> {
+                    <Self as ::varlit::__core::VarlitKeyedBlock>::__varlit_decode_value_fields_into(
+                        out, decoder,
+                    )?;
+                    #(#key_assign)*
+                    ::core::result::Result::Ok(())
+                }
+
+                fn __varlit_decode_key_into(
+                    out: &mut Self,
+                    decoder: &mut ::varlit::__core::Decoder<'_>,
+                ) -> ::varlit::__core::Result<()> {
+                    #(#key_decode)*
+                    ::core::result::Result::Ok(())
+                }
+
+                fn __varlit_decode_value_fields_into(
+                    out: &mut Self,
+                    decoder: &mut ::varlit::__core::Decoder<'_>,
+                ) -> ::varlit::__core::Result<()> {
+                    let _ = &decoder;
+                    match <Self as ::varlit::__core::VarlitBlock>::KIND {
+                        ::varlit::__core::BlockKind::Variable => {
+                            #(#value_seen)*
+                            while decoder.remaining() > 0 {
+                                let header = ::varlit::__core::read_field_header(decoder)?;
+                                let payload = decoder.read_exact(header.payload_len as usize)?;
+                                match header.field_id {
+                                    #(#value_arms)*
+                                    _ => {}
+                                }
+                            }
+                            #(#value_finish)*
+                        }
+                        _ => {
+                            #(#value_fixed_decode)*
+                        }
+                    }
+                    ::core::result::Result::Ok(())
                 }
             }
         }

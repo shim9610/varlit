@@ -1,4 +1,6 @@
-// Native file append operations.
+// Appending records: plain, keyed and linked pushes, deletes and keyed
+// operations, and the keyed tail map that remembers each key's latest record.
+// Included into `file.rs` with `include!`, so it shares that module's scope.
 
 impl VarlitFile {
     pub fn spec(&self) -> FormatSpec {
@@ -30,7 +32,7 @@ impl VarlitFile {
     /// key. Such calls are rejected with
     /// [`Error::KeyedChainRequiresKeyedApi`]; use the generated keyed writer
     /// method or [`VarlitFile::push_keyed_info`], both of which maintain the
-    /// chain. The bounded streaming and indexed writers already reject the
+    /// chain. The bounded streaming writer already rejects the
     /// same combination.
     pub fn push_info<T: VarlitBlock>(&mut self, block: &T) -> Result<AppendInfo> {
         if self.spec.index_policy.keyed_offset_chain && T::IS_KEYED {
@@ -253,6 +255,11 @@ impl VarlitFile {
         prev_same_key_offset: Option<u64>,
     ) -> Result<AppendInfo> {
         self.check_write()?;
+        // A keyed block of an in-place format lives in the heap: a log copy
+        // would be a second, stale version no keyed read sees.
+        if T::IS_KEYED && self.spec.keyed_storage.is_some() {
+            return Err(Error::KeyedStorageRequiresPut { block_id: T::ID });
+        }
         let mandatory = T::IMMEDIATE || block.immediate_if();
         self.ensure_user_block::<T>()?;
         if T::KIND == BlockKind::Matrix {
@@ -392,6 +399,9 @@ impl VarlitFile {
         // stays as the runtime backstop. This terminal site also covers the
         // VarlitFile::delete and VarlitReader/VarlitWriter delete wrappers.
         let () = crate::traits::KeyedBlockContract::<T>::OK;
+        if self.spec.keyed_storage.is_some() {
+            return Err(Error::KeyedStorageRequiresPut { block_id: T::ID });
+        }
         let _permit = self.ensure_write()?;
         self.ensure_user_block::<T>()?;
         crate::collections::ensure_registered_block::<T>(self.spec)?;
@@ -484,6 +494,7 @@ impl VarlitFile {
         // file, so anything appended behind this record hides it.
         self.close_commit_point();
         self.file.flush()?;
+        self.publish_visible_end();
         Ok(())
     }
 
@@ -500,10 +511,13 @@ impl VarlitFile {
         {
             let info = AppendInfo::from(&entry);
             self.close_commit_point();
+            self.publish_visible_end();
             return Ok(info);
         }
         let info = self.write_commit_marker()?;
         self.close_commit_point();
+        // A commit without a barrier is visible at once, by contract.
+        self.publish_visible_end();
         Ok(info)
     }
 
@@ -524,6 +538,7 @@ impl VarlitFile {
             self.file.sync_all()?;
             // After a completed barrier the newest marker is the anchor.
             self.anchor_after_barrier(entry.record_offset);
+            self.publish_visible_end();
             // a durable commit on a file this handle created must
             // also establish the pathname; this happens once, not per commit.
             let publication = self.publish_matrix_generation();
@@ -573,6 +588,8 @@ impl VarlitFile {
             ));
         }
         self.anchor_after_barrier(info.record_offset);
+        // Only now, with the barrier complete, may readers adopt the marker.
+        self.publish_visible_end();
         let publication = self.publish_matrix_generation();
         self.poison_after_started_matrix_error(publication)?;
         self.sync_created_pathname_once()?;
@@ -599,9 +616,21 @@ impl VarlitFile {
         Ok(())
     }
 
-    /// Publishes this writer's staged matrix changes, if any.
+    /// Publishes this writer's staged matrix or keyed storage changes, if
+    /// any. A format has one or the other.
     fn publish_matrix_generation(&mut self) -> Result<()> {
-        self.publish_tiles()
+        self.publish_tiles()?;
+        self.publish_keyed().map(drop)
+    }
+
+    /// Whether this writer holds matrix or keyed storage changes not yet
+    /// published.
+    fn in_place_is_dirty(&self) -> bool {
+        self.matrix_is_dirty()
+            || matches!(
+                self.keyed.get(),
+                Some(keyed_access::KeyedEngine::Writer(heap)) if heap.is_dirty()
+            )
     }
 
     /// Requests durable persistence of everything written so far.
@@ -649,7 +678,7 @@ impl VarlitFile {
         // A matrix publication ends in a full barrier of this same file, which
         // makes every record appended before it durable too: one barrier, not
         // a second one for the records alone.
-        if self.mode == OpenMode::ReadWrite && self.matrix_is_dirty() {
+        if self.mode == OpenMode::ReadWrite && self.in_place_is_dirty() {
             if let Err(error) = self.publish_matrix_generation() {
                 self.poison.poison();
                 return Err(error);
@@ -657,6 +686,8 @@ impl VarlitFile {
         } else {
             self.file.sync_all()?;
         }
+        // The barrier above covers every record appended before it.
+        self.publish_visible_end();
         self.sync_created_pathname_once()?;
         self.immediate_state.reset();
         Ok(())
@@ -1296,6 +1327,45 @@ impl VarlitFile {
             window.copy_from_slice(&block[8..]);
         }
         Ok(())
+    }
+
+    /// Takes over the file's published end for this writer, and publishes
+    /// what the file holds once it is durable.
+    ///
+    /// Called by every read-write open after recovery, and after a
+    /// replacement rebinds the handle. An earlier writer may have left bytes
+    /// it never synced, so what is published here is synced first; that
+    /// barrier is paid only when the published end moves.
+    pub(super) fn open_published_end(&mut self) -> Result<()> {
+        if self.mode != OpenMode::ReadWrite {
+            return Ok(());
+        }
+        let header_len = append_log_start_for_file(self)?;
+        let Some(slots_at) = published_end_slots_at(header_len, &self.header_extensions)? else {
+            return Ok(());
+        };
+        self.file.adopt_published_end(slots_at)?;
+        let end = self.snapshot.len();
+        if self.file.published_end() != Some(end) {
+            self.file.sync_data()?;
+            self.file.publish_end(end)?;
+        }
+        Ok(())
+    }
+
+    /// Lets readers adopt everything this writer has written, after a
+    /// publication: after the barrier of a durable one, at once for one
+    /// that promises visibility without durability (`commit`, `flush`).
+    ///
+    /// Best-effort, like the header tails: the publication has happened, so
+    /// a failure must not read as one that did not. A slot that was not
+    /// written leaves readers at the previous end until the next publication
+    /// or writer open moves it; they never see more than was published.
+    pub(super) fn publish_visible_end(&mut self) {
+        if self.mode == OpenMode::ReadWrite {
+            let end = self.snapshot.len();
+            let _ = self.file.publish_end(end);
+        }
     }
 
     /// Takes the object: records whether the *previous* writer released it

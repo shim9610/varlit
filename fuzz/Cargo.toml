@@ -9,13 +9,12 @@ license = "MIT OR Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
-redb = { version = "4.4.0", path = "../vendor/redb" }
 libfuzzer-sys = "0.4"
 tempfile = "3"
 
 [dependencies.varlit]
 path = "../crates/varlit"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 features = ["integrity", "mmap", "zero-copy", "compression-zstd", "experimental-matrix-reuse", "scalable-fault-injection"]
 
 # Use independent workspace for fuzzers
@@ -87,13 +86,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "native_redb_differential"
-path = "fuzz_targets/native_redb_differential.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "matrix_state_machine"
 path = "fuzz_targets/matrix_state_machine.rs"
 test = false
@@ -110,6 +102,27 @@ bench = false
 [[bin]]
 name = "matrix_reuse_publication"
 path = "fuzz_targets/matrix_reuse_publication.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyed_storage_model"
+path = "fuzz_targets/keyed_storage_model.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyed_storage_corrupt"
+path = "fuzz_targets/keyed_storage_corrupt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "published_end_damage"
+path = "fuzz_targets/published_end_damage.rs"
 test = false
 doc = false
 bench = false

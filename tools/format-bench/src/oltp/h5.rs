@@ -2,9 +2,12 @@
 //! the branch secondary index is CSR in two datasets (ids sorted by branch,
 //! offsets). A transaction reads and writes balances with point selections,
 //! then flush + fsync (HDF5 has no transactions: a crash can leave a partial
-//! update).
+//! update). Accounts are rows in load (key) order; with sparse keys a sorted
+//! `key` dataset maps a key to its row by binary search, read element by
+//! element through HDF5's chunk cache.
 //! Candidates: chunk length.
-//! app-built: CSR branch index datasets (csr.rs); no atomic transactions
+//! app-built: CSR branch index datasets (csr.rs); sorted key dataset and its
+//! binary search (sparse keys); no atomic transactions
 use super::*;
 use ::hdf5::{File, Selection};
 use ndarray::{Array1, Array2, s};
@@ -18,11 +21,31 @@ fn points(ids: impl Iterator<Item = u64>) -> Selection {
     Selection::Points(Array2::from_shape_vec((n, 1), v).unwrap())
 }
 
+/// The row of `key`: the key itself with dense ids, else its place in the
+/// sorted `keys` dataset.
+fn row_of(keys: Option<&::hdf5::Dataset>, key: u64) -> Result<usize> {
+    let Some(keys) = keys else {
+        return Ok(key as usize);
+    };
+    let (mut lo, mut hi) = (0usize, accounts() as usize);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let at = keys.read_slice_1d::<u64, _>(mid..mid + 1)?[0];
+        match at.cmp(&key) {
+            std::cmp::Ordering::Less => lo = mid + 1,
+            std::cmp::Ordering::Greater => hi = mid,
+            std::cmp::Ordering::Equal => return Ok(mid),
+        }
+    }
+    Err(format!("missing account {key}").into())
+}
+
 pub struct W {
     f: File,
     ch: usize,
     p: PathBuf,
     bal: Option<::hdf5::Dataset>,
+    keys: Option<::hdf5::Dataset>,
 }
 pub fn create(p: &Path, cand: &str) -> Result<Box<dyn Oltp>> {
     let ch = cand.trim_start_matches('c').parse().unwrap_or(4096);
@@ -34,6 +57,7 @@ pub fn create(p: &Path, cand: &str) -> Result<Box<dyn Oltp>> {
         ch,
         p: p.to_path_buf(),
         bal: None,
+        keys: None,
     }))
 }
 impl Oltp for W {
@@ -64,9 +88,23 @@ impl Oltp for W {
             .chunk(ch)
             .shape(n)
             .create("created")?;
+        let keys = if sparse() {
+            Some(
+                self.f
+                    .new_dataset::<u64>()
+                    .chunk(ch)
+                    .shape(n)
+                    .create("key")?,
+            )
+        } else {
+            None
+        };
         for a in (0..n).step_by(STEP) {
             let z = (a + STEP).min(n);
-            let ids = a as u64..z as u64;
+            let ids = (a as u64..z as u64).map(key_of);
+            if let Some(keys) = &keys {
+                keys.write_slice(&Array1::from_iter(ids.clone()), a..z)?;
+            }
             bal.write_slice(&Array1::from_elem(z - a, START), a..z)?;
             br.write_slice(&Array1::from_iter(ids.clone().map(branch_of)), a..z)?;
             let mut nm = Array2::<u8>::zeros((z - a, 24));
@@ -112,11 +150,16 @@ impl Oltp for W {
         self.f.flush()?;
         fsync_file(&self.p)?;
         self.bal = Some(bal);
+        self.keys = keys;
         Ok(())
     }
     fn txn(&mut self, deltas: &[(u64, i64)]) -> Result<()> {
         let bal = self.bal.as_ref().unwrap();
-        let sel = points(deltas.iter().map(|d| d.0));
+        let rows = deltas
+            .iter()
+            .map(|d| row_of(self.keys.as_ref(), d.0).map(|r| r as u64))
+            .collect::<Result<Vec<_>>>()?;
+        let sel = points(rows.into_iter());
         let mut cur: Array1<i64> = bal.read_slice_1d(sel.clone())?;
         for (c, d) in cur.iter_mut().zip(deltas) {
             *c += d.1;
@@ -136,6 +179,7 @@ pub struct R {
     cr: ::hdf5::Dataset,
     ids: ::hdf5::Dataset,
     off: ::hdf5::Dataset,
+    keys: Option<::hdf5::Dataset>,
 }
 pub fn open(p: &Path, _cand: &str) -> Result<Box<dyn OltpRead>> {
     let f = File::open(p)?;
@@ -146,12 +190,17 @@ pub fn open(p: &Path, _cand: &str) -> Result<Box<dyn OltpRead>> {
         cr: f.dataset("created")?,
         ids: f.dataset("br_ids")?,
         off: f.dataset("br_off")?,
+        keys: if sparse() {
+            Some(f.dataset("key")?)
+        } else {
+            None
+        },
         _f: f,
     }))
 }
 impl OltpRead for R {
     fn point(&mut self, id: u64) -> Result<Row> {
-        let i = id as usize;
+        let i = row_of(self.keys.as_ref(), id)?;
         let nm: Array2<u8> = self.name.read_slice(s![i..i + 1, ..])?;
         Ok(Row {
             id,

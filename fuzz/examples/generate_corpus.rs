@@ -17,6 +17,7 @@ fn main() -> varlit::Result<()> {
     generate_layout(&corpus, &scratch)?;
     generate_matrix(&corpus, &scratch)?;
     generate_sidecars(&corpus)?;
+    generate_damage(&corpus)?;
     fs::remove_dir_all(&scratch)?;
     Ok(())
 }
@@ -195,6 +196,40 @@ fn generate_sidecars(corpus: &Path) -> varlit::Result<()> {
         &machine.join("populated-unsynced"),
         &[[1, 1, 1, 8], [0, 0, 2, 0], [3, 0, 0, 0]],
     )?;
+    Ok(())
+}
+
+/// Seeds for the targets that build a valid file themselves and damage it:
+/// one per damage mode, and the undamaged case.
+fn generate_damage(corpus: &Path) -> varlit::Result<()> {
+    let keyed = corpus.join("keyed_storage_corrupt");
+    fs::create_dir_all(&keyed)?;
+    // Undamaged; an overwrite, bit flips and a cut, each in the middle.
+    fs::write(keyed.join("undamaged"), [0u8])?;
+    fs::write(
+        keyed.join("overwrite"),
+        [0u8, 0x00, 0x80, 0xff, 0x00, 0x13, 0x37],
+    )?;
+    fs::write(keyed.join("flips"), [1u8, 0x00, 0x40, 3, 0x00, 0xc0, 5])?;
+    fs::write(keyed.join("cut"), [2u8, 0x00, 0xa0])?;
+
+    let published = corpus.join("published_end_damage");
+    fs::create_dir_all(&published)?;
+    // Three commits; the slots overwritten, an unpublished and a published
+    // tail, and a cut.
+    fs::write(
+        published.join("slots"),
+        [2u8, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0],
+    )?;
+    fs::write(
+        published.join("unpublished-tail"),
+        [2u8 | 1 << 3, 0x56, 0x52, 0x45, 0x43],
+    )?;
+    fs::write(
+        published.join("published-tail"),
+        [2u8 | 2 << 3, 0x56, 0x52, 0x45, 0x43],
+    )?;
+    fs::write(published.join("cut"), [2u8 | 3 << 3, 0x90])?;
     Ok(())
 }
 

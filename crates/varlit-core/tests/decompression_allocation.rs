@@ -76,6 +76,44 @@ fn range_streaming_never_requests_a_rust_output_allocation() -> Result<()> {
     // C zstd allocation is checked separately by the native malloc refusal test.
     Ok(())
 }
+#[cfg(feature = "integrity")]
+#[test]
+fn verified_decoding_buffers_one_chunk_not_the_payload() -> Result<()> {
+    let _lock = LOCK.lock().unwrap();
+    // Eight times the refusal threshold in total, 64 KiB per chunk.
+    let data: Vec<u8> = (0..8 * MAXIMUM).map(|i| (i % 251) as u8).collect();
+    let chunks =
+        varlit_core::ChunkedBytes::from_zstd_chunks(&data, 64 * 1024, CompressionLevel::Fast)?;
+    let limit = data.len() as u64;
+    DENIED.store(0, Relaxed);
+    ENABLED.store(true, Relaxed);
+    let whole = chunks.decode_to_vec_limited(limit);
+    let mut hasher = crc32fast::Hasher::new();
+    let mut sink = HashingSink(&mut hasher, 0);
+    let streamed = chunks.decode_into(&mut sink, limit);
+    ENABLED.store(false, Relaxed);
+    // The whole-output path needs one allocation of the full payload and is
+    // refused; the chunked path never asks for more than a chunk.
+    assert!(matches!(whole, Err(Error::AllocationFailed { .. })));
+    assert_eq!(DENIED.load(Relaxed), 1);
+    assert_eq!(streamed?, limit);
+    assert_eq!(sink.1, limit);
+    assert_eq!(hasher.finalize(), crc32fast::hash(&data));
+    Ok(())
+}
+#[cfg(feature = "integrity")]
+struct HashingSink<'a>(&'a mut crc32fast::Hasher, u64);
+#[cfg(feature = "integrity")]
+impl std::io::Write for HashingSink<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        self.1 += bytes.len() as u64;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 #[test]
 fn untrusted_sizes_do_not_request_the_declared_maximum() {
     let _lock = LOCK.lock().unwrap();

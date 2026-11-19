@@ -524,34 +524,45 @@ varlit_format! {
         magic: b"SCLF";
         version: 1;
         schema_hash: computed;
-        index: keyed_offset_chain;
-        blocks { fixed ScalableItem(id = 1, key = [key], key_index = disk) { key: u64, value: u64 } }
+        blocks { fixed ScalableItem(id = 1, key = [key]) { key: u64, value: u64 } }
     }
+}
+
+/// Reads every `ScalableItem` the stream reader's snapshot holds, returning the
+/// values in append order.
+fn scalable_values(reader: &ScalableFixtureStreamReader) -> Vec<u64> {
+    let mut items = reader.scalable_items().unwrap();
+    let mut item = ScalableItem::empty();
+    let mut values = Vec::new();
+    while items.next_into(&mut item).unwrap() {
+        assert_eq!(item.key, 7);
+        values.push(item.value);
+    }
+    values
 }
 
 fn check_scalable_roundtrip(dir: &std::path::Path) {
     let path = dir.join("scalable.varlit");
-    let options = varlit::DiskIndexOptions::default();
-    let mut writer = ScalableFixture::create_indexed_writer(&path, options).unwrap();
+    let options = varlit::StreamOptions::default();
+    let mut writer = ScalableFixture::create_stream_writer(&path, options).unwrap();
     writer
         .push_scalable_item(&ScalableItem { key: 7, value: 1 })
         .unwrap();
     writer.immediate().unwrap();
-    let mut reader = ScalableFixture::open_indexed_reader(&path, options).unwrap();
+    let mut reader = ScalableFixture::open_stream_reader(&path, options).unwrap();
     writer
         .push_scalable_item(&ScalableItem { key: 7, value: 2 })
         .unwrap();
-    let dirty = ScalableFixture::open_indexed_reader(&path, options).unwrap();
-    let mut item = ScalableItem::empty();
-    assert!(dirty.get_scalable_item(&7, &mut item).unwrap());
-    assert_eq!(item.value, 1);
+    let dirty = ScalableFixture::open_stream_reader(&path, options).unwrap();
+    assert_eq!(scalable_values(&dirty), [1]);
     assert!(reader.release_snapshot());
     writer.immediate().unwrap();
     reader.follow().unwrap();
-    assert!(reader.get_scalable_item(&7, &mut item).unwrap());
-    assert_eq!(item.value, 2);
+    assert_eq!(scalable_values(&reader), [1, 2]);
     assert!(reader.snapshot_status().unwrap().pinned);
-    println!("  scalable OK: embedded backend, Dirty read, release/follow, reader-local status");
+    println!(
+        "  scalable OK: stream handles, unpublished append, release/follow, reader-local status"
+    );
 }
 
 fn main() {

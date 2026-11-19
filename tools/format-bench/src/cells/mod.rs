@@ -19,10 +19,11 @@ use crate::common::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(feature = "hdf5")]
 mod h5;
 mod sq;
+#[cfg(unix)]
 pub mod tile_proto;
-mod varlit_indexed;
 mod varlit_matrix;
 
 pub const CELL: usize = 1024;
@@ -32,6 +33,8 @@ const POLL: Duration = Duration::from_micros(100);
 pub fn cells() -> usize {
     if std::env::var_os("FB_SMALL").is_some() {
         1 << 18
+    } else if let Some(gb) = data_gb() {
+        ((gb * 1e9 / CELL as f64) as usize / (1 << 16)).max(1) * (1 << 16)
     } else {
         1 << 24
     }
@@ -124,10 +127,12 @@ pub trait CellReader {
 /// Storage configurations each engine offers for this situation.
 pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
-        "varlit" => &["matrix", "indexed"],
+        "varlit" => &["matrix"],
         "sqlite" => sq::CANDIDATES,
+        #[cfg(feature = "hdf5")]
         "hdf5" => h5::CANDIDATES,
         "parquet" => &["-"],
+        #[cfg(unix)]
         "tile" => tile_proto::CANDIDATES,
         _ => return Err(format!("unknown engine {engine}").into()),
     })
@@ -139,9 +144,10 @@ fn target(engine: &str, dir: &Path) -> PathBuf {
 fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellWriter>> {
     match (engine, cand) {
         ("varlit", "matrix") => varlit_matrix::create(p),
-        ("varlit", "indexed") => varlit_indexed::create(p),
         ("sqlite", c) => sq::create(p, c),
+        #[cfg(unix)]
         ("tile", c) => tile_proto::create(p, c),
+        #[cfg(feature = "hdf5")]
         ("hdf5", c) => h5::create(p, c),
         ("parquet", _) => {
             Err("parquet: files are immutable; no in-place cell update (unsupported)".into())
@@ -152,9 +158,10 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellWriter>> {
 fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellReader>> {
     match (engine, cand) {
         ("varlit", "matrix") => varlit_matrix::open(p),
-        ("varlit", "indexed") => varlit_indexed::open(p),
         ("sqlite", c) => sq::open(p, c),
+        #[cfg(unix)]
         ("tile", c) => tile_proto::open(p, c),
+        #[cfg(feature = "hdf5")]
         ("hdf5", c) => h5::open(p, c),
         _ => Err(format!("unknown {engine}/{cand}").into()),
     }
@@ -164,7 +171,6 @@ fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellReader>> {
 pub fn adapter_file(engine: &str, cand: &str) -> &'static str {
     match (engine, cand) {
         ("varlit", "matrix") => "src/cells/varlit_matrix.rs",
-        ("varlit", "indexed") => "src/cells/varlit_indexed.rs",
         ("sqlite", _) => "src/cells/sq.rs",
         ("hdf5", _) => "src/cells/h5.rs",
         ("tile", _) => "src/cells/tile_proto.rs",
@@ -229,6 +235,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     m.set("reader_open_s", t.secs());
 
     let mut pubs = Vec::new();
+    let mut stages = Vec::new();
     let mut ndur = 0u64;
     let start = std::time::Instant::now();
     let mut write = || -> Result<()> {
@@ -238,6 +245,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
             let durable = loss_ms() == 0
                 || b == batches()
                 || last_durable.elapsed() >= Duration::from_millis(loss_ms());
+            let ts = Timer::start();
             w.begin(durable)?;
             for id in batch_cells(b) {
                 fill(id, b, 0, &mut buf);
@@ -245,6 +253,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
             }
             fill(0, b, mono_ns(), &mut buf);
             w.write(0, &buf)?;
+            stages.push(ts.secs() * 1e3);
             let t = Timer::start();
             w.publish(durable)?;
             pubs.push(t.secs() * 1e3);
@@ -274,6 +283,11 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     pubs.sort_by(f64::total_cmp);
     m.set("publish_p50_ms", percentile(&pubs, 0.5));
     m.set("publish_p99_ms", percentile(&pubs, 0.99));
+    m.set("stage_total_s", stages.iter().sum::<f64>() / 1e3);
+    m.set("publish_total_s", pubs.iter().sum::<f64>() / 1e3);
+    stages.sort_by(f64::total_cmp);
+    m.set("stage_p50_ms", percentile(&stages, 0.5));
+    m.set("stage_p99_ms", percentile(&stages, 0.99));
     m.set("durable_publications", ndur);
     let (mut p50, mut p99, mut torn, mut obs, mut cpu, mut rss) =
         (0f64, 0f64, 0u64, 0u64, 0f64, 0u64);

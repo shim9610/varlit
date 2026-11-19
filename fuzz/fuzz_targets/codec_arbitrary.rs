@@ -11,7 +11,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    match selector % 13 {
+    match selector % 16 {
         0 => drop(decode_from_slice::<FuzzPoint>(payload, Endian::Little)),
         1 => drop(decode_from_slice::<FuzzRecord>(payload, Endian::Little)),
         2 => drop(decode_from_slice::<Vec<u8>>(payload, Endian::Little)),
@@ -42,6 +42,46 @@ fuzz_target!(|data: &[u8]| {
             payload,
             Endian::Little,
         )),
+        // `zerocopy::byteorder` numbers decode as the plain numbers they hold.
+        12 => {
+            use varlit::zerocopy::byteorder::{BigEndian, LittleEndian, U32};
+            let wrapped =
+                decode_from_slice::<(U32<LittleEndian>, U32<BigEndian>)>(payload, Endian::Little);
+            let plain = decode_from_slice::<(u32, u32)>(payload, Endian::Little);
+            match (wrapped, plain) {
+                (Ok((a, b)), Ok((x, y))) => assert_eq!((a.get(), b.get()), (x, y)),
+                (Err(_), Err(_)) => {}
+                _ => panic!("byteorder and plain decodes disagree on acceptance"),
+            }
+        }
+        13 => {
+            use varlit::zerocopy::byteorder::{BigEndian, F64, I32, I64, LittleEndian, U16};
+            let wrapped = decode_from_slice::<(
+                I64<BigEndian>,
+                F64<LittleEndian>,
+                U16<LittleEndian>,
+                I32<BigEndian>,
+            )>(payload, Endian::Big);
+            let plain = decode_from_slice::<(i64, f64, u16, i32)>(payload, Endian::Big);
+            match (wrapped, plain) {
+                (Ok((a, b, c, d)), Ok((w, x, y, z))) => {
+                    assert_eq!((a.get(), c.get(), d.get()), (w, y, z));
+                    assert_eq!(b.get().to_bits(), x.to_bits());
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!("byteorder and plain decodes disagree on acceptance"),
+            }
+        }
+        14 => {
+            use varlit::zerocopy::byteorder::{LittleEndian, U32};
+            let wrapped = decode_from_slice::<[U32<LittleEndian>; 4]>(payload, Endian::Little);
+            let plain = decode_from_slice::<[u32; 4]>(payload, Endian::Little);
+            match (wrapped, plain) {
+                (Ok(a), Ok(b)) => assert!(a.iter().zip(&b).all(|(x, y)| x.get() == *y)),
+                (Err(_), Err(_)) => {}
+                _ => panic!("byteorder and plain decodes disagree on acceptance"),
+            }
+        }
         _ => {
             if let Ok(chunks) = varlit::ChunkedBytes::from_encoded(payload.to_vec()) {
                 drop(chunks.decode_to_vec_limited(4 * 1024 * 1024));

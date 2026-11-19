@@ -197,7 +197,13 @@ fn mutate(path: &Path, control: u8, mutations: &[u8]) -> bool {
         }
         // Append past the last commit. The table is still perfectly valid and
         // still names a real commit marker; what it no longer is, is current.
-        2 => bytes.extend_from_slice(mutations),
+        // The appended bytes are published as a writer would publish them:
+        // unpublished, a reader rightly never sees them, and the table would
+        // still describe the whole file it reads.
+        2 => {
+            bytes.extend_from_slice(mutations);
+            crate::published_end::publish(&mut bytes);
+        }
         // Anywhere, so the target does not only ever see a well-formed body.
         _ => {
             for pair in mutations.chunks_exact(3) {

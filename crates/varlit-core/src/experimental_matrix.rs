@@ -221,7 +221,7 @@ fn open_sidecar(path: &Path) -> Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opts.custom_flags(libc::O_NOFOLLOW);
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     #[cfg(windows)]
     {
@@ -797,7 +797,10 @@ impl MatrixWriter {
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.canonicalize()?;
-            let file = LockedFile::new(OpenOptions::new().read(true).write(true).open(&path)?)?;
+            let file = LockedFile::new(crate::primary_file::open_data_file(
+                OpenOptions::new().read(true).write(true),
+                &path,
+            )?)?;
             let creation_id = inspect(&file, &geometry, &path)?;
             let head = read_head(&file, creation_id)?;
             let stage = open_sidecar(&companion(&path, ".reuse-work"))?;
@@ -1420,7 +1423,8 @@ impl MatrixReader {
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.as_ref().canonicalize()?;
-            let file = File::open(&path)?;
+            let file =
+                crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), &path)?;
             let creation_id = inspect(&file, &geometry, &path)?;
             geometry
                 .spec
@@ -1428,7 +1432,10 @@ impl MatrixReader {
                 .check(ReadLimitKey::FileLen, file.metadata()?.len())?;
             read_head(&file, creation_id)?;
             ReaderInner::Reuse(crate::fallible::try_box(ReuseReader {
-                journal: File::open(companion(&path, ".reuse-journal"))?,
+                journal: crate::primary_file::open_data_file(
+                    std::fs::OpenOptions::new().read(true),
+                    companion(&path, ".reuse-journal"),
+                )?,
                 file,
                 geometry,
                 creation_id,
@@ -1648,6 +1655,10 @@ impl ReuseReader {
                             } else {
                                 8
                             };
+                            #[allow(
+                                clippy::cast_possible_truncation,
+                                reason = "lo < hi <= 8, so the mask is below 256"
+                            )]
                             let mask = ((1u16 << hi) - (1u16 << lo)) as u8;
                             if byte & mask != mask {
                                 return Err(MatrixReuseError::Missing);

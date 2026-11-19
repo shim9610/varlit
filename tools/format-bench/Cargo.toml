@@ -9,16 +9,22 @@ publish = false
 [dependencies]
 varlit = { path = "../../crates/varlit", features = ["integrity", "mmap", "compression-zstd"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
-hdf5 = { package = "hdf5-metno", version = "0.15", features = ["static", "zlib", "blosc-zstd"] }
+hdf5 = { package = "hdf5-metno", version = "0.15", features = ["static", "zlib", "blosc-zstd"], optional = true }
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd", "snap"] }
 arrow-array = "60"
 arrow-schema = "60"
 rand = "0.9"
 crc32fast = "1"
 rand_chacha = "0.9"
-ndarray = "0.17"
+ndarray = { version = "0.17", optional = true }
 serde_json = "1"
 bytes = "1"
+
+[features]
+# HDF5 builds its C library from source (CMake and a C toolchain); turn it off
+# to build the other engines alone, e.g. on Windows CI.
+default = ["hdf5"]
+hdf5 = ["dep:hdf5", "dep:ndarray"]
 
 [profile.release]
 opt-level = 3

@@ -792,6 +792,32 @@ impl<'o, T: VarlitDecode> DecoderCallback for IntoCallback<'o, T> {
     }
 }
 
+/// Which part of a keyed-storage record a decode fills: its key fields from
+/// the stored key, the other fields from the stored value, or the other
+/// fields with the key fields taken from a key the caller holds.
+#[derive(Clone, Copy)]
+pub(crate) enum KeyedPart<'k, K> {
+    Key,
+    ValueFields,
+    Value(&'k K),
+}
+struct KeyedCallback<'o, 'k, T: crate::VarlitKeyedBlock>(
+    std::marker::PhantomData<(&'o mut T, &'k T::Key)>,
+);
+impl<'o, 'k, T: crate::VarlitKeyedBlock> DecoderCallback for KeyedCallback<'o, 'k, T> {
+    type Input = (&'o mut T, KeyedPart<'k, T::Key>);
+    type Output = ();
+    const BUILTIN: bool = false;
+    const CALLBACK_FREE: bool = false;
+    fn call((out, part): Self::Input, decoder: &mut Decoder<'_>) -> Result<()> {
+        match part {
+            KeyedPart::Key => T::__varlit_decode_key_into(out, decoder),
+            KeyedPart::ValueFields => T::__varlit_decode_value_fields_into(out, decoder),
+            KeyedPart::Value(key) => T::__varlit_decode_value_into(key, out, decoder),
+        }
+    }
+}
+
 // Nested checked calls already have a short-lived, unforgeable frame borrow.
 // Reuse that decoder instead of moving its field-id set at every scalar call.
 struct CallbackGuard<'d, 'i> {
@@ -887,6 +913,30 @@ impl<'a> Decoder<'a> {
         let result = decoder.decode_complete_into(out);
         *materialization_remaining = decoder.materialization_remaining;
         result
+    }
+
+    /// [`Self::decode_from_slice_accounted_into`] for a part of a
+    /// keyed-storage record (see [`KeyedPart`]): all of `input` decodes into
+    /// `out` through the checked callback boundary.
+    pub(crate) fn decode_keyed_accounted_into<T: crate::VarlitKeyedBlock>(
+        input: &'a [u8],
+        endian: Endian,
+        materialization_remaining: &mut u64,
+        out: &mut T,
+        part: KeyedPart<'_, T::Key>,
+    ) -> Result<()> {
+        let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
+        // A panicking callback cannot refund previously charged work.
+        *materialization_remaining = 0;
+        let result = decoder.with_callback::<KeyedCallback<'_, '_, T>>((out, part));
+        *materialization_remaining = decoder.materialization_remaining;
+        result?;
+        if decoder.remaining() != 0 {
+            return Err(Error::TrailingBytes {
+                remaining: decoder.remaining(),
+            });
+        }
+        Ok(())
     }
 
     pub fn endian(&self) -> Endian {
@@ -1732,6 +1782,66 @@ impl VarlitDecode for f64 {
         decode_fixed_array(decoder, 0.0, f64::from_le_bytes, f64::from_be_bytes)
     }
 }
+
+/// `zerocopy::byteorder` numbers, the fields a raw zero-copy type is built
+/// from so that it is viewed on every host: alignment 1 and a stated byte
+/// order. Each is stored exactly as the number it holds (the same wire type
+/// and schema id as the plain integer or float), so switching a field between
+/// `u32` and `U32<LE>` changes neither the file nor the schema; the byte order
+/// a field states is how it is held in memory, and the file's own order still
+/// governs the encoding.
+#[cfg(feature = "zero-copy")]
+macro_rules! byteorder_codec {
+    ($($wrapper:ident => $plain:ty, $read:ident, $from:expr);+ $(;)?) => {$(
+        impl<O: zerocopy::byteorder::ByteOrder> VarlitEncode for zerocopy::byteorder::$wrapper<O> {
+            const WIRE_TYPE: WireType = <$plain as VarlitEncode>::WIRE_TYPE;
+            const SCHEMA_ID: u64 = <$plain as VarlitEncode>::SCHEMA_ID;
+
+            fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
+                self.get().encode_varlit(encoder)
+            }
+        }
+
+        impl<O: zerocopy::byteorder::ByteOrder> VarlitDecode for zerocopy::byteorder::$wrapper<O> {
+            // Library-owned and decoded by the plain number's codec: it calls
+            // no user code.
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
+            const WIRE_TYPE: WireType = <$plain as VarlitDecode>::WIRE_TYPE;
+            const SCHEMA_ID: u64 = <$plain as VarlitDecode>::SCHEMA_ID;
+
+            // Read as the plain number's codec reads it, without dispatching
+            // through another codec.
+            #[inline]
+            fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
+                let from: fn(_) -> $plain = $from;
+                Ok(Self::new(from(decoder.$read()?)))
+            }
+        }
+
+        impl<O: zerocopy::byteorder::ByteOrder> VarlitEmpty for zerocopy::byteorder::$wrapper<O> {
+            #[inline]
+            fn empty() -> Self {
+                Self::new(<$plain as VarlitEmpty>::empty())
+            }
+        }
+    )+};
+}
+#[cfg(feature = "zero-copy")]
+byteorder_codec!(
+    U16 => u16, read_u16, |v| v;
+    U32 => u32, read_u32, |v| v;
+    U64 => u64, read_u64, |v| v;
+    U128 => u128, read_u128, |v| v;
+    I16 => i16, read_u16, |v: u16| v as i16;
+    I32 => i32, read_u32, |v: u32| v as i32;
+    I64 => i64, read_u64, |v: u64| v as i64;
+    I128 => i128, read_u128, |v: u128| v as i128;
+    F32 => f32, read_u32, f32::from_bits;
+    F64 => f64, read_u64, f64::from_bits;
+);
 
 impl VarlitEncode for Vec<u8> {
     const WIRE_TYPE: WireType = WireType::Bytes;

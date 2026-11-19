@@ -1,3 +1,4 @@
+//! Resolving which record a replacement overwrites, and where its payload sits.
 use super::{Error, KeyedTails, Result, VarlitBlock};
 
 /// A version-checked replacement target: its record-list position and its

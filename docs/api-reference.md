@@ -30,7 +30,7 @@ spec.open_reader_with_resource_limits(path, limits)
 # }
 ```
 
-For indexed handles, set `DiskIndexOptions::limits` to that same `limits` value.
+For stream handles, set `StreamOptions::limits` to that same `limits` value.
 `overlay` replaces an existing selection only when the new one is explicit;
 `tighten` keeps an existing declaration. `effective_read_validation(integrity)`
 resolves record-payload checks; backend admission also distinguishes the unset
@@ -322,8 +322,8 @@ removed when their owning handle is dropped.
 refuses a result exceeding its materialization budget. Writer construction
 builds the spillable directory directly instead of calling this owned-map API.
 Priming each keyed block still walks the input directory (or its block chains
-for a directoryless handle). Use stream/indexed writers for bounded ingest
-without the resident input directory or the per-block priming scans.
+for a directoryless handle). Use stream writers for bounded ingest without the
+resident input directory or the per-block priming scans.
 
 ## Reader And Writer Handles
 
@@ -397,8 +397,8 @@ resident index size; use `ReadLimits::UNTRUSTED` for input you did not produce.
 `max_file_len` is accepted and inert — nothing enforces a file-length ceiling;
 see [Known Limitations](known-limitations.md).
 
-For bounded-directory workloads, use [Scalable Stream And Indexed
-Handles](#scalable-stream-and-indexed-handles) below, available by default. `VarlitReader` is a snapshot as of its own open: records
+For bounded-directory workloads, use [Scalable Stream
+Handles](#scalable-stream-handles) below, available by default. `VarlitReader` is a snapshot as of its own open: records
 another handle appends afterwards are not visible until it advances with
 `follow()` or is reopened. See
 [Known Limitations §2.1](known-limitations.md#21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index).
@@ -407,7 +407,7 @@ another handle appends afterwards are not visible until it advances with
 
 Every typed read decodes into a value you own. `get`, `cursor().next_into`,
 `StreamingBlocks::next_into`, `read_block_at`, `decode_block_into`,
-`read_header_block`, `read_matrix_cell`, indexed `get` and their generated
+`read_header_block`, `read_matrix_cell` and their generated
 wrappers take `out: &mut T` and decode into it, reusing the `Vec`s and `String`s
 it already owns. Start from `T::empty()` (`VarlitEmpty`) or any existing value
 and keep it across a loop:
@@ -844,37 +844,35 @@ Undeclared, the region costs nothing: the header bytes and
 combines with matrix blocks: a matrix's records start after the file header,
 wherever it ends (`header_tails_and_header_slots_combine_with_a_matrix`).
 
-## Scalable Stream And Indexed Handles
+## Scalable Stream Handles
 
-The default `varlit_format!` expansion generates a stream/indexed handle
-family for files whose open/append memory and I/O cost must be independent of
-total file bytes, record count, and key cardinality. Generated indexed handles
-require at least one block declaring `key_index = disk`; this is a schema
-condition, not a Cargo feature.
+The default `varlit_format!` expansion generates a stream handle family for
+files whose open and append cost must not depend on total file bytes or record
+count. It needs no Cargo feature.
 
 | Generated API | Meaning |
 | --- | --- |
 | `create_stream_writer(path, options)` | create native file plus state-only `.vks` |
-| `open_stream_writer(path, options)` | O(1) clean resume from `.vks`; no fallback scan |
-| `open_stream_reader(path, options)` | O(1) pinned open from `.vks` |
-| `restore_stream_writer(path, options)` | explicit savepoint rollback; no scan |
-| `bootstrap_stream_checkpoint(path, options)` | explicit native scan to create `.vks` |
+| `open_stream_writer(path, options)` | resume from `.vks` without a native prefix scan; a sidecar that trails the primary is recovered as `restore_stream_writer` does |
+| `open_stream_reader(path, options)` | pinned open from `.vks` plus the synced records after it |
+| `restore_stream_writer(path, options)` | return to the newest confirmed checkpoint, keep every synced record after it, cut the unsynced suffix |
+| `bootstrap_stream_checkpoint(path, options)` | explicit native scan to create a missing `.vks` |
 | `bootstrap_stream_checkpoint_with_progress(path, options, scan, observer)` | controlled bootstrap scan with progress/cancellation |
-| `create_indexed_writer(path, options)` | create native file plus disk-key `.vki` |
-| `open_indexed_writer(path, options)` | O(1) clean resume from `.vki`; no fallback scan |
-| `open_indexed_reader(path, options)` | O(1) pinned open with lazy B-tree pages |
-| `restore_indexed_writer(path, options)` | explicit savepoint rollback; no scan |
-| `rebuild_disk_index(path, options)` | explicit native scan to rebuild `.vki` |
-| `rebuild_disk_index_with_progress(path, options, scan, observer)` | controlled rebuild scan; cancelled publication preserves the old `.vki` |
 | `clear_stale_writer_lock(path, policy)` | O(1) explicit lock recovery without opening/scanning native data |
 
 Generated `push_<blocks>(iterator, BatchOptions)` methods coalesce native
 records into bounded writes and return one compact `BatchAppendInfo` rather
-than a per-record vector. Indexed readers expose `get_<block>(&key)` for
-`key_index = disk`, plus `events()`, `verify_all()`, and lazy typed plural
-methods for explicit sequential scans.
+than a per-record vector. The stream writer also exposes `flush()`, `sync()`,
+`immediate()`, `set_immediate_policy(policy)` and `compact_index()`. In a
+`keyed_offset_chain` format the stream writer generates no push or delete
+method for a keyed block, because it keeps no previous-key chain. Stream
+readers expose `events()`, `verify_all()`, lazy typed plural methods for
+explicit sequential scans, `follow()`, `follow_events`, `follow_blocks`,
+`snapshot_status()` and `release_snapshot()`. They have no lookup by key; see
+[bounded keyed storage](design/bounded-keyed-storage.md) for the design that
+will provide one.
 
-Stream and indexed readers also expose
+Stream readers also expose
 `verify_all_with_progress(ScanOptions, observer)`. Scan control uses:
 
 | Type | Meaning |
@@ -890,81 +888,60 @@ Defaults notify every 16,384 records or 16 MiB. Cancellation returns
 callback/check publishes no new sidecar target. Progress bookkeeping does not
 allocate per record.
 
-Normal scalable open never bootstraps, repairs, rebuilds, verifies, truncates,
-or scans. Missing, dirty, stale, and identity-mismatched sidecars are errors
-with explicit recovery operations. `sync()`, not `flush()`, publishes a clean
-generation that can be reopened normally.
+Normal stream open never bootstraps, rebuilds, verifies or scans the native
+prefix. A missing, stale or identity-mismatched `.vks` is an error.
+`open_stream_writer` recovers one condition itself: a sidecar that trails the
+primary (an unconfirmed tail or an interrupted generation) is restored to its
+newest confirmed checkpoint, the verified sync-marker prefix after it is kept
+and replayed, and the unsynced suffix is cut. `sync()`, not `flush()`, makes
+records durable and visible to readers.
 
 ### One Poison Flag Per Writer
 
 A stream writer poisons itself when an append fails and the truncate-or-seek
 rollback that should undo it fails too: the file's tail is then in an unknown
-state and no further mutation is safe. The public contract has always been that
-every later mutation is refused with `Error::WriterPoisoned`.
+state and no further mutation is safe. Every later mutation is refused with
+`Error::WriterPoisoned`. A sidecar publication whose outcome is uncertain also
+poisons the writer.
 
-An indexed writer used to keep a *second* poison flag of its own, and the two
-could disagree (F-05). After the rollback failure above, the stream was
-poisoned and the indexed flag was clear, so a later single-record put or delete
-passed the indexed guard and then called the stream's internal prepared-append
-directly — a method that did not consult the stream's flag either. The
-contract said the mutation was refused; it was performed.
-
-The two flags are now one. The indexed writer reads the stream's flag and
-poisons the stream's flag, so it cannot present itself as healthy after any
-stream error, and the mutating entry points require a witness value that only
-the poison check produces — a caller that skips the check does not compile.
-Visible consequences:
-
-- an indexed writer refuses after *any* stream poison, including one raised by
-  a batch this writer did not itself perform;
-- the refusal reached through the indexed API still reports
-  `WriterPoisoned("indexed")`, and the one reached through the stream API still
-  reports the stream's own context, even though there is a single flag;
-- each published chunk of a batch takes its own fresh check, so a chunk that
-  poisons the writer stops the chunks after it in the same call.
+The writer has a single poison flag, and its mutating entry points require a
+witness value that only the poison check produces — a caller that skips the
+check does not compile. Each published chunk of a batch takes its own fresh
+check, so a chunk that poisons the writer stops the chunks after it in the
+same call.
 
 `Error::DiskIndex` contains the original boxed `DiskIndexError`; callers should
-match that source rather than parse display text. redb database lock contention
-maps to `Error::IndexBusy`. Bootstrap refuses an existing `.vks`, and rebuild
-refuses a dirty `.vki`, so neither operation can bless an unsynced tail.
+match that source rather than parse display text. Sidecar lock contention maps
+to `Error::IndexBusy`. Bootstrap refuses an existing `.vks`, so it cannot bless
+an unsynced tail; to replace a `.vks` known to be stale, remove it explicitly
+and bootstrap again.
 
-Sidecar publication reports durability honestly: stream/indexed sidecar
-create, stream bootstrap, and disk-index rebuild can return
-`Error::PublishedButParentSyncPending` when the sidecar was atomically
-published but the parent-directory sync failed. The published sidecar is
-preserved and usable; treat the error as a durability warning, not as "nothing
-was published". Under CRC policies, `rebuild_disk_index` reads and verifies
-only the payloads the index plan needs; `verify_all()` is the whole-file
+Sidecar publication reports durability honestly: stream sidecar create and
+stream bootstrap can return `Error::PublishedButParentSyncPending` when the
+sidecar was atomically published but the parent-directory sync failed. The
+published sidecar is preserved and usable; treat the error as a durability
+warning, not as "nothing was published". `verify_all()` is the whole-file
 integrity scan.
 
-Disk-index descriptors carry the block schema fingerprint of the exact concrete
-type whose decode and key-extraction function pointers they hold.
-`DiskIndexDescriptor::of::<T>()` records `T::SCHEMA_FINGERPRINT`, plan
-construction and plan validation run the format's registration gate for every
-descriptor before any primary bytes reach a captured codec, and the fingerprint
-is folded into the plan digest. A descriptor that claims a declared block's
-id and version but is a different type is therefore refused with
-`Error::BlockSchemaFingerprintMismatch` with zero decoder calls, and a sidecar
-published for one block schema is refused as stale for a plan that decodes
-another. Typed access requires an immutable identity for the block in `FormatSpec`.
+Typed access requires an immutable identity for the block in `FormatSpec`.
 An absent identity returns `Error::InvalidFormatSpec` before codec invocation.
 
-Stream and indexed primaries carry a per-create 128-bit nonce as their first
-record (reserved block id `CREATION_NONCE_BLOCK_ID`, one record at create and
-nothing per append), and the sidecar binds to it through its recorded
+Stream primaries carry a per-create 128-bit nonce as their first record
+(reserved block id `CREATION_NONCE_BLOCK_ID`, one record at create and nothing
+per append), and the sidecar binds to it through its recorded
 primary-generation witness. Replacing a primary in place with another
 equal-length primary of the same format is refused at open with
 `DiskIndexError::PrimaryGenerationMismatch` on both the reader and the writer;
-`rebuild_disk_index` is the recovery. A primary bootstrapped from a resident
-`VarlitFile` carries no nonce and is protected only by the weaker
-content-window witness over its leading bytes.
+the recovery is to remove the `.vks` and run `bootstrap_stream_checkpoint`. A
+primary bootstrapped from a resident `VarlitFile` carries no nonce and is
+protected only by the weaker content-window witness over its leading bytes.
 
 Manual `VarlitBlock` implementations must state
 `IS_KEYED` explicitly. This is a compile-time chain-safety requirement; macro
 generated blocks already provide the exact value.
 
-See [Scalable Stream And Disk-Index I/O](scalable-io.md) for declarations,
-mode selection, durability ordering and checked extent types.
+See [Scalable Stream I/O](scalable-io.md) for declarations, durability
+ordering and checked extent types.
 
 `scan()` yields entries whose physical payload can be read through
 `RecordIndexEntry`. Use `read_payload_limited(path, physical_limit)` for a
@@ -1007,6 +984,89 @@ indeterminate, everything else = pre-publication).
 
 `varlit::Error` is `#[non_exhaustive]`. Downstream exhaustive matches must keep a
 wildcard arm so new diagnostics can be added without another enum-shape break.
+
+## Keyed Storage
+
+A format that declares keyed storage keeps one record per key, updated in
+place, so the file follows its live data rather than the number of updates.
+See [`design/bounded-keyed-storage.md`](design/bounded-keyed-storage.md) and,
+for the layout, [`spec.md`](spec.md#keyed-storage-wire-contract).
+
+```rust,ignore
+varlit_format! {
+    pub format Profiles {
+        magic: b"PROFILES";
+        version: 1;
+        schema_hash: computed;
+        integrity: crc32;
+        keyed_storage: in_place(free_space = 3%); // 1% to 5%; `in_place` alone is 5%
+        blocks {
+            variable Profile(id = 1, key = [user]) { user: String, bio: String, }
+            fixed Visit(id = 2) { at: u64, }
+        }
+    }
+}
+
+let mut writer = Profiles::create_writer(&path)?;
+writer.put_profile(&profile)?;                 // insert or replace, in place
+writer.remove_profile(&"ada".to_string())?;    // true when it was there
+writer.push_visit(&Visit { at: 1 })?;          // unkeyed blocks still append
+writer.sync()?;                                // publishes one generation
+
+let reader = Profiles::open_reader(&path)?;
+let mut scratch = Vec::new();
+let mut out = Profile::empty();
+if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
+```
+
+- **Generated methods.** For each keyed block of such a format the writer has
+  `put_<block>`, `remove_<block>`, `get_<block>` and `range_<block>`, the
+  reader `get_<block>` and `range_<block>`. No `push_`, `delete_` or
+  `replace_` methods are generated for those blocks. The untyped equivalents
+  are `VarlitFile::put_keyed`, `remove_keyed`, `get_keyed` and `range_keyed`
+  (also on `VarlitWriter` and `VarlitReader`).
+- **Reads.** `get_keyed(key, scratch, out)` encodes the key into `scratch`,
+  then reads the payload into it and decodes into `out`; it allocates nothing
+  else. A lookup reads one 4 KiB page per tree level and, for a record over
+  1 KiB, its overflow pages. A reader keeps 512 pages (2 MiB, taken when
+  it opens) of its generation in memory and reads them from there.
+- **Range reads.** `range_keyed(range, scratch, out, visit)` visits the
+  records whose keys lie in `range` (any `RangeBounds` of the key) in key
+  order, decoding each into `out` before `visit(&out)` runs; `visit` returns
+  `false` to stop, and the call returns the records visited. Key order is
+  the stored bytes' order: the key fields encoded big-endian, so unsigned
+  integers and tuples of them are in numeric order (a signed field orders
+  negative values after positive ones; a string, by length first). A
+  reader's range is one snapshot; `visit` must not read the same handle's
+  keyed storage (`Error::KeyedStorageBusy`).
+- **Visibility.** A writer sees its own puts and removes at once. Readers see
+  them once they are published through the file's write-ahead ring: by
+  `sync`, as one generation, or earlier by a put or remove that ends a round
+  (one that filled the change budget or the ring), which publishes everything
+  staged up to and including it. Each publication is atomic; a writer dropped
+  without `sync` publishes nothing past the last round it ended.
+  A reader keeps its generation until `follow`; one the ring has moved past
+  gets `MatrixSnapshotExpired` and must `follow`.
+- **Space.** Records live in a B-tree of 4 KiB pages, one tree per keyed
+  block type: a record keeps its key fields once (in the key) and its other
+  fields as the value, whole in its leaf up to 1 KiB, else its first bytes
+  there and the rest in overflow pages. Pages are kept at least half full
+  and freed pages are reused once no reader can still show them. Beyond the
+  records a file holds the tree's free space, the ring
+  (`KeyedStorage::ring_bytes`, 2 MiB by default) and at most 1 MiB of pages
+  not yet used; none of these grows with the number of updates. After
+  deletes, freed pages wait for new keys; the file does not shrink.
+- **Change budget.** `KeyedStorage::with_change_budget(bytes)` (1 MiB to
+  1 TiB, 64 MiB by default) bounds what one round of changes allocates. Past
+  it the writer publishes the round by itself: changes before a `sync` may
+  become visible, and survive a crash, in rounds of at most the budget.
+- **Refusals.** In a keyed-storage format, appending a keyed block to the log
+  (`push_info`, `push_keyed`, `delete`) fails with
+  `Error::KeyedStorageRequiresPut`; keyed calls on a format without keyed
+  storage fail with `Error::InvalidFormatSpec`.
+- **Stats.** `VarlitFile::keyed_storage_stats()` returns `KeyedStorageStats`:
+  the generation shown, keys, live bytes, heap bytes, free region bytes,
+  leaf pages and index pages.
 
 ## Collections
 
@@ -1076,10 +1136,9 @@ must reuse its schema fingerprint.
 
 Keyedness is an invariant, not a free-form flag. A type that implements
 `VarlitKeyedBlock` must declare `VarlitBlock::IS_KEYED = true`; every public
-keyed generic entry point — keyed collections, stream and indexed
-lookup/push/delete, merge and compact, low-level `VarlitFile`/reader/writer
-deletes, `keyed_blocks`, `key_tail_offsets`, disk-index descriptors, and the
-self-test keyed case — evaluates `KeyedBlockContract::<T>::OK`, turning an
+keyed generic entry point — keyed collections, stream push/delete, merge and
+compact, low-level `VarlitFile`/reader/writer deletes, `keyed_blocks`,
+`key_tail_offsets`, and the self-test keyed case — evaluates `KeyedBlockContract::<T>::OK`, turning an
 `impl VarlitKeyedBlock` with `IS_KEYED = false` into a post-monomorphization
 compile error. First-seen registration remains the runtime backstop and also
 rejects a keyedness disagreement for the same block id
@@ -1124,6 +1183,7 @@ do not grow the file, so there is nothing to reclaim. See [durability](durabilit
 | `create_writer_with_dims(path, dims)` | create matrix file with runtime dimensions |
 | `write_matrix_cell::<T>(key, &value)` | encode and write a slot, clearing commit first |
 | `commit_matrix_cell::<T>(key)` | mark a written cell visible |
+| `write_matrix_run_bytes::<T>(start, payloads)` | write and commit consecutive cells in storage order from encoded payloads (slot stride each); staged a tile row at a time, each tile's bitmap once |
 | `read_matrix_cell::<T>(key, &mut out)` | decode committed cell into `out` or return `MatrixNotCommitted` |
 | `read_matrix_run_into::<T>(start, out)` | read consecutive cells into a caller-owned typed slice |
 | `read_matrix_run_bytes_into::<T>(start, out)` | read verified encoded cells into a byte slice, length divisible by slot stride |
@@ -1518,6 +1578,25 @@ Feature-gated APIs:
 | `mmap` | `MmapMatrix::cell_numeric::<T, N>(key)` | endian-aware numeric scalar read |
 | `zero-copy` | `unsafe MmapPayloads::raw_fixed::<T>()` | raw fixed block view |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell::<T>(key)` | raw matrix cell view |
+| `zero-copy` | `unsafe MmapPayloads::raw_fixed_or_decode::<T>(index, scratch)` | raw fixed view, or the record decoded where the view is refused for byte order or alignment (`RawView::Decoded`) |
+| `zero-copy` | `unsafe MmapMatrix::raw_cell_or_decode::<T>(key)` | raw cell view, or the cell decoded on the same grounds |
+
+Build raw types from `zerocopy::byteorder` numbers (`U32<LE>`, `F64<LE>`, ...;
+`varlit::zerocopy` re-exports the crate): they have alignment 1 and state
+their byte order, so a view of them is taken at any position and on every
+host, and they are stored exactly as the plain number they hold. Declare the
+order the fields state (`RAW_ENDIAN = Endian::Little` for `LE` fields).
+
+A raw type of plain integer or float fields declares
+`RAW_ENDIAN = Endian::NATIVE`, the byte order of the machine it is compiled
+for. Its raw views open where that is the file's order and are refused with
+`ZeroCopyEndianMismatch` elsewhere, instead of reading swapped values; and
+they need the payload aligned for the type, which records and matrix slots
+(packed with their checksums) generally are not. The `_or_decode` forms
+return the value in place of a refused view (`RawView::Decoded`, which
+`is_fallback()` reports): misaligned bytes are copied as they are
+(`size_of::<T>()` bytes, no decoding), bytes in another order are decoded,
+converting it. Every other refusal is returned as it is.
 
 `mmap_payload_range(a..b)` maps from record `a`'s header to record `b - 1`'s
 end and copies only those entries; read a large file in successive ranges, or
@@ -1597,6 +1676,7 @@ If a caller cannot control every writer, it must use owned reads such as
 | `ChunkedBytes::decode_to_vec_limited(limit)` | decode with an explicit caller ceiling |
 | `ChunkedBytes::decoded_len()` | declared decoded length, without decoding or content authentication |
 | `ChunkedBytes::stream_range(range, buffer, max_window_bytes, visit)` | stream selected decoded bytes through caller scratch; see [range streaming](chunk-streaming.md) |
+| `ChunkedBytes::decode_into(writer, limit)` | write the whole payload one verified chunk at a time; see [verified decoding](chunk-streaming.md#writing-the-whole-payload-verified-chunk-by-chunk) |
 
 Compression requires the `compression-zstd` feature when records are actually
 compressed or decompressed. `ChunkedBytes` additionally requires `integrity` for
@@ -1713,8 +1793,8 @@ survives.
 | `scalable-fault-injection` | fault-injection counters and hooks for the scalable-path tests | **test infrastructure**: not a production feature; the counters it exposes are `#[doc(hidden)]` |
 
 Generation-store page and checkpoint checksums remain active in every build.
-All optional features are off by default. Resident, matrix, stream/indexed,
-disk-key and scan-control APIs require no Cargo feature, even when using
+All optional features are off by default. Resident, matrix, stream and
+scan-control APIs require no Cargo feature, even when using
 `default-features = false`. `high-cardinality-dev` was removed in 0.10.0;
 delete that entry from dependency feature lists.
 `scalable-fault-injection` remains test infrastructure, outside normal API

@@ -16,6 +16,42 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use crate::anchor::{Anchor, AnchorLayout, Segment};
 use crate::{Error, Result};
 
+/// Opens a data file at a caller's path, accepting only a regular file.
+///
+/// A FIFO with no peer, or a device, can block inside `open` itself, before
+/// any check could run, and nothing the library does afterwards would end
+/// that wait. On Unix the open therefore uses `O_NONBLOCK`, which returns at
+/// once for those and which Unix ignores for regular files; the flag stays
+/// set on the returned handle, where it has no effect. The type is then
+/// checked on the open handle rather than on the path, so a name swapped
+/// between a check and the open cannot bring a different object through.
+/// Anything other than a regular file is refused with `InvalidInput`.
+pub(crate) fn open_data_file(
+    options: &mut std::fs::OpenOptions,
+    path: impl AsRef<std::path::Path>,
+) -> std::io::Result<File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    refuse_special_file(&file)?;
+    Ok(file)
+}
+
+/// `InvalidInput` unless `file` is a regular file.
+pub(crate) fn refuse_special_file(file: &File) -> std::io::Result<()> {
+    if file.metadata()?.file_type().is_file() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file: Varlit reads and writes only regular files",
+        ))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PrimaryFile {
     file: File,
@@ -29,6 +65,37 @@ pub(crate) struct PrimaryFile {
     /// when the record was declared. Only a record that reaches an anchor
     /// carries one, so a rewrite pays for it once per anchor spacing.
     summary: Option<Box<[u8]>>,
+    /// A reader's bound: the file's `VPUB` block, read by every [`Self::len`].
+    bound: Option<ReaderBound>,
+    /// A writer's `VPUB` block, which `RecordFile::publish_end` moves after
+    /// each publication. Never copied to a clone: one writer per file.
+    published: Option<WriterPublished>,
+}
+
+/// A writer's published end.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WriterPublished {
+    /// Header offset of the two slots.
+    pub slots_at: u64,
+    /// Sequence of the newest slot.
+    pub seq: u64,
+    /// The end the newest slot publishes, `None` when it is inactive or
+    /// blank.
+    pub end: Option<u64>,
+}
+
+/// Where a reader finds the published end, and the bound it last read.
+#[derive(Debug)]
+struct ReaderBound {
+    /// Header offset of the two slots.
+    slots_at: u64,
+    /// The start of the append log: never hidden.
+    floor: u64,
+    /// The bound last read, kept when a read finds both slots unreadable.
+    last: std::sync::atomic::AtomicU64,
+    /// The file's logical length when last measured: a bound within it
+    /// needs no new measurement.
+    seen: std::sync::atomic::AtomicU64,
 }
 
 /// Supplies the anchor a write reaches: given its index and logical offset,
@@ -103,7 +170,46 @@ impl PrimaryFile {
             position: 0,
             record: None,
             summary: None,
+            bound: None,
+            published: None,
         }
+    }
+
+    /// The writer's published end state, if it took over a `VPUB` block.
+    pub(crate) const fn writer_published(&self) -> Option<WriterPublished> {
+        self.published
+    }
+
+    pub(crate) fn set_writer_published(&mut self, published: WriterPublished) {
+        self.published = Some(published);
+    }
+
+    /// Makes [`Self::len`] stop at the published end the `VPUB` slots at
+    /// `slots_at` name. For read-only handles; `floor` is the start of the
+    /// append log.
+    pub(crate) fn bound_by_published_end(&mut self, slots_at: u64, floor: u64) {
+        self.bound = Some(ReaderBound {
+            slots_at,
+            floor,
+            last: std::sync::atomic::AtomicU64::new(floor),
+            seen: std::sync::atomic::AtomicU64::new(0),
+        });
+    }
+
+    /// Reads both `VPUB` slots, retrying a read whose slots do not hold (a
+    /// writer may be rewriting one).
+    fn read_published(&self, slots_at: u64) -> std::io::Result<crate::published_end::Published> {
+        use crate::published_end::{Published, SLOT_LEN, read};
+        let mut slots = [0u8; 2 * SLOT_LEN];
+        let mut published = Published::Unreadable;
+        for _ in 0..3 {
+            read_exact_at(&self.file, slots_at, &mut slots)?;
+            published = read(&slots);
+            if published != Published::Unreadable {
+                break;
+            }
+        }
+        Ok(published)
     }
 
     /// Declares the record that following sequential writes belong to, so an
@@ -169,12 +275,49 @@ impl PrimaryFile {
             position: 0,
             record: None,
             summary: None,
+            bound: self.bound.as_ref().map(|bound| ReaderBound {
+                slots_at: bound.slots_at,
+                floor: bound.floor,
+                last: std::sync::atomic::AtomicU64::new(
+                    bound.last.load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                seen: std::sync::atomic::AtomicU64::new(
+                    bound.seen.load(std::sync::atomic::Ordering::Relaxed),
+                ),
+            }),
+            published: None,
         })
     }
 
     /// The logical length: the append log as written, without anchors and
-    /// without an anchor the log has reached but not passed.
+    /// without an anchor the log has reached but not passed. A reader bound
+    /// by a published end (see [`Self::bound_by_published_end`]) is told no
+    /// more than that end.
     pub(crate) fn len(&self) -> std::io::Result<u64> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let Some(bound) = &self.bound else {
+            return self.unbounded_len();
+        };
+        let published = self.read_published(bound.slots_at)?;
+        // An end within the length last measured needs no new measurement:
+        // a follower's idle poll is one read of the slots, as it was one
+        // measurement before the published end existed.
+        if let Some(len) =
+            crate::published_end::known_len(bound.floor, published, bound.seen.load(Relaxed))
+        {
+            bound.last.store(len, Relaxed);
+            return Ok(len);
+        }
+        let logical = self.unbounded_len()?;
+        bound.seen.store(logical, Relaxed);
+        let last = bound.last.load(Relaxed);
+        let (len, next) = crate::published_end::visible_len(logical, bound.floor, published, last);
+        bound.last.store(next, Relaxed);
+        Ok(len)
+    }
+
+    /// The logical length of the file as written, whatever is published.
+    pub(crate) fn unbounded_len(&self) -> std::io::Result<u64> {
         let physical = self.file.metadata()?.len();
         Ok(self
             .layout
@@ -436,6 +579,19 @@ impl PrimaryFile {
         }
         Ok(Anchor::decode(&layout, k, &bytes))
     }
+}
+
+pub(crate) fn read_exact_at(file: &File, offset: u64, buffer: &mut [u8]) -> std::io::Result<()> {
+    let mut done = 0usize;
+    while done < buffer.len() {
+        match crate::snapshot::read_at(file, &mut buffer[done..], offset + done as u64) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => done += n,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn write_all_at(file: &File, offset: u64, bytes: &[u8]) -> std::io::Result<()> {

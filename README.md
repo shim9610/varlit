@@ -1,6 +1,6 @@
 # Varlit
 
-Version: **0.13.0-alpha.1** (pre-release) · Rust **1.95+** · MIT OR Apache-2.0
+Version: **0.13.0-alpha.2** (pre-release) · Rust **1.95+** · MIT OR Apache-2.0
 
 Varlit defines typed binary block formats in Rust. Declare the block layouts and
 policies, append application-sized blocks, and let independent readers follow
@@ -9,10 +9,10 @@ indexes, explicit durability, recovery and optional compression or memory mappin
 
 ```toml
 [dependencies]
-varlit = { version = "0.13.0-alpha.1", features = ["integrity"] }
+varlit = { version = "0.13.0-alpha.2", features = ["integrity"] }
 ```
 
-0.13.0 is not published yet. `0.13.0-alpha.1` is a pre-release on the main
+0.13.0 is not published yet. `0.13.0-alpha.2` is a pre-release on the main
 branch: depend on it from git (`varlit = { git = "https://github.com/shim9610/varlit", features = ["integrity"] }`),
 and expect the API and the file layouts new in 0.13 to change before the
 release. The last published version is 0.12.1.
@@ -25,7 +25,7 @@ through the stream API. See [API changes](https://github.com/shim9610/varlit/blo
 | Workload | Start with | Layout choice |
 | --- | --- | --- |
 | Append/follow logging | Stream reader/writer | Pack related samples into a block; buffer several blocks per publication |
-| Keyed block lookup | Indexed reader/writer | Use a block key; bounded declared key domains use finite-key tables |
+| Keyed block lookup | Native reader/writer | Use a block key; lookup is resident and every update appends a record. Disk-backed keyed storage is [designed, not implemented](https://github.com/shim9610/varlit/blob/main/docs/design/bounded-keyed-storage.md) |
 | Direct grid/cell access | Matrix blocks | Choose dimensions, cell size and generation policy for the access pattern |
 | Small files, direct native record access | Native reader/writer | Open may scan all records and spill directory rows |
 
@@ -51,8 +51,8 @@ the selected policy; [the durability model](https://github.com/shim9610/varlit/b
 | `experimental-matrix-reuse` | Explicit opt-in experimental matrix page reuse |
 | `scalable-fault-injection` | Failure hooks for development and qualification |
 
-Default features are empty. Stream/indexed APIs and finite keys are available
-without extra feature flags. The experimental page-reuse format has its own
+Default features are empty. Stream APIs and finite keys are available without
+extra feature flags. The experimental page-reuse format has its own
 compatibility rules.
 
 Read validation can select CRC and additional structure checks independently.
@@ -73,7 +73,7 @@ allocation and durability depend on the actual filesystem. See
 | [Quickstart](https://github.com/shim9610/varlit/blob/main/docs/quickstart.md) | Grouped append and reading published data |
 | [How it works](https://github.com/shim9610/varlit/blob/main/docs/how-it-works.md) | Blocks, generated APIs and storage model |
 | [API reference](https://github.com/shim9610/varlit/blob/main/docs/api-reference.md) | Public operations, errors and resource policies |
-| [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) | Batching, key routing, follow and bounded caches |
+| [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) | Stream handles: batching, follow and bounded caches |
 | [Format author guide](https://github.com/shim9610/varlit/blob/main/docs/format-author-guide.md) | Schema, compression and matrix declarations |
 | [Custom codecs](https://github.com/shim9610/varlit/blob/main/docs/custom-codec-guide.md) | Codec identity and allocation accounting |
 | [Durability](https://github.com/shim9610/varlit/blob/main/docs/durability-model.md) / [recovery](https://github.com/shim9610/varlit/blob/main/docs/recovery-model.md) | Publication, failure results and repair |

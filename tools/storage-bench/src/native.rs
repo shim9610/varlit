@@ -1,54 +1,15 @@
-// Handles live on worker stacks; avoid an extra benchmark-only allocation/indirection.
-#![allow(clippy::large_enum_variant)]
 use crate::{Result, model::*};
 use std::path::Path;
 use varlit::*;
 
-/// `get` on an indexed reader, following once more whenever the snapshot it
-/// reads has fallen far enough behind that the writer reused one of its index
-/// pages. That is the documented contract of `DiskIndexError::PageReclaimed`:
-/// follow to a newer generation and retry. Records are immutable and keys are
-/// unique, so the retried lookup answers the same question.
-fn get_following<T>(
-    reader: &mut VarlitIndexedReader,
-    key: &T::Key,
-    out: &mut T,
-) -> varlit::Result<bool>
-where
-    T: VarlitKeyedBlock,
-    T::Key: VarlitDiskKey,
-{
-    loop {
-        match reader.get::<T>(key, out) {
-            Err(varlit::Error::DiskIndex(error))
-                if matches!(*error, DiskIndexError::PageReclaimed) =>
-            {
-                reader.follow()?;
-            }
-            other => return other,
-        }
-    }
-}
-pub enum Writer {
-    Indexed(VarlitIndexedWriter),
-    Stream(VarlitStreamWriter),
-}
+pub struct Writer(VarlitStreamWriter);
 impl Writer {
-    pub fn create(p: &Path, c: &Config, indexed: bool) -> Result<Self> {
-        Ok(if indexed {
-            Self::Indexed(VarlitIndexedWriter::create(
-                spec(true),
-                p,
-                options(c.cache),
-                plan(),
-            )?)
-        } else {
-            Self::Stream(VarlitStreamWriter::create(
-                spec(false),
-                p,
-                stream_options(c.cache),
-            )?)
-        })
+    pub fn create(p: &Path, c: &Config) -> Result<Self> {
+        Ok(Self(VarlitStreamWriter::create(
+            spec(),
+            p,
+            stream_options(c.cache),
+        )?))
     }
     pub fn append(&mut self, t: &Transaction, h: &mut Head, c: &Config) -> Result<()> {
         macro_rules! batch {
@@ -64,68 +25,33 @@ impl Writer {
         }
         let mid = t.frames.len() / 2;
         let rm = t.rows.len() / 2;
-        match self {
-            Self::Indexed(f) => {
-                f.push_unindexed_info(&t.metadata(0))?;
-                batch!(f, Frame, &t.frames[..mid]);
-                batch!(f, Row, &t.rows[..rm]);
-                f.push_unindexed_info(&t.metadata(1))?;
-                batch!(f, Frame, &t.frames[mid..]);
-                batch!(f, Row, &t.rows[rm..]);
-            }
-            Self::Stream(f) => {
-                f.push_info(&t.metadata(0))?;
-                batch!(f, Frame, &t.frames[..mid]);
-                batch!(f, Row, &t.rows[..rm]);
-                f.push_info(&t.metadata(1))?;
-                batch!(f, Frame, &t.frames[mid..]);
-                batch!(f, Row, &t.rows[rm..]);
-            }
-        }
+        let f = &mut self.0;
+        f.push_info(&t.metadata(0))?;
+        batch!(f, Frame, &t.frames[..mid]);
+        batch!(f, Row, &t.rows[..rm]);
+        f.push_info(&t.metadata(1))?;
+        batch!(f, Frame, &t.frames[mid..]);
+        batch!(f, Row, &t.rows[rm..]);
         if std::env::var_os("VARLIT_BENCH_VISIBILITY_GATE").is_some() {
-            match self {
-                Self::Indexed(f) => f.sync()?,
-                Self::Stream(f) => f.sync()?,
-            }
+            f.sync()?;
         }
         crate::before_publish(h.txns);
         h.txns += 1;
         h.frames += t.frames.len() as u64;
         h.rows += t.rows.len() as u64;
         h.metas += 2;
-        match self {
-            Self::Indexed(f) => {
-                f.push_info(h)?;
-                f.sync()?;
-            }
-            Self::Stream(f) => {
-                f.push_info(h)?;
-                f.sync()?;
-            }
-        }
+        f.push_info(h)?;
+        f.sync()?;
         Ok(())
     }
     pub fn initial(&mut self) -> Result<()> {
-        let h = Head::default();
-        match self {
-            Self::Indexed(f) => {
-                f.push_info(&h)?;
-                f.sync()?;
-            }
-            Self::Stream(f) => {
-                f.push_info(&h)?;
-                f.sync()?;
-            }
-        }
+        self.0.push_info(&Head::default())?;
+        self.0.sync()?;
         Ok(())
     }
 }
-pub enum File {
-    Indexed(VarlitIndexedReader),
-    Stream(VarlitStreamReader),
-}
 pub struct Reader {
-    f: File,
+    f: VarlitStreamReader,
     frames: StreamingBlocks<Frame>,
     rows: StreamingBlocks<Row>,
     metas: StreamingBlocks<Metadata>,
@@ -135,45 +61,20 @@ pub struct Reader {
     frame: Frame,
     row: Row,
     meta: Metadata,
-    found_frame: Frame,
-    found_row: Row,
     fc: u64,
     rc: u64,
     mc: u64,
 }
 impl Reader {
-    pub fn open(p: &Path, c: &Config, indexed: bool) -> Result<Self> {
-        let mut indexed_options = options(c.cache);
-        indexed_options.limits = indexed_options.limits.overlay(selected_read_limits()?);
-        let mut sequential_options = stream_options(c.cache);
-        sequential_options.limits = sequential_options.limits.overlay(selected_read_limits()?);
-        let f = if indexed {
-            File::Indexed(VarlitIndexedReader::open(
-                spec(true),
-                p,
-                indexed_options,
-                plan(),
-            )?)
-        } else {
-            File::Stream(VarlitStreamReader::open(
-                spec(false),
-                p,
-                sequential_options,
-            )?)
-        };
-        macro_rules! blocks {
-            ($t:ty) => {
-                match &f {
-                    File::Indexed(r) => r.blocks::<$t>()?,
-                    File::Stream(r) => r.blocks::<$t>()?,
-                }
-            };
-        }
+    pub fn open(p: &Path, c: &Config) -> Result<Self> {
+        let mut options = stream_options(c.cache);
+        options.limits = options.limits.overlay(selected_read_limits()?);
+        let f = VarlitStreamReader::open(spec(), p, options)?;
         let (frames, rows, metas, heads) = (
-            blocks!(Frame),
-            blocks!(Row),
-            blocks!(Metadata),
-            blocks!(Head),
+            f.blocks::<Frame>()?,
+            f.blocks::<Row>()?,
+            f.blocks::<Metadata>()?,
+            f.blocks::<Head>()?,
         );
         Ok(Self {
             f,
@@ -185,67 +86,30 @@ impl Reader {
             frame: Frame::empty(),
             row: Row::empty(),
             meta: Metadata::empty(),
-            found_frame: Frame::empty(),
-            found_row: Row::empty(),
             fc: 0,
             rc: 0,
             mc: 0,
         })
     }
     pub fn refresh(&mut self) -> Result<Head> {
-        match &mut self.f {
-            File::Indexed(f) => {
-                f.follow()?;
-                if !get_following::<Head>(f, &0, &mut self.head)? {
-                    return Err("missing head".into());
-                }
-            }
-            File::Stream(f) => {
-                f.follow_blocks(&mut self.heads)?;
-                while self.heads.next_into(&mut self.head)? {}
-            }
-        }
+        self.f.follow_blocks(&mut self.heads)?;
+        while self.heads.next_into(&mut self.head)? {}
         assert!(self.head.valid());
         Ok(self.head.clone())
     }
     pub fn consume(&mut self, h: &Head, o: &mut Oracle, c: &Config) -> Result<()> {
         // Capture the publication boundary before advancing individual typed cursors.
         // Later roots may be visible; unique immutable records through this boundary remain valid.
-        macro_rules! follow {
-            ($cursor:expr) => {
-                match &mut self.f {
-                    File::Indexed(f) => {
-                        f.follow_blocks($cursor)?;
-                    }
-                    File::Stream(f) => {
-                        f.follow_blocks($cursor)?;
-                    }
-                }
-            };
-        }
-        follow!(&mut self.frames);
-        follow!(&mut self.rows);
-        follow!(&mut self.metas);
+        self.f.follow_blocks(&mut self.frames)?;
+        self.f.follow_blocks(&mut self.rows)?;
+        self.f.follow_blocks(&mut self.metas)?;
         while self.fc < h.frames {
             if !self.frames.next_into(&mut self.frame)? {
                 return Err("short frame prefix".into());
             }
-            let v = &self.frame;
-            o.frame(v);
+            o.frame(&self.frame);
             if c.lookups {
-                if let File::Indexed(r) = &mut self.f {
-                    let k = (v.scan, v.frame);
-                    if !get_following::<Frame>(r, &k, &mut self.found_frame)? {
-                        return Err("missing key".into());
-                    }
-                    let found = &self.found_frame;
-                    assert_eq!(found.id, v.id);
-                    assert_eq!(found.payload, v.payload);
-                    o.point_payload(v.id, &found.payload);
-                    o.lookup_count += 1;
-                } else {
-                    return Err("stream has no arbitrary-key lookup".into());
-                }
+                return Err("stream has no arbitrary-key lookup".into());
             }
             self.fc += 1;
         }
@@ -253,18 +117,9 @@ impl Reader {
             if !self.rows.next_into(&mut self.row)? {
                 return Err("short row prefix".into());
             }
-            let v = &self.row;
-            o.row(v);
+            o.row(&self.row);
             if c.lookups {
-                if let File::Indexed(r) = &mut self.f {
-                    if !get_following::<Row>(r, &v.id, &mut self.found_row)? {
-                        return Err("missing row".into());
-                    }
-                    assert_eq!(&self.found_row, v);
-                    o.lookup_count += 1;
-                } else {
-                    return Err("stream has no arbitrary-key lookup".into());
-                }
+                return Err("stream has no arbitrary-key lookup".into());
             }
             self.rc += 1;
         }

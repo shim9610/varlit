@@ -563,9 +563,9 @@ checksum = "0d15f4f5898bcfc5d8a8e45ed30b2f108d710c1a2e5489dbf80e078f707181bc"
 
 [[package]]
 name = "trybuild"
-version = "1.0.122"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62db9c92d704393fbf2132041720cc80b689f2d3f28521015c2ac866223c11b8"
+checksum = "9838b494ee14d28f1eeea490e8f4f10248fa6dd371d4bc874b635de499408245"
 dependencies = [
  "glob",
  "serde",
@@ -590,12 +590,11 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "varlit"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 dependencies = [
  "proc-macro2",
  "proptest",
  "quote",
- "redb",
  "serde_json",
  "syn 3.0.10",
  "tempfile",
@@ -607,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "varlit-core"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 dependencies = [
  "crc32fast",
  "libc",
@@ -623,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "varlit-macros"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -634,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "varlit-test-runner"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 
 [[package]]
 name = "wait-timeout"

@@ -1,0 +1,169 @@
+name: Qualification
+
+# Longer, bounded runs outside pull-request CI: the scalable-I/O qualification,
+# matrix and I/O endurance, and the ignored performance smoke test. They reuse
+# the repository's own scripts and their assertions; this file only schedules
+# them, bounds them and keeps their reports.
+#
+# Correctness failures (a failed assertion, a crash, a resource budget the
+# scripts check) fail the job. Timing is recorded in the reports and the job
+# summary for comparison between runs, never compared with a fixed threshold:
+# hosted runners vary too much for that. A stage the scripts skip is reported
+# as skipped in their JSON, not as passed.
+#
+# Weekly on the default branch, or by hand with a larger profile.
+
+on:
+  schedule:
+    - cron: '41 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'scalable qualification profile'
+        type: choice
+        options: [smoke, qualification]
+        default: smoke
+      endurance_seconds:
+        description: 'seconds per endurance mode'
+        type: number
+        default: 1200
+      seed:
+        description: 'u64 seed for the scalable smoke profile'
+        type: string
+        default: '42'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  PROFILE: ${{ inputs.profile || 'smoke' }}
+  ENDURANCE_SECONDS: ${{ inputs.endurance_seconds || 1200 }}
+  SEED: ${{ inputs.seed || '42' }}
+
+jobs:
+  scalable:
+    # Public repository only, as in the other workflows.
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: scalable I/O (${{ inputs.profile || 'smoke' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: qualification
+      - name: record the environment
+        run: |
+          {
+            echo "### Scalable I/O ($PROFILE)"
+            echo "- commit: \`$GITHUB_SHA\`"
+            echo "- $(rustc -V)"
+            echo "- $(uname -srm)"
+            echo "- filesystem: $(df -T . | awk 'NR==2 {print $2}')"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: run the qualification
+        run: |
+          args=(--profile "$PROFILE" --output target/qualification/scalable)
+          if [[ "$PROFILE" == smoke ]]; then args+=(--seed "$SEED"); fi
+          python3 scripts/qualify_scalable.py "${args[@]}"
+      - name: summarize
+        if: always()
+        run: |
+          report=target/qualification/scalable/report.json
+          if [[ -f "$report" ]]; then
+            python3 - "$report" >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          print(f"- status: {report.get('campaign_status')}")
+          print("| stage | result | seconds |\n| --- | --- | --- |")
+          for stage in report.get("stages", []):
+              print(f"| {stage.get('name')} | {stage.get('status')} | {stage.get('elapsed_seconds', '')} |")
+          EOF
+          fi
+      - name: keep the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-scalable
+          path: target/qualification/scalable/
+          if-no-files-found: warn
+          retention-days: 30
+
+  endurance:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: endurance (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [matrix, io]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: qualification-release
+      - name: run endurance
+        run: |
+          data="$RUNNER_TEMP/endurance-${{ matrix.mode }}"
+          args=(--mode "${{ matrix.mode }}" --seconds "$ENDURANCE_SECONDS"
+                --output "target/qualification/endurance-${{ matrix.mode }}" --data-root "$data")
+          if [[ "${{ matrix.mode }}" == io ]]; then args+=(--file-gib 1); fi
+          python3 scripts/endurance.py "${args[@]}" --plan
+          python3 scripts/endurance.py "${args[@]}"
+      - name: remove the data files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/endurance-${{ matrix.mode }}"
+      - name: keep the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-endurance-${{ matrix.mode }}
+          path: target/qualification/endurance-${{ matrix.mode }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+  perf-smoke:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: performance smoke (timing recorded, not gated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: qualification-release
+      - name: run the ignored performance smoke test
+        run: |
+          mkdir -p target/qualification
+          set -o pipefail
+          cargo test --locked --release -p varlit --all-features --test perf_smoke \
+            -- --ignored --nocapture 2>&1 | tee target/qualification/perf-smoke.log
+          {
+            echo "### Performance smoke (\`$GITHUB_SHA\`, $(rustc -V))"
+            echo '```'
+            grep -v '^\s*$' target/qualification/perf-smoke.log | tail -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: keep the log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-perf-smoke
+          path: target/qualification/perf-smoke.log
+          if-no-files-found: warn
+          retention-days: 30

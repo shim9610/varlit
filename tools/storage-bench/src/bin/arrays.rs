@@ -20,50 +20,28 @@ struct Chunk {
     #[varlit(field_id = 2)]
     data: Vec<u8>,
 }
-#[derive(VarlitBlock)]
-#[varlit(id = 2, version = 1, kind = "variable", key = "first")]
-struct KeyChunk {
-    #[varlit(field_id = 1)]
-    first: u64,
-    #[varlit(field_id = 2)]
-    data: Vec<u8>,
-}
 varlit_format! {pub format Matrix64{magic:b"OPTMA64";version:1;integrity:crc32_with_header;dims{chunk:u32,slot:u32,}commit:cell_bitmap{keyspace=[chunk,slot];categories=[data];};blocks{matrix Cell64(id=11,dims=[chunk,slot],category=data){data:[u8;65536]}}}}
 varlit_format! {pub format Matrix1m{magic:b"OPTMA1M";version:1;integrity:crc32_with_header;dims{chunk:u32,slot:u32,}commit:cell_bitmap{keyspace=[chunk,slot];categories=[data];};blocks{matrix Cell1m(id=12,dims=[chunk,slot],category=data){data:[u8;1048576]}}}}
-static BLOCKS: &[BlockDescriptor] = &[
-    BlockDescriptor {
-        id: 1,
-        name: "Chunk",
-        version: 1,
-        kind: BlockKind::Variable,
-        fields: &[],
-    },
-    BlockDescriptor {
-        id: 2,
-        name: "KeyChunk",
-        version: 1,
-        kind: BlockKind::Variable,
-        fields: &[],
-    },
-];
-static KEYS: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<KeyChunk>()];
-fn spec(index: bool, native: bool) -> FormatSpec {
+static BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
+    id: 1,
+    name: "Chunk",
+    version: 1,
+    kind: BlockKind::Variable,
+    fields: &[],
+}];
+fn spec(native: bool) -> FormatSpec {
     let s = FormatSpec::new(
         b"SAMPLE16",
         1,
         Endian::Little,
         0,
-        if index {
-            IndexPolicy::KeyedOffsetChain
-        } else {
-            IndexPolicy::BlockOffsetChain
-        },
+        IndexPolicy::BlockOffsetChain,
         IntegrityPolicy::Crc32,
         RecoveryPolicy::Strict,
         ManifestPolicy::None,
         BLOCKS,
     )
-    .with_block_identities(&[Chunk::IDENTITY, KeyChunk::IDENTITY]);
+    .with_block_identities(&[Chunk::IDENTITY]);
     if native {
         s.with_commit_policy(CommitPolicy::TransactionMarker(
             TransactionMarkerMode::Explicit,
@@ -72,20 +50,14 @@ fn spec(index: bool, native: bool) -> FormatSpec {
         s
     }
 }
-fn opts() -> DiskIndexOptions {
-    DiskIndexOptions {
-        cache_bytes: 8 << 20,
-        ..Default::default()
-    }
-}
 fn sopts() -> StreamOptions {
     StreamOptions {
-        state: opts(),
+        state: DiskIndexOptions {
+            cache_bytes: 8 << 20,
+            ..Default::default()
+        },
         ..Default::default()
     }
-}
-fn plan() -> DiskIndexPlan {
-    DiskIndexPlan::canonical(spec(true, false), KEYS).unwrap()
 }
 #[inline]
 fn bits(id: usize, col: usize) -> u64 {
@@ -481,7 +453,6 @@ enum Writer {
     Matrix(VarlitFile, usize),
     Native(VarlitFile),
     Stream(VarlitStreamWriter),
-    Index(VarlitIndexedWriter),
     Sql(Sql),
 }
 impl Writer {
@@ -503,22 +474,16 @@ impl Writer {
                 )
             }
             "native-view" | "native-owned" | "native-mmap" | "native-mmap-snapshot" => {
-                Self::Native(spec(false, true).create(p)?)
+                Self::Native(spec(true).create(p)?)
             }
-            "stream" => Self::Stream(VarlitStreamWriter::create(spec(false, false), p, sopts())?),
-            "indexed" => Self::Index(VarlitIndexedWriter::create(
-                spec(true, false),
-                p,
-                opts(),
-                plan(),
-            )?),
+            "stream" => Self::Stream(VarlitStreamWriter::create(spec(false), p, sopts())?),
             "sql-columns" | "sql-chunks" => {
                 Self::Sql(Sql::open(p, mode == "sql-columns", g, page, mmap, true))
             }
             _ => panic!("mode"),
         })
     }
-    fn epoch(&mut self, bank: &[Chunk], keyed: &[KeyChunk]) -> R<()> {
+    fn epoch(&mut self, bank: &[Chunk]) -> R<()> {
         match self {
             Self::Hdf(h) => h.epoch(bank),
             Self::Matrix(f, g) => {
@@ -542,10 +507,6 @@ impl Writer {
             }
             Self::Stream(f) => {
                 f.push_iter::<Chunk, _>(bank, BatchOptions::default())?;
-                f.sync()?;
-            }
-            Self::Index(f) => {
-                f.push_iter::<KeyChunk, _>(keyed, BatchOptions::default())?;
                 f.sync()?;
             }
             Self::Sql(s) => {
@@ -577,11 +538,6 @@ enum Reader {
     // The trailing value is the caller-owned decode target, kept alive across reads.
     Native(VarlitFile, Vec<RecordIndexEntry>, bool, Chunk),
     Stream(VarlitStreamReader, StreamingBlocks<Chunk>, Chunk),
-    Index(
-        VarlitIndexedReader,
-        Option<StreamingBlocks<KeyChunk>>,
-        KeyChunk,
-    ),
     Sql(Sql),
 }
 impl Reader {
@@ -615,7 +571,7 @@ impl Reader {
             }
             "native-mmap" | "native-mmap-snapshot" => {
                 let f = VarlitFile::open_readonly(
-                    varlit_storage_bench::model::selected_read_spec(spec(false, true))?,
+                    varlit_storage_bench::model::selected_read_spec(spec(true))?,
                     p,
                 )?;
                 // SAFETY: all writers are closed before opening this mapping;
@@ -624,7 +580,7 @@ impl Reader {
             }
             "native-view" | "native-owned" => {
                 let f = VarlitFile::open_readonly(
-                    varlit_storage_bench::model::selected_read_spec(spec(false, true))?,
+                    varlit_storage_bench::model::selected_read_spec(spec(true))?,
                     p,
                 )?;
                 let mut entries = Vec::new();
@@ -633,7 +589,7 @@ impl Reader {
             }
             "native-window" => {
                 let f = VarlitFile::open_readonly(
-                    varlit_storage_bench::model::selected_read_spec(spec(false, true))?,
+                    varlit_storage_bench::model::selected_read_spec(spec(true))?,
                     p,
                 )?;
                 let mut entries = Vec::new();
@@ -643,7 +599,7 @@ impl Reader {
             }
             "stream" => {
                 let f = VarlitStreamReader::open(
-                    varlit_storage_bench::model::selected_read_spec(spec(false, false))?,
+                    varlit_storage_bench::model::selected_read_spec(spec(false))?,
                     p,
                     sopts(),
                 )?;
@@ -652,16 +608,6 @@ impl Reader {
                     Self::Stream(f, iter, Chunk::empty())
                 }
             }
-            "indexed" => Self::Index(
-                VarlitIndexedReader::open(
-                    varlit_storage_bench::model::selected_read_spec(spec(true, false))?,
-                    p,
-                    opts(),
-                    plan(),
-                )?,
-                None,
-                KeyChunk::empty(),
-            ),
             "sql-columns" | "sql-chunks" => {
                 Self::Sql(Sql::open(p, mode == "sql-columns", g, page, mmap, false))
             }
@@ -674,9 +620,6 @@ impl Reader {
                 *iter = f.blocks::<Chunk>().expect("reset immutable stream cursor");
             }
             Self::Sql(s) => s.scan_begin(),
-            Self::Index(f, iter, _) => {
-                *iter = Some(f.blocks::<KeyChunk>().expect("indexed scan cursor"))
-            }
             _ => {}
         }
     }
@@ -771,13 +714,6 @@ impl Reader {
                         out[done..done + n].copy_from_slice(&c.data[offset..offset + n]);
                     }
                 }
-                Self::Index(f, _, c) => {
-                    if !f.get::<KeyChunk>(&(start as u64), c)? {
-                        return Err("missing chunk".into());
-                    }
-                    assert_eq!(c.first as usize, start);
-                    out[done..done + n].copy_from_slice(&c.data[offset..offset + n]);
-                }
                 _ => unreachable!(),
             }
             done += n;
@@ -806,19 +742,6 @@ impl Reader {
                 f.read_matrix_run_bytes_into::<Cell64>(key, out)?;
             } else {
                 f.read_matrix_run_bytes_into::<Cell1m>(key, out)?;
-            }
-            return Ok(());
-        }
-        if let Self::Index(_, Some(iter), c) = self {
-            let mut done = 0;
-            while done < out.len() {
-                if !iter.next_into(c)? {
-                    return Err("short indexed scan".into());
-                }
-                assert_eq!(c.first as usize, first + done / SAMPLE);
-                let n = c.data.len();
-                out[done..done + n].copy_from_slice(&c.data);
-                done += n;
             }
             return Ok(());
         }
@@ -864,9 +787,6 @@ impl Reader {
     fn query_begin(&mut self) {
         if let Self::Sql(s) = self {
             s.query_begin();
-        }
-        if let Self::Index(_, iter, _) = self {
-            *iter = None;
         }
     }
 }
@@ -914,19 +834,11 @@ fn main() -> R<()> {
     let mut writecpu = cpu() - c;
     let mut generation = 0.0;
     let mut bank = Vec::new();
-    let mut keyed = Vec::new();
     for k in 0..EPOCH / g {
-        if mode == "indexed" {
-            keyed.push(KeyChunk {
-                first: (k * g / SAMPLE) as u64,
-                data: vec![0; g],
-            });
-        } else {
-            bank.push(Chunk {
-                first: (k * g / SAMPLE) as u64,
-                data: vec![0; g],
-            });
-        }
+        bank.push(Chunk {
+            first: (k * g / SAMPLE) as u64,
+            data: vec![0; g],
+        });
     }
     for off in (0..total).step_by(EPOCH) {
         let t = Instant::now();
@@ -934,14 +846,10 @@ fn main() -> R<()> {
             c.first = ((off + k * g) / SAMPLE) as u64;
             fill(c.first as usize, &mut c.data);
         }
-        for (k, c) in keyed.iter_mut().enumerate() {
-            c.first = ((off + k * g) / SAMPLE) as u64;
-            fill(c.first as usize, &mut c.data);
-        }
         generation += t.elapsed().as_secs_f64();
         let c = cpu();
         let t = Instant::now();
-        w.epoch(&bank, &keyed)?;
+        w.epoch(&bank)?;
         write += t.elapsed().as_secs_f64();
         writecpu += cpu() - c;
     }
@@ -952,7 +860,6 @@ fn main() -> R<()> {
     write += t.elapsed().as_secs_f64();
     writecpu += cpu() - c;
     drop(bank);
-    drop(keyed);
     let t = Instant::now();
     let mut r = Reader::open(mode, &path, g, page, mmap)?;
     let open = t.elapsed().as_secs_f64();
@@ -1291,7 +1198,7 @@ fn live(
         generation += t.elapsed().as_secs_f64();
         let tc = thread_cpu();
         let t = Instant::now();
-        writer.epoch(&bank, &[])?;
+        writer.epoch(&bank)?;
         backend += t.elapsed().as_secs_f64();
         writer_cpu += thread_cpu() - tc;
         for child in &mut children.0 {

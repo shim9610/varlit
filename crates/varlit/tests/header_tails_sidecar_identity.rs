@@ -40,7 +40,7 @@
 
 #![cfg(feature = "integrity")]
 
-use varlit::{DiskIndexOptions, Error, IndexPolicy, varlit_format};
+use varlit::{Error, IndexPolicy, StreamOptions, VarlitStreamWriter, varlit_format};
 
 varlit_format! {
     pub format TailedIndexFormat {
@@ -51,7 +51,7 @@ varlit_format! {
         index: [keyed_offset_chain, header_tails];
         commit: transaction_marker(on_flush);
         blocks {
-            variable Frame(id = 1, key = [scan], key_index = disk) {
+            variable Frame(id = 1, key = [scan]) {
                 scan: u32,
                 payload: Vec<u8>,
             }
@@ -79,43 +79,6 @@ fn the_region_cannot_be_declared_without_a_commit_marker() {
     );
 }
 
-/// Side two: the disk index refuses a primary that carries commit markers.
-///
-/// Asserted against the real path rather than by reading the scanner, and the
-/// whole sequence is one `Result` because the refusal does not wait for the
-/// read: it arrives as soon as the indexed path frames a marker, which is
-/// before this can get a reader open.
-///
-/// "Refuses", not "cannot" — the scanner passes other internal records through
-/// and it is these four it treats as a foreign file shape. This test pins the
-/// behaviour so that relaxing it is a deliberate change with a test to update,
-/// which is the opposite of the state that produced this file.
-#[test]
-fn a_disk_index_cannot_handle_a_primary_that_carries_commit_markers() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let path = directory.path().join("tailed.varlit");
-
-    let outcome = (|| -> varlit::Result<()> {
-        let mut writer =
-            TailedIndexFormat::create_indexed_writer(&path, DiskIndexOptions::default())?;
-        for scan in 0..8u32 {
-            writer.push_frame(&Frame {
-                scan,
-                payload: scan.to_le_bytes().to_vec(),
-            })?;
-        }
-        writer.sync()?;
-        TailedIndexFormat::open_indexed_reader(&path, DiskIndexOptions::default())?;
-        Ok(())
-    })();
-
-    assert!(
-        matches!(outcome, Err(Error::StreamingUnsupported)),
-        "the disk index reads its primary through the stream scanner, which refuses a \
-         commit marker: {outcome:?}",
-    );
-}
-
 /// And the combination stays refusable rather than merely unusable.
 ///
 /// `header_tails` composes with the two things it does need — the block offset
@@ -131,5 +94,21 @@ fn the_declaration_itself_is_valid() {
     assert_eq!(
         TailedIndexFormat::spec().index_policy,
         IndexPolicy::KeyedOffsetChain.with_header_tails(true),
+    );
+}
+
+/// Side two: the stream path, whose state sidecar is the disk index this file
+/// is about, refuses a primary that carries commit markers.
+#[test]
+fn a_disk_index_cannot_handle_a_primary_that_carries_commit_markers() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("tailed.varlit");
+    let outcome =
+        VarlitStreamWriter::create(TailedIndexFormat::spec(), &path, StreamOptions::default());
+    assert!(
+        matches!(outcome, Err(Error::StreamingUnsupported)),
+        "the state sidecar reads its primary through the stream scanner, which refuses a \
+         commit marker: {:?}",
+        outcome.err(),
     );
 }

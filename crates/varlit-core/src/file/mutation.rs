@@ -1,4 +1,6 @@
-// Native file mutation operations.
+// Changing records already written: dead marks, in-place replacement, rewrites
+// and defragmentation, under the mutation permit. Included into `file.rs` with
+// `include!`, so it shares that module's scope.
 
 impl VarlitFile {
     /// Replaces a native user record while preserving its sequence number.
@@ -1390,7 +1392,10 @@ impl VarlitFile {
     /// header records from this file's append log start.
     fn open_primary_generation(&self) -> Result<PrimaryFile> {
         let mut file = PrimaryFile::new(
-            OpenOptions::new().read(true).write(true).open(&self.path)?,
+            crate::primary_file::open_data_file(
+                OpenOptions::new().read(true).write(true),
+                &self.path,
+            )?,
             None,
         );
         let (_, _, anchors) = read_file_header_anchored(self.spec, &mut file)?;
@@ -1465,6 +1470,9 @@ impl VarlitFile {
                 // handle's own crash verdict, which would clobber the verdict
                 // this handle already established at its open.
                 self.write_liveness_flags(LIVENESS_FLAG_DIRTY)?;
+                // The replacement's published end was reset with the other
+                // mutable blocks; this writer takes it over.
+                self.open_published_end()?;
                 Ok(info)
             }
             Err(source) => {

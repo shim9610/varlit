@@ -7,8 +7,9 @@ fuzz_target!(|data: &[u8]| {
     if data.len() < 4 {
         return;
     }
-    // Start from a valid primary + nonce-named .vmg pair to reach generation
-    // heads, radix pages, payload checksums and follow, not only header rejection.
+    // Start from a valid tiled matrix (tiles, write-ahead ring, commit
+    // bitmaps and checksums in the primary file) to reach the ring replay,
+    // tile reads and follow, not only header rejection.
     if data[0] & 1 != 0 {
         use std::io::{Seek, SeekFrom, Write};
         let dir = tempfile::tempdir().expect("fuzz directory");
@@ -30,9 +31,9 @@ fuzz_target!(|data: &[u8]| {
             .unwrap();
         writer.commit_fuzz_cell(key).unwrap();
         writer.sync().unwrap();
-        let companion = writer.matrix_generation_path().unwrap().to_owned();
         drop(writer);
-        let target = if data[0] & 2 == 0 { &companion } else { &path };
+        // The matrix lives in the primary file; there is no companion.
+        let target = &path;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .open(target)

@@ -498,14 +498,9 @@ mod commit_contract {
     }
 }
 
-///  must not add per-append work to the streaming hot path. The primary
-/// generation witness covers a bounded prefix, so once that window is full the
-/// witness is frozen for the file's life and no further append recomputes it.
 #[cfg(feature = "scalable-fault-injection")]
 #[test]
 fn primary_generation_witness_stops_scanning_once_its_window_is_full() -> Result<()> {
-    use varlit::DiskIndexRebuildReport;
-
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("generation-window.varlit");
     let spec = chain_spec(IntegrityPolicy::None);
@@ -517,13 +512,13 @@ fn primary_generation_witness_stops_scanning_once_its_window_is_full() -> Result
     }
     writer.sync()?;
 
-    DiskIndexRebuildReport::reset_scaling_counters();
+    VarlitStreamWriter::reset_scaling_counters();
     for index in 4096..8192u64 {
         writer.push_info(&Value(index))?;
     }
     writer.sync()?;
     assert_eq!(
-        DiskIndexRebuildReport::primary_generation_scans(),
+        VarlitStreamWriter::primary_generation_scans(),
         0,
         "the frozen generation witness was recomputed during steady-state appends"
     );

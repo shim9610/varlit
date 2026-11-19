@@ -272,51 +272,6 @@
       ],
       "requires_admission_before_forget": true
     },
-    "decode_budget": {
-      "type": "collections::DecodeBudget",
-      "aliases": [
-        "DecodeBudget"
-      ],
-      "source": "crates/varlit-core/src/collections.rs",
-      "struct": "DecodeBudget",
-      "fields": [
-        "budget"
-      ],
-      "protected": [],
-      "nested": {
-        "budget": "materialization"
-      },
-      "sealed_lease": true,
-      "allowed_calls": [
-        "DecodeBudget::decode",
-        "MaterializationBudget::decode",
-        "collections::MaterializationBudget::decode",
-        "collections::DecodeBudget::decode",
-        "MaterializationBudget::consume",
-        "collections::MaterializationBudget::consume",
-        "MaterializationBudget::decode_view",
-        "collections::MaterializationBudget::decode_view"
-      ],
-      "writers": {
-        "collections::<impl at crates/varlit-core/src/collections.rs>::decode_view": {
-          "fields": [
-            "*"
-          ],
-          "proofs": [
-            "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
-          ],
-          "initializes": {
-            "source_owner": "materialization",
-            "values": {
-              "budget": "param:1"
-            }
-          }
-        }
-      },
-      "field_types": [
-        "&'amutMaterializationBudget"
-      ]
-    },
     "builtin_evidence": {
       "type": "codec::BuiltinCodec",
       "aliases": [
@@ -364,6 +319,18 @@
       "target": "codec::Decoder::decode_from_slice_accounted_into",
       "owner": "materialization",
       "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_keyed_into",
+      "target": "Decoder::decode_keyed_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_keyed_into",
+      "target": "codec::Decoder::decode_keyed_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
     }
   ],
   "callback_boundaries": [
@@ -373,6 +340,6 @@
   "callback_adapters": [
     "codec::<impl at crates/varlit-core/src/codec.rs>::call"
   ],
-  "adapter_count": 3,
+  "adapter_count": 6,
   "builtin_evidence": true
 }

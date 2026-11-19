@@ -321,6 +321,18 @@ pub enum Error {
     )]
     KeyedChainRequiresKeyedApi { block_id: u32 },
 
+    #[error(
+        "block {block_id} is keyed and this format stores keyed blocks in place: write it with \
+         put_keyed and remove it with remove_keyed, not by appending to the log"
+    )]
+    KeyedStorageRequiresPut { block_id: u32 },
+
+    #[error(
+        "keyed storage of this handle is in use by a range read: read it from the range \
+         read's callback only through the record it is given"
+    )]
+    KeyedStorageBusy,
+
     #[error("the requested operation is unsupported by bounded streaming handles")]
     StreamingUnsupported,
 
@@ -598,7 +610,7 @@ pub enum Error {
     /// leave files that open slower than their spec says they should.
     ///
     /// A segment and a digest solve the same problem: what an open needs that
-    /// lives in no single record. Select a scanning/indexed writer when
+    /// lives in no single record. Select a scanning or stream writer when
     /// checkpoint or segment serialization is required.
     #[error(
         "a lazy writer open cannot serve {policy}, which serializes the resident index it does \

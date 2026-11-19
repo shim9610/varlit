@@ -94,6 +94,9 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   | 2 | ring | the write-ahead ring, one per matrix |
   | 3 | directory | one 4096-byte directory page |
   | 4 | tile | one `VTIL` tile |
+  | 5 | overflow | one `VOVF` overflow region (see Overflow Regions) |
+  | 6 | keyed metadata | the `VKMT` record (see Keyed Storage Wire Contract) |
+  | 7 | keyed block | 4 KiB pages of keyed storage: tree, overflow or free pages |
 
 - Each record is appended once and its payload is then rewritten in place. For
   a record with `RECORD_FLAG_IN_PLACE` the record checksum leaves the payload
@@ -102,17 +105,17 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   (`checksum_record_fields` in `file.rs`). The record validator refuses
   `RECORD_FLAG_IN_PLACE` on any other block id, and `RECORD_FLAG_IN_PLACE`
   missing on `0xFFFF_FFF3`, with `InvalidCanonicalEncoding("in-place record
-  flag disagrees with block id")`, and a block version outside `1..=4` with
-  `InvalidCanonicalEncoding("unsupported internal record version")`. The
-  sync-marker chain of an indexed primary also leaves these payloads out of
-  its checksums.
+  flag disagrees with block id")`, and a block version outside `1..=7` with
+  `InvalidCanonicalEncoding("unsupported internal record version")`.
 - Creation appends the metadata record, then the ring record, and syncs. In a
   native file the metadata record is the first record of the append log: its
-  payload is read at `append_log_start + 32`. In an indexed primary it is
-  located among the first 8 records of the log. Tiles and directory pages are
+  payload is read at `append_log_start + 32`. Tiles and directory pages are
   appended later, the first time a cell in them is written, so a tile that was
-  never written does not exist in the file.
-- The matrix tile layout version is **1** (`LAYOUT_VERSION` in
+  never written does not exist in the file. A new tile or directory page is
+  placed in the free space of an overflow region instead of a record of its
+  own when one has room (see Overflow Regions); directory entries and roots
+  hold payload offsets either way.
+- The matrix tile layout version is **2** (`LAYOUT_VERSION` in
   `matrix_tiles/geometry.rs`). It is stored in the metadata record and in
   every tile header. The schema hash of a matrix block folds `matrix-tile-v1`
   and the block's effective tile shape. A 0.12.x file stores its matrix in a
@@ -137,8 +140,11 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
 | 48..64 | 16-byte creation nonce |
 | 64..68 | CRC32 of bytes 0..64 |
 | 68..72 | zero |
+| 72..80 | payload offset of the newest overflow region, `u64`; `0` for none |
 
-- From byte 72, one 16-byte directory root per matrix block in spec order:
+- Bytes 72..80 are outside the CRC32: like the roots, they change through the
+  ring.
+- From byte 80, one 16-byte directory root per matrix block in spec order:
   root page offset `u64`, then directory height `u64`. Offset `0` means the
   block has no tile yet.
 - After the roots comes the extra area, at offsets relative to the start of
@@ -261,31 +267,53 @@ circularly.
   | Bytes | Field |
   | --- | --- |
   | 0..4 | magic `b"VWFR"` |
-  | 4..8 | flags `u32`: `1` commit, `2` wrap |
+  | 4..8 | flags `u32`: `1` commit, `2` wrap, `4` index |
   | 8..16 | generation `u64` |
   | 16..20 | frame length `u32`, CRC32 included |
   | 20..24 | entry count `u32` |
   | 24..32 | `requires` `u64`: the file length the frame's targets lie within |
 
   Each entry is a target offset `u64`, a length `u32`, and that many bytes to
-  be written at the target. A wrap marker is a 40-byte frame with the wrap
+  be written at the target. An index frame (flag `4`) is 64 bytes, has an
+  entry count of 0 and holds, instead of entries, the root of the
+  generation's on-disk index (see Publication Indexes): root page offset
+  `u64`, height `u32` (at most 16), four zero bytes, range count `u64`, then
+  four zero bytes before the frame CRC32. A wrap marker is a 40-byte frame with the wrap
   flag and no entries; it sends the scan to ring offset 0. With fewer than 40
   bytes left before the end of the ring, the scan wraps without a marker.
 - A publication is one generation: one or more frames carrying the same
   generation number, the last with the commit flag. The writer keeps each frame
-  at most a quarter of the ring.
+  at most a quarter of the ring. Once a publication's frames would take more
+  than half the ring, a staged range does not fit in a frame, or a reader's
+  overlay (`ring length / 256` ranges, at least 256) could not hold its ring
+  ranges, the rest of the publication goes to an index, and its commit frame
+  is the index frame. Before it starts an index the writer puts every
+  published generation in place, so at most one published generation has an
+  index at a time.
+- Staged bytes reach the file as they are staged: into a record appended
+  since the last publication directly, else into the open ring frame, else
+  into overflow space for the index. The open frame's bytes collect in the
+  writer's fixed 64 KiB copy buffer and are written whenever it fills and
+  when the frame closes, with the header and CRC32 (in the same write when
+  the whole frame is still buffered). At most that buffer of staged bytes is
+  held in memory; the writer reads what it staged through it.
 - A scan reads frames from `tail` and stops at the first frame with a wrong
-  magic, a `requires` past the file's current length, a length under 36,
-  not a multiple of 8 or past the end of the ring, a generation other than the
-  expected next one, a CRC32 mismatch, or entries that overrun the frame.
+  magic, unknown flags, a `requires` past the file's current length, a length
+  under 36, not a multiple of 8 or past the end of the ring, a generation
+  other than the expected next one, a CRC32 mismatch, entries that overrun the
+  frame, or an index frame whose length, count or descriptor is wrong.
   Entries of a generation count only once its commit frame is read; frames of
   a generation that never committed are ignored
-  (`unpublished_and_torn_publications_never_reach_a_reopen`).
+  (`unpublished_and_torn_publications_never_reach_a_reopen`). A scan streams
+  each frame through a 64 KiB buffer: it checks a generation's frames, and
+  reads them again to report their entries once its commit frame is found.
+  Within a generation, ranges of its index win over its ring entries.
 - Publishing (`sync()`, `immediate()`, `commit_durable()`, the durable cell
   writes) writes the staged ranges as frames. When the generation appended
   records, the file is synced before its frames are written. The frames are
   then synced, and the ring header is rewritten with the new `published` and
-  `head`. `flush()` does not publish. Bytes staged into a record appended
+  `head`. A generation with an index writes its index pages and its overflow
+  data before that first sync. `flush()` does not publish. Bytes staged into a record appended
   since the last publication are written to it directly, not through the ring,
   since nothing published points at it yet.
 - Staged ranges are whole units: a slot, a bitmap unit, a directory entry, a
@@ -293,18 +321,87 @@ circularly.
 - Checkpoint: when a frame does not fit, the writer puts the oldest committed
   generations in place until the frame fits and at least half the ring is
   free. It first writes a header raising `mark` to the last generation being
-  applied, then writes the newest bytes of each target in place, syncs, writes
+  applied, then writes the ranges of those generations in place in ring
+  order (each generation's ring entries, then its index in key order, so the
+  newest bytes of each target land last), syncs, writes
   a header with `checkpointed`, `reclaimed`, `tail` and `tail_gen` advanced,
-  and syncs again. A frame the ring cannot make room for, or a single staged
-  range too large for a frame, is `LimitExceeded`.
+  and syncs again. A checkpoint of every published generation without an
+  index reads the ring once, from `tail` to `head`, without checking the
+  frames again (the writer published or checked them), and skips a range
+  whose target a later range of the same checkpoint rewrites whole. No publication is refused for its size: a range too large
+  for a frame, like a publication too large for the ring, goes to an index.
 - Ring size: `FormatSpec::with_matrix_ring_bytes`, or by default twice the
   slot bytes of the create-time extents over all blocks, clamped to
   `[256 KiB, 16 MiB]` and to the record payload limit. A declared size over
   `MAX_RING_BYTES` (64 MiB) is `LimitExceeded`. The writer raises a size below
   `MIN_RING` to `MIN_RING` and rounds it up to a multiple of 8.
 
+### Overflow Regions
+
+- An overflow region is the payload of a record with block version 5. It
+  starts with a 40-byte header:
+
+  | Bytes | Field |
+  | --- | --- |
+  | 0..4 | magic `b"VOVF"` |
+  | 4..8 | zero |
+  | 8..16 | payload offset of the region appended before this one, `0` for none |
+  | 16..24 | payload length, header included |
+  | 24..32 | `carved`: bytes at the end of the region holding tiles and directory pages |
+  | 32..36 | CRC32 of bytes 0..32 |
+  | 36..40 | zero |
+
+- Regions form a list from the metadata record's bytes 72..80, newest first;
+  each region's offset is lower than the one before it in the list. A new
+  region (a whole number of MiB, at least as long as what the publication put
+  in overflow space before it, at most the record payload limit) is appended
+  zeroed but for its header, and the new head is staged in the same
+  publication.
+- Between the header and `len - carved` are the staged bytes and the index
+  pages of one generation, 8-byte aligned. The writer writes over them only
+  when that generation is at or below `reclaimed`; a reopened writer treats
+  every region as holding the newest published generation.
+- New tiles and directory pages are placed at the end of the free space of
+  such a region: `carved` grows by their 8-byte-rounded length and the
+  header, CRC32 included, is staged through the ring with the publication
+  whose directory first points at them. Until that publication commits
+  nothing points into the space, and a crash leaves the header as it was.
+- A reopened writer walks the list as its snapshot shows it. It stops at a
+  header whose magic, CRC32 or `carved` (a multiple of 8, at most `len - 40`)
+  does not check out, at a region past the file's length, at an offset not
+  lower than the previous one, or after 64 regions; the regions past that
+  point are never reused.
+
+### Publication Indexes
+
+- A generation's index is a B+tree of 4096-byte pages in overflow space,
+  keyed by target offset; each range it holds is the newest staged bytes of
+  one unit. The writer builds it as it stages and never changes it once the
+  generation commits.
+- Page: magic `b"VIDX"` (0..4), kind `u16` (4..6: `1` leaf, `2` inner),
+  entry count `u16` (6..8), the next leaf's offset `u64` (8..16, leaves only;
+  `0` for the last, zero in inner pages), CRC32 of the page with bytes 16..20
+  zero (16..20), zero (20..24), entries from byte 24.
+- A leaf entry (24 bytes) is target `u64`, offset of the bytes `u64`,
+  length `u32`, zero `u32`, in ascending target order; a leaf holds at most
+  169. An inner entry (16 bytes) is key `u64`, child page offset `u64`;
+  child `i` holds the targets from key `i` up to key `i + 1`, key 0 of the
+  leftmost path is zero, and an inner page holds 1 to 254 entries.
+- A lookup of `[at, at + len)` descends to the leaf the largest key not
+  above `at` routes to and walks leaves from there: units never overlap and
+  are restaged whole, so no entry before that leaf reaches into the range.
+  A page whose magic, kind, count or CRC32 does not check out, a child or
+  next-leaf offset outside the file, or a walk longer than the range count is
+  `InvalidMatrixLayout`.
+- Readers and the writer reach index pages through a cache of 256 pages
+  allocated at open, keyed by page offset and generation.
+
 ### Snapshots And Overlay
 
+- A writer may also raise `mark` to its last publication without putting
+  anything in place, by writing a header; readers older than it then expire.
+  Keyed storage does this before it writes space a published generation
+  freed straight to the file.
 - A reader's snapshot is the `published` generation it last adopted. On open
   it scans the ring from `tail` and keeps an overlay: for every range written
   by a generation after `checkpointed`, where its newest bytes are in the
@@ -329,6 +426,137 @@ circularly.
   ring has a fixed size. Only a first write into a tile appends the tile and
   any directory pages it needs
   (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`).
+
+## Keyed Storage Wire Contract
+
+A format that declares keyed storage (`keyed_storage: in_place` in
+`varlit_format!`, `FormatSpec::with_keyed_storage`) stores its keyed blocks
+once per key, in a B-tree of 4 KiB pages inside the file, instead of
+appending them to the log. The engine is `crates/varlit-core/src/keyed_heap`;
+it shares the write-ahead ring, publication indexes, overflow regions and
+snapshots of the matrix engine (`matrix_tiles/ring_store.rs`,
+`matrix_tiles/view.rs`), so everything under Write-Ahead Ring, Overflow
+Regions, Publication Indexes and Snapshots And Overlay applies unchanged. All
+integers are little-endian. Its records have block id `0xFFFF_FFF3` and block
+versions 6 and 7 (see the table under Records): the metadata and blocks of
+pages. The schema hash folds `keyed-storage-v1` and the free-space ratio. A
+format cannot declare both keyed storage and matrix blocks, nor keyed storage
+and `keyed_offset_chain`.
+
+### Metadata Record (`VKMT`)
+
+- The first record of the log, appended at create; its payload is read at
+  `append_log_start + 32`. 1224 bytes:
+
+  | Bytes | Field |
+  | --- | --- |
+  | 0..4 | magic `b"VKMT"` |
+  | 4..6 | version, 6 |
+  | 6..8 | free-space ratio in thousandths of the record bytes, 10 to 50 |
+  | 8..24 | zero |
+  | 24..40 | ring payload offset and length |
+  | 40..48 | change budget: bytes one round may change, 1 MiB to 1 TiB |
+  | 48..56 | zero |
+  | 56..60 | CRC32 of bytes 0..56 |
+  | 60..64 | zero |
+  | 64..72 | overflow region list head (as the matrix metadata's bytes 72..80) |
+  | 72..200 | the state: 16 `u64` fields, changed through the ring |
+  | 200..1224 | the first branch: 64 type roots of 16 bytes, changed through the ring |
+
+- The state fields, in order: two zeros; live keys; the bytes of their keys and values; pages carved;
+  the free page list's head, tail and length; the block pages are carved
+  from (its first page, its pages, pages carved from it); leaf, interior and
+  overflow pages; two zeros. Leaf, interior, overflow and free pages add up
+  to the pages carved.
+- The first branch: one slot per keyed block type, in the order each type
+  stored its first key: `block id u32 | height u32 | root page u64` (height
+  1: the root is a leaf). Used slots come first and hold distinct block
+  ids; unused slots are zero. A lookup takes its type's slot and searches
+  that type's tree; a type with no slot has no keys. A file holds at most
+  64 keyed block types.
+
+### Blocks And Pages
+
+- A block is a record of block version 7 holding whole 4096-byte pages: 16
+  for the first, twice the last after that up to 256 (1 MiB); a reader
+  accepts blocks of up to 4096 pages (16 MiB). Pages are
+  carved from the last block in order; a new block is appended when it is
+  used up and the free list has none to give.
+- A page's first 16 bytes are its link while it is free (`next free page
+  u64 | the generation that freed it u64`); the tree and overflow pages
+  leave them zero.
+- A free page is taken again once the ring's `mark` reaches the generation
+  that freed it. The writer raises `mark` to its last publication without
+  putting anything in place when freed pages have waited past the
+  free-space ratio of the record bytes (at least 1 MiB, at most half the
+  change budget), and at the end of every round; readers older than it
+  expire.
+- An overflow page: link (16) | `magic b"VKOV"` | bytes used `u16` | zero
+  `u16` | next overflow page `u64` | up to 4064 bytes.
+
+### The Tree (`VKLF`, `VKIN`)
+
+- A tree key is the record's declared key fields, encoded big-endian
+  whatever the format's endian; the block type is the first branch, not
+  part of the key. Byte order is key order for unsigned key fields, so keys
+  put in increasing order fill pages in order. A signed key field orders negative values
+  after positive ones.
+- A record's value is the block encoded without its key fields (a fixed
+  block: the other fields in order; a variable block: the other fields
+  with their headers). A read takes the key fields from the key it looked
+  up.
+- A tree page: link (16) | header (`magic b"VKLF"` for a leaf or `b"VKIN"`
+  for an interior page `| count u16 | high u16 | garbage u16 | six zero
+  bytes`) | `count` entries (`offset u16 | length u16`, sorted by key) from
+  byte 32 up | cells from the end of the page down to `high` (0 stands for
+  4096). `garbage` counts the bytes of removed cells not yet reclaimed.
+- A leaf cell: `flags u8 | key length (LEB128) | value length (LEB128) |
+  the record's first bytes | overflow page u64` (the page only when `flags`
+  is 1). The record is the key then the value. A record of up to 1024 bytes
+  is held whole; past that the cell holds `256 + (total - 256) mod 4064`
+  bytes, or 256 when that would pass 1024, so its overflow pages are full
+  but for the last.
+- An interior cell: `child page u64 | flags u8 | separator length (LEB128)
+  | the separator, or its first 256 bytes and an overflow page`. The first
+  entry's separator is empty. A child holds the keys from its separator
+  (included) up to the next entry's (excluded), within the page's bounds.
+- A leaf that cannot hold a cell splits: the upper half by bytes moves to a
+  new page (a key past every key moves alone), and the shortest prefix of
+  the right page's first key greater than the left page's last key goes to
+  the parent. An interior split moves its upper half too, and the separator
+  of the first entry moved goes up. A root split adds a level.
+- A delete removes the cell. A leaf left under a quarter full merges with
+  the next or the previous leaf under the same parent when the two fit one
+  page. An emptied page leaves the tree with its parent entry; when that
+  entry is a page's first, the next entry's separator moves up to the
+  lowest ancestor where the path does not take the first child. A root left
+  with one child is replaced by it.
+
+### Writing
+
+- Tree pages are staged whole through the ring, and only those whose bytes
+  changed. Overflow pages are written whole too: past their link, straight
+  to the file when they were carved or freed by a generation already in
+  place, else through the ring.
+- A round changes at most the change budget, and ends before its
+  publication would take more than half the ring less room for the writer's
+  page buffers: past either, the writer publishes the round and raises the
+  mark to it, so a `sync` that changes more is several publications, each
+  atomic. The ring is 2 MiB unless the format declares another size.
+- After a publication that leaves half the ring or more taken by
+  publications, the writer puts all of them in place (raising `mark` to the
+  last), so a frame rarely finds no room and checkpoints only some.
+- A reader keeps up to 512 tree pages (2 MiB, allocated when it opens) of
+  its generation in memory and empties them when it follows. A lookup whose
+  pages all come from there does not read the ring header: its answer is
+  its generation's.
+- `sync` publishes the changes staged since the last publication as one
+  generation. A writer that stops without one publishes nothing past the last
+  round it ended: a put or remove that ends a round publishes everything
+  staged up to and including it, so changes larger than a round reach readers
+  (and survive a reopen) in round-sized atomic steps before the `sync`.
+- Pages freed by deleting most keys stay in the file for new keys to take;
+  the file is not shrunk (rebuild it to reclaim them).
 
 ## Runtime Policy
 
@@ -829,6 +1057,35 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   publish a generation whose digest describes the file it replaced.
   `replace_rewrite` refuses record-footer formats outright, and a digest
   requires the footer, so that path is unreachable for a digest format.
+
+### Published End
+
+- A native file whose commit policy is `TransactionMarker` carries a `VPUB`
+  header extension block, framed `magic[4] | len u32` like the blocks after
+  `VCHD`, appended after every other extension block. Its payload (56 bytes)
+  is `version u16 = 1 | reserved u16 | reserved u32` followed by two slots of
+  24 bytes, each `end u64 | seq u64 | flags u32 | checksum u32`. The checksum
+  is FNV-1a 32 over the slot's first 20 bytes. Flag bit `0` is *active*; the
+  other bits are zero.
+- A file is created with both slots zero. The current slot is the one with the
+  larger `seq` among those whose checksum holds. An active current slot bounds
+  readers at `end` (a logical offset); an inactive one, or two zero slots, does
+  not, and neither does a file without the block (written before it existed).
+  Two slots that are neither valid nor zero are unreadable: a reader keeps the
+  bound it read last, and the start of the append log on first use.
+- A reader treats the file as ending at `min(file length, max(end, append log
+  start))` and frames, scans and follows only up to there.
+- The writer publishes by writing slot `seq % 2` with the next sequence:
+  after the barrier of `commit_durable` or `sync`; at once for `commit`,
+  `flush` and its release; and at a read-write open, after syncing what an
+  earlier writer left. The block is never synced on its own. A write torn by
+  a crash fails its checksum and leaves the previous slot, which names an end
+  no larger.
+- The block is mutable: an open compares its length, not its contents, with
+  what the format would write. A rewrite publishes a replacement with both
+  slots zero, and the rebound writer publishes it again.
+- Proofs: `published_end::proofs` (slot round trip, the visible length's
+  bounds, torn-write fallback, blank and damaged slots).
 
 ### Editable Header Region
 

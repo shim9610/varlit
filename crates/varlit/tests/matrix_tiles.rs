@@ -481,10 +481,18 @@ fn a_page_never_mixes_generations() -> varlit::Result<()> {
         let mut reader = spec().open_reader(&reader_path)?;
         let mut out = vec![Cell::empty(); 256];
         let mut pages = 0;
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        // Once the writer stops nothing expires, so a reader starved of every
+        // read while it ran still reads once after.
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) || pages == 0 {
             reader.follow()?;
-            let page = reader
-                .read_matrix_region_into::<Cell>(MatrixRegion::new(0..16, 0..16), &mut out)?;
+            // A reader the writer's ring moves past expires and follows
+            // again: that is the contract, not a mixed page.
+            let page = match reader
+                .read_matrix_region_into::<Cell>(MatrixRegion::new(0..16, 0..16), &mut out)
+            {
+                Err(varlit::Error::MatrixSnapshotExpired { .. }) => continue,
+                page => page?,
+            };
             assert_eq!(page.filled, 256);
             let first = out[0].value;
             assert!(
@@ -652,9 +660,13 @@ fn a_key_batch_never_mixes_generations() -> varlit::Result<()> {
         let mut reader = spec().open_reader(&reader_path)?;
         let mut out = vec![Cell::empty(); keys.len()];
         let mut batches = 0;
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) || batches == 0 {
             reader.follow()?;
-            reader.read_matrix_cells_into::<Cell>(&keys, &mut out)?;
+            // An expired snapshot follows again (see `a_page_never_mixes_generations`).
+            match reader.read_matrix_cells_into::<Cell>(&keys, &mut out) {
+                Err(varlit::Error::MatrixSnapshotExpired { .. }) => continue,
+                read => read?,
+            }
             let first = out[0].value;
             assert!(
                 out.iter().all(|cell| cell.value == first),
@@ -1003,5 +1015,104 @@ fn a_tile_offset_that_is_not_a_file_offset_is_refused() -> varlit::Result<()> {
         reader.matrix_cell_status::<Cell>(key),
         Err(Error::InvalidMatrixLayout)
     ));
+    Ok(())
+}
+
+varlit_format! {
+    pub format WideTiled {
+        magic: b"TILEDW01";
+        version: 1;
+        endian: little;
+        schema_hash: computed;
+        integrity: crc32_with_header;
+        dims { row: u32, col: u32, }
+        commit: cell_bitmap { keyspace = [row, col]; categories = [data]; };
+        blocks {
+            matrix Wide(id = 1, dims = [row, col], category = data, tile = [4, 8]) {
+                bytes: [u8; 1024],
+            }
+        }
+    }
+}
+
+/// One sync that overwrites more than the write-ahead ring can hold (here
+/// 32 MiB of 1 KiB cells against a ring of at most 16 MiB) streams the rest
+/// through overflow regions and still publishes atomically: readers see all
+/// of it or none of it, a reopen finds it, the file verifies, and repeating
+/// it reuses the regions instead of growing the file each time.
+#[test]
+fn a_sync_larger_than_the_ring_publishes_whole_and_reuses_its_overflow() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("wide");
+    let (rows, cols) = (256u64, 128u64);
+    let fill = |writer: &mut varlit::VarlitWriter, value: u8| -> varlit::Result<()> {
+        for row in 0..rows {
+            for col in 0..cols {
+                let key = MatrixKey::new(row, col);
+                writer.write_matrix_cell(
+                    key,
+                    &Wide {
+                        bytes: [value; 1024],
+                    },
+                )?;
+                writer.commit_matrix_cell::<Wide>(key)?;
+            }
+        }
+        writer.sync()
+    };
+    let check = |reader: &varlit::VarlitReader, value: u8| -> varlit::Result<()> {
+        let mut out = Wide::empty();
+        for row in (0..rows).step_by(7) {
+            for col in (0..cols).step_by(5) {
+                reader.read_matrix_cell::<Wide>(MatrixKey::new(row, col), &mut out)?;
+                assert!(
+                    out.bytes.iter().all(|b| *b == value),
+                    "({row}, {col}) is not {value}"
+                );
+            }
+        }
+        Ok(())
+    };
+    let mut writer = WideTiled::spec().create_writer_with_dims(&path, dims(rows, cols))?;
+    fill(&mut writer, 1)?;
+    let mut reader = WideTiled::spec().open_reader(&path)?;
+    check(&reader, 1)?;
+    fill(&mut writer, 2)?;
+    check(&reader, 1)?;
+    reader.follow()?;
+    check(&reader, 2)?;
+    let after_first = std::fs::metadata(&path)?.len();
+    for value in 3..7 {
+        fill(&mut writer, value)?;
+    }
+    let grown = std::fs::metadata(&path)?.len() - after_first;
+    assert!(
+        grown < 64 << 20,
+        "four more rewrites of 32 MiB grew the file by {grown} bytes"
+    );
+    drop(writer);
+    let reopened = WideTiled::spec().open_reader(&path)?;
+    check(&reopened, 6)?;
+    reopened.verify_matrix_metadata()?;
+    let report = WideTiled::spec().diagnose_file(&path);
+    let problems: Vec<_> = report
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.code,
+                "file.matrix.recovery_finding" | "file.matrix.verification_failed"
+            ) || item.code.starts_with("matrix.")
+        })
+        .map(|item| item.code)
+        .collect();
+    assert!(
+        problems.is_empty(),
+        "overflow records upset the diagnosis: {problems:?}"
+    );
+    let writer = WideTiled::spec().open_writer(&path)?;
+    let mut out = Wide::empty();
+    writer.read_matrix_cell::<Wide>(MatrixKey::new(rows - 1, cols - 1), &mut out)?;
+    assert!(out.bytes.iter().all(|b| *b == 6));
     Ok(())
 }

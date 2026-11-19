@@ -51,8 +51,8 @@ def check_bindings():
     # This wiring guard prevents accidentally testing an orphaned copy. It is
     # not a Rust semantic/refinement proof of callbacks or arbitrary future APIs.
     bindings = [
-        ("indexed.rs", "fn sync_with(&mut self, force_confirm: bool)", "commit"),
-        ("indexed.rs", "fn follow_records(&mut self)", "follow"),
+        ("stream.rs", "fn sync_with(&mut self, force_confirm: bool)", "commit"),
+        ("stream.rs", "fn follow_records(&mut self)", "follow"),
         ("stream.rs", "pub(crate) fn restore_checkpointed(", "restore"),
         ("disk_index/storage.rs", "pub fn publish(", "checkpoint"),
         ("disk_index/storage.rs", "pub(super) fn reconcile_confirmed_heads(", "resume"),
@@ -68,12 +68,12 @@ def check_bindings():
         if driver == "checkpoint" and body.count("crate::publication_protocol::older_head(") != 1:
             raise ValueError("production head selection bypasses the verified older-head helper")
     # Public entry points must reach the private drivers bound above.
-    source = (ROOT / "crates/varlit-core/src/indexed.rs").read_text()
+    source = (ROOT / "crates/varlit-core/src/stream.rs").read_text()
     for public, helper in [("pub fn sync(&mut self)", "sync_with"), ("pub fn follow(&mut self)", "follow_records")]:
         start = source.index(public)
         end = source.index(f"fn {helper}(", start)
         if source[start:end].count(f"self.{helper}(") != 1:
-            raise ValueError(f"public indexed entry point bypasses its verified driver: {public}")
+            raise ValueError(f"public stream entry point bypasses its verified driver: {public}")
     source = (ROOT / "crates/varlit-core/src/disk_index.rs").read_text()
     start = source.index("pub(crate) fn validate_clean_writer_for_spec(")
     end = source.index("pub(crate) fn compact(", start)

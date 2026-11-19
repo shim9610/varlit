@@ -304,7 +304,7 @@ def inspect(text,manifest,proofs):
                 stripped=line.strip()
                 # Raw trait calls and function-item dispatch must reach the
                 # checked boundary. Implementations themselves are not calls.
-                if re.search(r'\b(?:decode_varlit|decode_varlit_into|decode_array)\b',stripped):
+                if re.search(r'\b(?:decode_varlit|decode_varlit_into|decode_array|__varlit_decode_key_into|__varlit_decode_value_fields_into|__varlit_decode_value_into)\b',stripped):
                     adapter=f['name'] in manifest.get('callback_adapters',[])
                     if not (adapter and invocation and stripped==body.strip().splitlines()[-1].strip()):
                         raise ValueError('unchecked codec callback dispatch: '+f['name'])
@@ -368,7 +368,7 @@ def inspect(text,manifest,proofs):
                         and unique_names[invocation['target'].rsplit('::',1)[-1]]<=mutable_targets):
                     callback=((f['name'] in manifest.get('callback_boundaries',[])
                               and 'DecoderCallback' in invocation['target'] and invocation['target'].endswith('::call'))
-                              or (f['name'] in manifest.get('callback_adapters',[]) and re.search(r'::decode_(?:varlit|varlit_into|array)$',invocation['target'])))
+                              or (f['name'] in manifest.get('callback_adapters',[]) and re.search(r'::(?:decode_(?:varlit|varlit_into|array)|__varlit_decode_(?:key_into|value_fields_into|value_into))$',invocation['target'])))
                     if not callback:
                         raise ValueError('unmodeled mutable-owner call: '+f['name']+' '+invocation['target'])
                 # Mutable projections can only enter a registered semantic

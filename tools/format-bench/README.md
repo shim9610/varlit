@@ -74,19 +74,32 @@ One pass after evicting the page cache.
 The append-log `varlit-indexed` layout of the old 2-D grid is gone: 524,288
 chunks exceed the finite key domain limit (4096 per block).
 
-### oltp (favors SQLite): 1M accounts
+### oltp (favors SQLite): 1M accounts, dense ids
 
-Load 1M accounts (dense ids, random `branch` among 10,000). Then 1000 durable
+Load 1M accounts (ids 0..n, random `branch` among 10,000). Then 1000 durable
 transactions, each applying the net balance deltas of 10 random transfers
 (~20 accounts). Then 20,000 point lookups and 200 per-branch SUM/COUNT.
 
 | format | layout |
 |---|---|
-| varlit-append | append-native, LSM style. Base snapshot written once: 256 accounts per indexed record (finite key `g`, 11 KiB), plus a branch -> ids record. Each transaction appends one delta record (~350 B) to a native log with `commit_durable()`. Readers follow the log incrementally and keep folded deltas in memory |
-| varlit-matrix-packed | update-in-place alternative: 256 accounts per 11 KiB matrix cell, read-modify-write of touched cells, `sync()` per transaction; branch index packed 1024 ids per cell |
+| varlit | matrix block, one account per cell (its 44 packed bytes) at row `id / 1024`, column `id % 1024`, so the default 32 x 32 tile fills; loaded a row at a time with `write_matrix_run_bytes`; a transaction reads, rewrites and commits each touched cell, then `sync()`; branch index as CSR in two more matrix blocks |
 | sqlite | INTEGER PRIMARY KEY, index on branch built after load, `UPDATE ... SET balance = balance + ?`, WAL + FULL |
 | hdf5 | one dataset per column, CSR branch index; point-selection read + write per transaction, flush + fsync (no transactional atomicity) |
 | parquet | sorted base file with page index; one delta file per transaction (fsync + rename); reader replays deltas; branch index file |
+
+### oltp-sparse: the same accounts with sparse keys
+
+Everything as in `oltp`, but account keys are spread over the 64-bit space
+(`key_of`: increasing keys about 2^24 apart with a random low part), so a
+structure addressed by key cannot hold them and every engine needs a key
+lookup. Accounts still arrive in key order.
+
+| format | layout |
+|---|---|
+| varlit | keyed storage (`keyed_storage: in_place`, a B-tree of 4 KiB pages): one `fixed` record per account keyed by its key; a transaction gets and puts each touched account, then `sync()`; branch -> keys records |
+| sqlite | as in `oltp`: the key is the INTEGER PRIMARY KEY |
+| hdf5 | as in `oltp`, plus a sorted `key` dataset; a key's row is found by binary search over it |
+| parquet | not run: no layout for lookups by sparse key |
 
 ### analytics (favors Parquet): wide table
 
@@ -162,6 +175,11 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 
 ## Results
 
+The latest results, at 10 GB per scenario with the current harness and the
+hardware stated, are in
+[results-10gb-20261118.md](results-10gb-20261118.md).
+The tables below are older runs on other hosts and smaller data.
+
 2026-11-11, Linux 7.0, 24 cores, NVMe ext4, rustc 1.98.1, release build, branch
 `perf/bulk-primitive-codec` (Varlit 0.13.0 plus the bulk codec, single-barrier
 commit and caller-buffer API). Disk-gated (disk probe 0.50 to 0.51 s). All
@@ -174,14 +192,16 @@ Single scenarios: medians of 3 gated repeats.
 | scenario | best | Varlit position |
 |---|---|---|
 | grid (HDF5) | Varlit and HDF5 level (all reads 2.18 vs 2.23 s); HDF5 writes fastest (16.9 s) | fastest on time series (70 vs 103 ms); only the first axis can grow (HDF5 can extend any axis); no mmap path at this size |
-| oltp (SQLite) | SQLite for throughput (0.51 s / 1000 txn), point reads and aggregates | fastest load (0.06 s, tied with HDF5) and lowest p99 (1.18 ms), but 1.8x SQLite's transaction time |
+| oltp (SQLite), dense ids | Varlit's matrix for transactions (0.39 vs SQLite 0.70 s / 1000 txn, p99 0.79 vs 13.6 ms) and point reads; SQLite for branch aggregates (28.9 vs 49.3 ms) | aggregates 1.7x SQLite's; the file is 82 MB vs 56 (the 16 MiB ring is part of it) |
+| oltp-sparse (SQLite), sparse keys | SQLite for transactions (0.73 s) and aggregates; Varlit's keyed storage for point reads (68 vs 77 ms) and p99 (7.1 vs 14.6 ms) | transactions 1.4x SQLite's |
 | analytics (Parquet) | Varlit for Q1 group-by (47.6 ms); SQLite with its index for Q2 ranges (24.6 ms) | slowest on Q2 (38.5 ms vs Parquet 30.0); SQLite pays 4.7 s writes and 2.4x size |
 | mixed (Varlit) | varlit-native for throughput in every cell, the only format with 0 % late windows at both freshness bounds | stream Varlit cannot use a loss bound and degrades with four followers |
 | cells (Varlit matrix) | varlit-native (1522 / 6440 batches/s), then SQLite; no torn reads for either | the matrix is the slowest updater (483 batches/s at any loss bound) and grows 1.7 GB for 133 MB of updates; HDF5 readers saw torn and corrupt cells |
 
 Late % is the share of windows a follower saw after the freshness bound in
 real-time emission; 0 % means every window met it. Varlit loses clearly on
-oltp throughput and analytics range reads.
+analytics range reads and, with sparse keys, on oltp throughput. The oltp
+rows come from the later run below (another host).
 
 ### grid: 6-D f32 array larger than memory, growing time axis (HDF5-favored)
 
@@ -231,16 +251,30 @@ cache, medians of 3 gated repeats. Bold = best per row.
   (`LimitExceeded`, 8 GiB). `mmap_matrix_cell` does not cover growing chunks
   (`MatrixKeyOutOfBounds`), so no mmap row is listed.
 
-### oltp: 1M accounts, durable transactions (SQLite-favored)
+### oltp: 1M accounts, dense ids, durable transactions (SQLite-favored)
+
+Medians of 3 repeats (`FB_SMALL=1 run.py --only oltp`), measured after the
+layout cleanup on a different host than the tables above (a cloud
+container; run the gated harness on your own disk for comparable numbers).
 
 | format | load s | 1000 txn s | txn p50 ms | txn p99 ms | 20k points ms | 200 branch aggregates ms | MB |
 |---|---|---|---|---|---|---|---|
-| varlit-append | 0.06 | 0.94 | 0.92 | 1.18 | 57.5 | 55.3 | 55 |
-| varlit-append+trusted | 0.06 | 0.97 | 0.95 | 1.22 | 35.6 | 33.7 | 55 |
-| varlit-matrix-packed+trusted | 0.15 | 1.59 | 1.54 | 2.10 | 57.5 | 57.8 | 53 |
-| sqlite | 0.61 | 0.51 | 0.32 | 3.69 | 26.7 | 8.1 | 56 |
-| hdf5 | 0.06 | 0.82 | 0.82 | 1.26 | 472.9 | 9.2 | 52 |
-| parquet | 0.11 | 1.10 | 1.06 | 1.39 | 550.1 | 52.6 | 65 |
+| varlit | 0.25 | 0.39 | 0.37 | 0.79 | 46.9 | 49.3 | 82 |
+| varlit+trusted | 0.23 | 0.39 | 0.36 | 0.72 | 44.9 | 45.6 | 82 |
+| sqlite | 0.94 | 0.70 | 0.39 | 13.63 | 61.9 | 28.9 | 56 |
+| hdf5 | 0.19 | 1.38 | 1.36 | 2.35 | 1004.8 | 18.1 | 52 |
+| parquet | 0.30 | 0.87 | 0.83 | 1.47 | 1125.2 | 102.9 | 65 |
+
+### oltp-sparse: the same with sparse keys
+
+Same host and method (`FB_SMALL=1 run.py --only oltp-sparse`).
+
+| format | load s | 1000 txn s | txn p50 ms | txn p99 ms | 20k points ms | 200 branch aggregates ms | MB |
+|---|---|---|---|---|---|---|---|
+| varlit | 0.80 | 1.05 | 0.57 | 7.10 | 68.1 | 65.0 | 73 |
+| varlit+trusted | 0.72 | 1.04 | 0.56 | 7.20 | 62.8 | 61.4 | 73 |
+| sqlite | 1.06 | 0.73 | 0.42 | 14.56 | 76.9 | 36.7 | 64 |
+| hdf5 | 0.24 | 5.22 | 4.73 | 7.96 | 4183.7 | 17.6 | 60 |
 
 
 ### analytics: 4M rows x 12 columns (Parquet-favored)
@@ -333,7 +367,7 @@ three repeats. Growth = file growth during the 2000 batches (logical updates:
 - Integrity: Varlit stores CRC32 over header+payload (verified unless `+trusted`);
   the others store no data checksums here.
 - Publication: SQLite WAL and Varlit transaction markers commit atomically.
-  Varlit stream/indexed `sync()` also publishes a crash-recoverable sidecar
+  Varlit stream `sync()` also publishes a crash-recoverable sidecar
   generation (two fsync-class calls per publication). HDF5 flush + fsync is
   not transactional across datasets. Parquet relies on rename.
 - Loss bound: with a non-zero bound, SQLite (`synchronous=NORMAL`), Varlit
@@ -350,9 +384,10 @@ gated final run). They document usage mistakes and their costs.
 | what | observation | replaced by |
 |---|---|---|
 | live follower calling `block_entries_into` every poll | re-lists the whole directory each poll: 476 ms per follower, lag p50 2.6 ms | `block_chain` walk from the tail: lag p50 0.7 ms |
-| oltp: one indexed record per account (1M generic B-tree keys) | load 4.2 s; `.vki` grows to 1.9 GB during load and +180 KB per transaction until `compact_index()` (2.3 GB -> 212 MB) | grouped base + delta log |
-| oltp: one matrix cell per account | load 4.7 s (2M cell write+commit calls); 61 MB | 256 accounts per cell |
-| oltp: grouped records rewritten per transaction (RMW) | group 256 / 1024 / 4096 / 16384 accounts: 1000 txn 2.5 / 2.9 / 11.0 / 22.2 s, 281 MB to 12.5 GB (old versions stay in the log) | delta log (one small record per transaction) |
+| oltp: one indexed record per account (1M generic B-tree keys) | load 4.2 s; `.vki` grows to 1.9 GB during load and +180 KB per transaction until `compact_index()` (2.3 GB -> 212 MB) | (index removed) |
+| oltp: 256 accounts per record or matrix cell (append log, delta log, keyed storage, matrix) | a transaction rewrites 11 KiB per touched account; the append and delta logs grow with every update | one account per matrix cell (dense ids) or per keyed record (sparse keys) |
+| oltp: one matrix cell per account written cell by cell | 38.5M accounts load in 92 s: write and commit each cell (four I/Os) | `write_matrix_run_bytes`, a row of cells per call: 8.6 s |
+| grid: chunks as keyed records (keyed storage, keyed append log) | the array is dense, so a key per chunk only adds a lookup; time-deep chunks are rewritten 8 times (keyed storage: 293 s to write 8.6 GB) | matrix, one cell per chunk |
 | grid (earlier 2-D version): `compact_matrix()` before reads | matrix reads are 4 KiB `pread`s of generation pages either way; cold columns 0.17 -> 0.15 s | indexed tiles or mmap for read-heavy grids |
 | parquet default row selection | mask policy decoded every page: 16 columns 1.38 s | `Selectors`: 0.01 s |
 | parquet default encodings | 216 MB, write 1.19 s | per-column encodings: 172 MB, 0.59 s |

@@ -17,16 +17,9 @@ import run as bench
 def cases():
     grouped = bench.profiles("grouped")
     names = [
-        "grouped-n1048576-g512-t131072-w1-r1-varlit-indexed",
-        "grouped-n8388608-g512-t131072-w1-r8-varlit-indexed",
-        "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
-        "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
         "grouped-follow-n8388608-g512-t131072-w4-r8-varlit-stream",
     ]
     selected = [next(p for p in grouped if p["name"] == name) for name in names]
-    selected.append(dict(name="mixed-variable-p65536-w4-r8-varlit-indexed", kind="mixed",
-        engine="varlit-indexed", config=dict(bench.BASE, records=(1 << 30)//65536,
-        payload=65536, per_tx=256, producers=4, readers=8, lookups=True, telemetry=True)))
     for mode in ["native-owned", "native-mmap", "matrix-owned"]:
         selected.append(dict(name=f"array-{mode}-n1073741824-g1048576", kind="array", mode=mode,
             total=1 << 30, group=1 << 20, page=4096, mmap=0, points=4096, ranges=128,

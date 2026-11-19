@@ -1,0 +1,5 @@
+error: key_index was removed: keyed records no longer keep a disk index sidecar; see docs/design/bounded-keyed-storage.md
+  --> tests/ui/fail_key_index_removed.rs:10:47
+   |
+10 |             variable Item(id = 1, key = [id], key_index = disk) {
+   |                                               ^^^^^^^^^

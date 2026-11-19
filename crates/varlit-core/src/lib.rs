@@ -1,5 +1,10 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(unsafe_code)]
+// A narrowing `as` keeps the low bits of a value that does not fit, so a
+// length written to a file would describe different bytes than follow it.
+// Library code converts with a check (see `width`), or states at the cast why
+// the value cannot exceed the target type. Tests are exempt.
+#![cfg_attr(not(test), deny(clippy::cast_possible_truncation))]
 #![cfg_attr(kani, feature(allocator_api))]
 
 extern crate alloc;
@@ -25,10 +30,10 @@ mod fallible;
 mod file;
 mod format;
 mod immediate;
+mod keyed_heap;
 
 #[cfg(feature = "experimental-matrix-reuse")]
 pub mod experimental_matrix;
-mod indexed;
 mod layout;
 mod matrix;
 mod matrix_tiles;
@@ -44,6 +49,7 @@ pub mod scalable_fault;
 
 mod packed_rows;
 mod publication_protocol;
+mod published_end;
 mod scan_control;
 mod snapshot;
 mod spill_file;
@@ -113,14 +119,14 @@ pub use diagnostics::{
 
 pub use anchor::{Anchor, AnchorLayout, AnchorPolicy};
 pub use disk_index::{
-    DiskIndexBatchOptions, DiskIndexConfirmPolicy, DiskIndexDescriptor as DiskIndexedBlock,
-    DiskIndexDigest, DiskIndexEntry, DiskIndexError, DiskIndexKeyTag, DiskIndexMode,
-    DiskIndexOptions, DiskIndexPlan, IndexCompaction, SnapshotStatus, VarlitDiskKey,
-    sidecar_path as disk_index_sidecar_path,
+    DiskIndexBatchOptions, DiskIndexConfirmPolicy, DiskIndexDigest, DiskIndexError, DiskIndexMode,
+    DiskIndexOptions, IndexCompaction, SnapshotStatus,
 };
 pub use error::{AllocationFailureContext, Error, Result};
 pub use fallible::{TryClone, try_box};
 pub use fallible::{try_box_uninit, try_box_with};
+#[cfg(feature = "zero-copy")]
+pub use file::RawView;
 pub use file::{
     AppendInfo, BlockChain, BlockEvent, COMMIT_BLOCK_ID, CREATION_NONCE_BLOCK_ID, DefragmentReport,
     DirectoryRead, FIELD_INLINE, FieldSpan, FieldWalk, FileMatrixDurabilityBarrier, INDEX_BLOCK_ID,
@@ -142,24 +148,21 @@ pub use format::{
     CompressionAlgorithm, CompressionHeaderMode, CompressionLevel, CompressionPolicy, Endian,
     FieldDescriptor, FieldPresence, FileHeaderDescriptor, FooterDescriptor, FormatSpec,
     FormatSpecBuilder, GrowingMatrixDimension, HeaderSlotIntegrity, HeaderSlots, IndexPolicy,
-    IntegrityPolicy, IntegrityVerification, LayoutAnchor, LayoutBytesSource, LayoutFieldDescriptor,
-    LayoutFieldSource, LayoutFieldType, LayoutFinalize, LayoutPartDescriptor, LayoutPartKind,
-    LayoutPlan, LayoutPlanField, LayoutPlanFieldGroup, LayoutPlanFieldSource, LayoutPlanFieldType,
-    LayoutPlanLen, LayoutPlanPartDescriptor, LayoutPlanPartKind, LayoutPlanRegion,
-    LayoutPlanRegionSource, LayoutPlanSegment, LayoutPreset, LayoutSpec, LeadInDescriptor,
-    LivenessPolicy, MATRIX_DEFAULT_TILE_BYTES, MATRIX_MAX_TILE_BYTES, MATRIX_MAX_TILE_CELLS,
-    ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor, MatrixCommitDescriptor,
-    MatrixCommitKind, MatrixDimensionDescriptor, MetadataDescriptor, RawRegionDescriptor,
-    ReadLimit, ReadLimits, ReadValidation, RecoveryPolicy, ResourceLimits, SegmentDescriptor,
-    SegmentRepeat, TransactionMarkerMode, VariableCompression, matrix_default_tile,
+    IntegrityPolicy, IntegrityVerification, KeyedStorage, KeyedStorageStats, LayoutAnchor,
+    LayoutBytesSource, LayoutFieldDescriptor, LayoutFieldSource, LayoutFieldType, LayoutFinalize,
+    LayoutPartDescriptor, LayoutPartKind, LayoutPlan, LayoutPlanField, LayoutPlanFieldGroup,
+    LayoutPlanFieldSource, LayoutPlanFieldType, LayoutPlanLen, LayoutPlanPartDescriptor,
+    LayoutPlanPartKind, LayoutPlanRegion, LayoutPlanRegionSource, LayoutPlanSegment, LayoutPreset,
+    LayoutSpec, LeadInDescriptor, LivenessPolicy, MATRIX_DEFAULT_TILE_BYTES, MATRIX_MAX_TILE_BYTES,
+    MATRIX_MAX_TILE_CELLS, ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor,
+    MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor, MetadataDescriptor,
+    RawRegionDescriptor, ReadLimit, ReadLimits, ReadValidation, RecoveryPolicy, ResourceLimits,
+    SegmentDescriptor, SegmentRepeat, TransactionMarkerMode, VariableCompression,
+    matrix_default_tile,
 };
 pub use immediate::{ImmediateEvent, ImmediateOperation, ImmediatePolicy};
 pub use sync_marker::SYNC_BLOCK_ID;
 
-pub use indexed::{
-    DiskIndexRebuildReport, VarlitIndexedReader, VarlitIndexedWriter, rebuild_disk_index,
-    rebuild_disk_index_with_progress,
-};
 pub use layout::{
     LayoutFieldValue, LayoutFileInfo, LayoutReader, LayoutScanReport, LayoutSegmentInfo,
     LayoutTailInfo, LayoutTailKind, LayoutValue, LayoutWriter, SegmentWrite, SegmentWriteStream,

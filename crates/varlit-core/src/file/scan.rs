@@ -1,4 +1,4 @@
-//! scan implementation, kept within the original parent privacy boundary.
+//! Scanning a native file: framing each record, building the directory, and the stream scanner incremental follow and lazy opens use.
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -439,6 +439,10 @@ impl NativeStreamScanner {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "the lookup path of bounded keyed storage; its indexed caller was removed"
+)]
 pub(crate) fn read_stream_entry_at(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
@@ -495,9 +499,7 @@ pub(crate) fn read_stream_entry_at_file(
 pub(crate) struct PreparedStreamRecord {
     pub(crate) bytes: Vec<u8>,
     pub(crate) info: AppendInfo,
-    pub(crate) block_id: u32,
-    pub(crate) block_version: u16,
-    pub(crate) flags: u16,
+    #[cfg(test)]
     pub(crate) checksum: u32,
 }
 
@@ -510,25 +512,8 @@ pub(crate) struct PreparedStreamRecord {
 pub(crate) struct PreparedRecordParts {
     pub(crate) len: usize,
     pub(crate) info: AppendInfo,
-    pub(crate) block_id: u32,
-    pub(crate) block_version: u16,
-    pub(crate) flags: u16,
+    #[cfg(test)]
     pub(crate) checksum: u32,
-}
-
-impl PreparedStreamRecord {
-    /// The same record described as [`PreparedRecordParts`], for the callers
-    /// that still take the owning form.
-    pub(crate) fn parts(&self) -> PreparedRecordParts {
-        PreparedRecordParts {
-            len: self.bytes.len(),
-            info: self.info,
-            block_id: self.block_id,
-            block_version: self.block_version,
-            flags: self.flags,
-            checksum: self.checksum,
-        }
-    }
 }
 
 /// The owning form, for the callers that want a record and nothing else: the
@@ -565,9 +550,7 @@ pub(super) fn prepare_stream_record(
     Ok(PreparedStreamRecord {
         bytes,
         info: parts.info,
-        block_id: parts.block_id,
-        block_version: parts.block_version,
-        flags: parts.flags,
+        #[cfg(test)]
         checksum: parts.checksum,
     })
 }
@@ -758,7 +741,7 @@ pub(crate) fn prepare_stream_manifest_record(
     )
 }
 
-/// Produces a fresh 128-bit creation nonce for a stream/indexed primary.
+/// Produces a fresh 128-bit creation nonce for a stream primary.
 ///
 /// Same uniqueness-not-secrecy contract as the matrix creation nonce: it only
 /// has to differ between two `create` calls, including two that reuse the same
@@ -800,27 +783,6 @@ pub(crate) fn prepare_stream_sync_record(
     )
 }
 
-pub(crate) fn prepare_stream_matrix_record(
-    spec: FormatSpec,
-    version: u16,
-    payload: &[u8],
-    sequence: u64,
-    record_offset: u64,
-) -> Result<PreparedStreamRecord> {
-    prepare_stream_record(
-        spec,
-        MATRIX_TILE_BLOCK_ID,
-        version,
-        RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE,
-        0,
-        payload,
-        sequence,
-        record_offset,
-        None,
-        None,
-    )
-}
-
 pub(crate) fn prepare_stream_creation_nonce_record(
     spec: FormatSpec,
     creation_id: [u8; MATRIX_CREATION_NONCE_LEN],
@@ -841,7 +803,7 @@ pub(crate) fn prepare_stream_creation_nonce_record(
     )
 }
 
-/// Recovers the creation nonce of a stream/indexed primary, or `None` when the
+/// Recovers the creation nonce of a stream primary, or `None` when the
 /// primary carries none (a legacy primary, or one bootstrapped from a resident
 /// `VarlitFile`).
 ///
@@ -1024,9 +986,7 @@ fn finish_stream_record_in_place(
     out.extend_from_slice(footer);
     Ok(PreparedRecordParts {
         len: total_len,
-        block_id,
-        block_version,
-        flags,
+        #[cfg(test)]
         checksum,
         info: AppendInfo {
             sequence,

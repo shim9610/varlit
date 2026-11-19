@@ -136,11 +136,6 @@ pub(crate) const REQUIRED_EDGES: &[(&str, &str, &str)] = &[
         "read_record_entry_at",
         "validate_record_entry",
     ),
-    (
-        "indexed.rs",
-        "read_stream_entry_frame",
-        "read_record_entry_positional",
-    ),
 ];
 
 fn metas(list: &syn::MetaList) -> syn::punctuated::Punctuated<Meta, Token![,]> {

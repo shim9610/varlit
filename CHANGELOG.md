@@ -4,9 +4,9 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
-## 0.13.0-alpha.1 - unreleased
+## 0.13.0-alpha.2 - unreleased
 
-Not yet published. `0.13.0-alpha.1` is the version on the main branch while
+Not yet published. `0.13.0-alpha.2` is the version on the main branch while
 the tiled matrix storage is still being tested: the API and the file layouts
 introduced here may change before 0.13.0, and a file written by a
 pre-release is not guaranteed to open with the release.
@@ -21,7 +21,8 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   place through a write-ahead ring; the `VMAT` layout and the `.vmg` companion
   file are gone. A matrix spec's schema hash now includes its tile shape, so
   matrix files written by 0.12.x are refused (with `SchemaHashMismatch` when the
-  format declares a schema hash); recreate them. A reader that falls behind the
+  format declares a schema hash); recreate them, or convert them by reading
+  with 0.12.1 and writing with 0.13 (see the migration guide). A reader that falls behind the
   ring gets `MatrixSnapshotExpired` and must `follow()`.
 - Breaking: remove matrix APIs that tiled storage never used:
   `MatrixMetadataResidency`, `MatrixMetadataVerification` and the `ReadLimits`
@@ -37,8 +38,84 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   [migration guide](docs/migration-guide.md#upgrading-from-0121-to-0130).
 - Variable records longer than 64 KiB in formats with data checksums are stored
   chunked (record flag `0x0002`) with a CRC per 64 KiB chunk. 0.12.x rejects
-  such records as having an unknown flag. Stream/indexed sidecars written by
+  such records as having an unknown flag. Stream state sidecars written by
   0.13.0 are also not readable by earlier versions.
+- Breaking: remove the indexed primary. Updating a keyed record appended a new
+  version and an indexed primary could never reclaim the old ones, so a file
+  grew with the number of updates rather than with its data; the replacement is
+  designed in [bounded keyed storage](docs/design/bounded-keyed-storage.md).
+  Removed: `VarlitIndexedWriter`, `VarlitIndexedReader`, `rebuild_disk_index`,
+  `rebuild_disk_index_with_progress`, `DiskIndexRebuildReport`,
+  `DiskIndexPlan`, `DiskIndexedBlock`, `DiskIndexEntry`, `DiskIndexKeyTag`,
+  `VarlitDiskKey`, `disk_index_sidecar_path`, the `.vki` sidecar, the
+  generated `*_indexed_*` constructors and `*Indexed*` handle types,
+  `DiskIndexError::PageReclaimed` and `DiskIndexOptions::max_tail_records`.
+  The `key_index` block attribute is now a compile error. Stream handles, the
+  `.vks` state sidecar, native keyed files and matrices are unchanged; read
+  indexed data with 0.12.1 and rewrite it (see the
+  [migration guide](docs/migration-guide.md)).
+- Add `Endian::NATIVE`, the byte order of the compilation target: a raw
+  zero-copy type of plain integer fields declares it, so its views are refused
+  on a host whose order is not the file's instead of reading swapped values.
+- Add `MmapPayloads::raw_fixed_or_decode` and `MmapMatrix::raw_cell_or_decode`:
+  the raw view where it can be taken, else the value decoded in its place
+  (`RawView::Decoded`, `is_fallback()`), when the view is refused for byte
+  order (decoded, converting it) or alignment (the bytes copied out, no
+  decoding). Other refusals are returned unchanged; the value is not
+  allocated.
+- `zerocopy::byteorder` numbers (`U16`..`U128`, `I16`..`I128`, `F32`, `F64`,
+  either order) are block fields, stored as the plain number they hold, with
+  the same wire type and schema id: raw types built from them have alignment
+  1 and are viewed in place on every host, which plain-field types (needing
+  aligned payloads, which records and matrix slots generally are not) are
+  not.
+- Run the library and integration tests for big-endian `s390x` under QEMU in
+  CI, and refuse host-byte-order conversions (`to_ne_bytes`, `transmute`, ...)
+  in shipped code outside the three reviewed uses.
+- Add bounded keyed storage (opt-in). A format that declares
+  `keyed_storage: in_place(free_space = N%)` (or
+  `FormatSpec::with_keyed_storage`) stores each keyed block once per key
+  inside the file, in a B-tree of 4 KiB pages laid out the way SQLite lays
+  out a table: leaves hold the records in key order (whole up to 1 KiB,
+  else their first bytes and a chain of full overflow pages), interior
+  pages hold the shortest separators between neighbouring keys. Pages are
+  carved from blocks appended as needed and staged whole through the
+  write-ahead ring; freed pages are reused once no reader or recovery can
+  show a generation that used them (the writer raises the ring's mark,
+  expiring older readers). Splits and merges keep pages at least half
+  full; pages freed by mass deletes stay in the file for new keys.
+  Each keyed block type has its own tree under a first branch held in the
+  metadata (up to 64 types), so keys carry no type id. Keys are encoded
+  big-endian, so keys put in increasing order fill pages in order, and a
+  record stores its key fields once (in the key, not again in the value).
+  `range_keyed` (and generated `range_<block>`) visits a type's records in
+  key order over any range, on writers and readers, decoding each into the
+  caller's value; it allocates nothing beyond the caller's buffer.
+  `write_matrix_run_bytes` writes and commits a run of matrix cells in
+  storage order in one call, staging a tile row at a time and each tile's
+  commit bitmap once: loading 1M 44-byte cells takes 0.24 s instead of
+  2.3 s cell by cell.
+  Once publications take half its ring the writer checkpoints all of them:
+  one read of the ring, without re-checking frames it published, and a
+  range a later publication rewrites whole is not copied (matrix
+  checkpoints of every generation skip it too). A reader keeps 512 tree
+  pages (2 MiB, allocated at open) of its generation in memory. The keyed ring is 2 MiB and blocks grow to 1 MiB, so a
+  file carries little space it does not use.
+  Repeated updates no longer grow the file (the growth the security advisory
+  describes). `KeyedStorage::with_change_budget` (64 MiB by default) bounds
+  one round of changes; past it the writer publishes the round itself. Generated `put_<block>`, `get_<block>` and `remove_<block>`;
+  `VarlitFile::put_keyed`, `get_keyed`, `remove_keyed`, `keyed_storage_stats`;
+  `KeyedStorage`, `KeyedStorageStats` and
+  `Error::KeyedStorageRequiresPut`. Kani proofs cover the entry search,
+  separators, varints and how much of a record a cell keeps; the layouts are checked under
+  Miri on a big-endian target; `keyed_storage_model` fuzzes it against a model.
+- Stream `sync` and stream reader `follow` now run through the verified
+  publication drivers that the indexed writer used, so the commit and follow
+  protocols checked by Kani are the ones stream handles execute.
+- Fix: a stream writer's immediate policy counted the format's own creation
+  nonce and manifest records, so `after_records(n)` and `after_bytes(n)` fired
+  one record early after `create`; counting now starts at the first caller
+  write.
 
 - Add explicit typed file inspection and strict application self-test qualification.
   Generated registries include user-defined block types; incomplete coverage is
@@ -61,6 +138,54 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 - Add `ChunkedBytes::decoded_len` and `stream_range` for selected decoded ranges
   through caller-owned scratch. The scratch never grows; overlapping chunks
   are checked completely, and callback output is provisional until success.
+- A matrix publication is no longer limited by the write-ahead ring. One that
+  would take more than half the ring streams the rest of its changes into
+  overflow records and names them with small ring frames; it commits with the
+  same single barrier and is still all-or-nothing for readers and after a
+  crash. Previously a sync that overwrote more than the ring held failed with
+  `LimitExceeded`. A publication of any size commits with one small ring
+  frame naming an on-disk index of its ranges; staged bytes go from the
+  caller's buffer to the file through the handle's fixed buffers, and a matrix handle
+  allocates nothing after open to write, publish, follow, read or
+  checkpoint. Overflow records are reused once no reader can need them, also
+  after the writer is reopened, and their free space takes new tiles and
+  directory pages before the file grows. The matrix layout version is now 2:
+  the metadata record gains the overflow list head, and matrix files written
+  by an earlier 0.13 pre-release are refused with `InvalidMatrixLayout`.
+- Readers no longer adopt a durable commit before its barrier returns. A
+  transaction-marker format's file header gains a 64-byte `VPUB` block, the
+  published end, which the writer rewrites in place (one 24-byte write, no
+  barrier) after `commit_durable` and `sync` return, and at once for `commit`,
+  `flush` and release. Readers, opened or following, stop there. Previously
+  a follower could see the marker while its fsync was still running (96 % of
+  windows in the format-bench `mixed-live` run). After an operating-system
+  crash the last durable commit can stay hidden until a writer reopens the
+  file. Files written before this have no block and are read as before; the
+  header of a new transaction-marker file is 64 bytes longer.
+- Matrix writes and follows issue fewer system calls. The entries of an open
+  ring frame collect in the writer's existing 64 KiB copy buffer and reach
+  the file in one write per buffer, the frame header with them when the frame
+  fits (before: two writes per staged range and two per frame); the writer's
+  own reads of what it staged are served from that buffer. An idle
+  `follow()` reads the file length through the handle it holds instead of
+  duplicating the handle. In the format-bench `cells` scenario (64 random
+  1 KiB cells per durable update, four followers) this took the writer from
+  about 184 to 4 writes per update; the update rate did not change measurably
+  (an interleaved A/B of five 10 GB runs each was within noise), since
+  checkpoint write-back dominates that scenario.
+- Refuse data files that are not regular files. Opening a FIFO, socket,
+  device or directory by path returns an `Io` error of kind `InvalidInput`
+  instead of reading it, and on Unix the open no longer waits on a FIFO with
+  no peer: the data file, lock marker and sidecars open with `O_NONBLOCK` and
+  the type is checked on the open handle. Document the remaining I/O progress
+  assumptions and where cancellation is observed.
+- Refuse narrowing conversions that could silently truncate a length or count
+  written to a file. Library code converts with a check or states the bound at
+  the cast; `clippy::cast_possible_truncation` is denied outside tests.
+- Add `ChunkedBytes::decode_into` to write a whole payload to an `io::Write`.
+  It buffers one chunk, refuses a declared total above the limit before any
+  output, and writes a chunk only after its length and CRC check; a failure
+  leaves the earlier verified chunks in the writer.
 - Add `Decoder::decode_value` and use it for library-owned codec composition.
   Reject whole-decoder replacement, retain completed charges on errors and
   exhaust callback authority on unwind. Add exact scalar transition contracts
@@ -138,7 +263,7 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   buffer, and unlinked deletes reuse the writer's buffer for the tombstone.
   For the cases in `crates/varlit/tests/write_allocations.rs` (no
   compression), appends, deletes, flushes and syncs make no allocator calls
-  after warm-up. Stream and indexed writers are unchanged.
+  after warm-up. Stream writers are unchanged.
 - Fix `merge_keyed_files`, `compact_keyed_file(s)` and the merge estimate failing
   with `UnexpectedEof` on inputs large enough to open from an anchor.
 - Fix `follow()` failing with `CorruptTail` when it met the writer's next record
@@ -198,7 +323,6 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `InvalidMatrixLayout` instead of panicking (found by `matrix_arbitrary`).
 - Add the `mixed_load_bench` example: a concurrent writer and follower on a
   file of a given size, reporting per-phase heap peak, allocator calls and read
-  system calls. The storage benchmark harness now follows and retries indexed
-  lookups that meet `DiskIndexError::PageReclaimed`, as that error documents.
+  system calls.
 
 Earlier releases are recorded in the [version history](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/CHANGELOG.md).

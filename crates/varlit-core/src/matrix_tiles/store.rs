@@ -11,13 +11,26 @@ pub(crate) trait TileSource {
     fn len(&self) -> Result<u64>;
 }
 
+impl<T: TileSource + ?Sized> TileSource for &T {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        (**self).read_at(offset, buf)
+    }
+    fn len(&self) -> Result<u64> {
+        (**self).len()
+    }
+}
+
 /// Write access for the single writer.
 pub(crate) trait TileStore: TileSource {
     /// Overwrites bytes inside a record the engine appended earlier.
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()>;
-    /// Appends an internal record of `kind` holding `payload` and returns the
-    /// logical offset of its payload. Not durable until [`Self::sync`].
-    fn append(&mut self, kind: RecordKind, payload: &[u8]) -> Result<u64>;
+    /// Appends an internal record of `kind` whose payload is `prefix`
+    /// followed by zeros up to `len` bytes, without a buffer of that size,
+    /// and returns the logical offset of its payload. Not durable until
+    /// [`Self::sync`].
+    fn append_zeroed(&mut self, kind: RecordKind, prefix: &[u8], len: u64) -> Result<u64>;
+    /// The longest record payload this store accepts.
+    fn record_limit(&self) -> u64;
     /// Makes every write and append so far durable: the one barrier a
     /// publication pays.
     fn sync(&mut self) -> Result<()>;
@@ -118,15 +131,7 @@ pub(crate) mod memory {
         }
     }
 
-    impl TileStore for MemStore {
-        fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
-            let mut shared = self.0.borrow_mut();
-            let end = offset as usize + bytes.len();
-            assert!(end <= shared.bytes.len(), "write past the end");
-            shared.bytes[offset as usize..end].copy_from_slice(bytes);
-            shared.since_sync.push((offset, bytes.to_vec()));
-            Ok(())
-        }
+    impl MemStore {
         fn append(&mut self, kind: RecordKind, payload: &[u8]) -> Result<u64> {
             let mut shared = self.0.borrow_mut();
             // A 16-byte stand-in record header, so payloads are not adjacent.
@@ -138,6 +143,25 @@ pub(crate) mod memory {
             shared.since_sync.push((start, record));
             shared.appends.push((kind, at, payload.len() as u64));
             Ok(at)
+        }
+    }
+
+    impl TileStore for MemStore {
+        fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+            let mut shared = self.0.borrow_mut();
+            let end = offset as usize + bytes.len();
+            assert!(end <= shared.bytes.len(), "write past the end");
+            shared.bytes[offset as usize..end].copy_from_slice(bytes);
+            shared.since_sync.push((offset, bytes.to_vec()));
+            Ok(())
+        }
+        fn append_zeroed(&mut self, kind: RecordKind, prefix: &[u8], len: u64) -> Result<u64> {
+            let mut payload = vec![0u8; len as usize];
+            payload[..prefix.len()].copy_from_slice(prefix);
+            self.append(kind, &payload)
+        }
+        fn record_limit(&self) -> u64 {
+            u64::MAX
         }
         fn sync(&mut self) -> Result<()> {
             let mut shared = self.0.borrow_mut();

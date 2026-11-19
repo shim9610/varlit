@@ -115,15 +115,13 @@ def campaign(profile, seeds, epochs, kill_cycles, require_pib):
                        "environment": env or {}, "required_marker": marker, "status": "not_run"})
 
     add("regression", test_command("scalable_qualification"), expected=4)
-    add("immediate-policy", test_command("immediate_policy"), expected=6)
+    add("immediate-policy", test_command("immediate_policy"), expected=5)
     add("immediate-native", test_command("immediate_native"), expected=1)
-    add("reader-management", test_command("scalable_reader_management"), expected=6)
-    add("schema-key-kinds", test_command("schema_key_kinds"), expected=7)
+    add("reader-management", test_command("scalable_reader_management"), expected=4)
+    add("schema-key-kinds", test_command("schema_key_kinds"), expected=4)
     add("finite-key-limit", test_command("finite_key_limit"), expected=1)
-    add("finite-slot-storage", test_command("finite_slot_storage"), expected=7, marker="FINITE_SLOT_CRASH aborts=62")
-    add("native-redb-oracle", test_command("native_redb_differential"), marker="ORACLE seed=42")
     add("index-redb-oracle", test_command(None, "disk_index::oracle::randomized_pages_match_redb_across_splits_and_old_roots", core=True), marker="INDEX_ORACLE seed=42")
-    add("reader-follow", test_command("scalable_reader_follow"), expected=7, marker="FOLLOW_CONCURRENT readers=8 generations=100")
+    add("reader-follow", test_command("scalable_reader_follow"), expected=6, marker="FOLLOW_CONCURRENT readers=8 generations=100")
     add("reader-open-churn", test_command(
         "scalable_qualification", "opening_readers_does_not_interrupt_the_single_writer"))
     add("fault-matrix", test_command("scalable_crash_faults", "enabled::scalable_crash_fault_matrix"))
@@ -133,9 +131,6 @@ def campaign(profile, seeds, epochs, kill_cycles, require_pib):
             marker=f"QUAL_HISTORY seed={seed} epochs={epochs}")
     add("external-kill", test_command("scalable_qualification", "external_kill_stress", True),
         env={"VARLIT_QUAL_KILL_CYCLES": str(kill_cycles)}, marker=f"QUAL_KILL epoch={kill_cycles}")
-    if profile == "qualification":
-        add("memory-growth", test_command("high_cardinality", "cardinality_growth_respects_memory_budget", True),
-            marker='QUAL_MEMORY {"keys":1000000,')
     add("sparse-tib", test_command(None, "pib_probe::real_file_positional_io_at_one_tib_smoke", True, True),
         marker="sparse offset smoke passed:")
     if require_pib:
@@ -193,8 +188,6 @@ def main():
                         "production workload soak and resource exhaustion"],
         "stages": campaign(args.profile, seeds, epochs, cycles, args.require_pib),
     }
-    if not full:
-        report["not_covered"].append("10000/100000/1000000-key memory growth")
     if not args.require_pib:
         report["not_covered"].append("1 PiB sparse positional I/O")
     write_report(report_path, report)

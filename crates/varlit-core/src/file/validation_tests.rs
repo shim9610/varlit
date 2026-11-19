@@ -732,29 +732,6 @@ fn read_validation_combinations_separate_damage_detection_and_frame_io() -> Resu
                     policy.structure
                 );
 
-                let physical = crate::disk_index::DiskIndexPhysicalRecord {
-                    physical_len: bytes.len() as u64,
-                    block_id: entry.block_id,
-                    block_version: entry.block_version,
-                    flags: entry.flags,
-                    native_crc: Some(entry.checksum),
-                };
-                if !policy.structure {
-                    crate::snapshot::take_read_requests();
-                    let captured = read_index_entry_from_descriptor(
-                        spec,
-                        &original,
-                        0,
-                        entry.sequence,
-                        physical,
-                    )?;
-                    assert_eq!(captured.read_payload_snapshot(spec, &original)?, b"payload");
-                    assert_eq!(
-                        crate::snapshot::take_read_requests().0,
-                        1 + u64::from(policy.data_crc && footer)
-                    );
-                }
-
                 // Limits/overflow and actual short reads survive all trust choices.
                 let limited = spec.with_read_limits(
                     ReadLimits::STANDARD

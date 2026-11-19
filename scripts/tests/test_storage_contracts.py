@@ -18,17 +18,16 @@ class StorageSelectionTests(unittest.TestCase):
             "ownership-token", "ownership-preflight", "ownership-published", "ownership-mmap",
             "ownership-generated", "ownership-path-error", "ownership-disk-error",
             "chunk-stream-window", "chunk-stream-refusal", "chunk-stream-integrity", "chunk-stream-fallback",
-            "decoder-refusal", "chunk-refusal", "hashmap-rehash-budget", "hostile-follow", "hostile-codec", "hostile-index", "spill-policy", "spill-byte-policy", "zstd-header-allocation", "chunk-header-allocation", "publication-resume", "publication-clean-resume", "publication-head-pairs", "publication-histories", "publication-live-crashes", "index-cache-shape", "index-traversal", "index-oom", "kernel-short-write", "torn-publication", "consistent-frontiers",
+            "decoder-refusal", "chunk-refusal", "hashmap-rehash-budget", "hostile-codec", "hostile-index", "spill-policy", "spill-byte-policy", "zstd-header-allocation", "chunk-header-allocation", "publication-resume", "publication-clean-resume", "publication-head-pairs", "publication-live-crashes", "index-traversal", "kernel-short-write", "torn-publication", "consistent-frontiers",
             "native-boundary-proof", "rewrite-source-integrity", "matrix-mmap-window",
             "nonresident-record-budget", "nonresident-follow-sequence", "mutation-amortized-work", "recovery-linear-work", "mutation-uniform-proof", "mutation-rewritten-boundaries",
-            "checked-chain-links", "failed-history", "decode-memory", "cardinality-growth", "oom-recovery", "zstd-context-oom"})
+            "checked-chain-links", "decode-memory", "oom-recovery", "zstd-context-oom"})
         for case in gate.CASES:
             command = gate.command(case)
             self.assertIn("--exact", command)
             self.assertIn("--all-features", command)
             self.assertIn("--release", command)
             self.assertEqual("--ignored" in command, case[4])
-        self.assertIn('"keys":1000000', next(row[5] for row in gate.CASES if row[0] == "cardinality-growth"))
 
     def test_feature_disabled_or_renamed_case_is_not_a_pass(self):
         output = "test result: ok. 0 passed; 0 failed;\nVarlit test artifact cleanup: verified empty\n"

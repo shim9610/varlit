@@ -1,0 +1,121 @@
+name: Performance A/B
+
+# Runs only when started by hand. It compares two library revisions with the
+# same harness on each runner (Linux and Windows): tools/format-bench/ab.py
+# alternates the two builds, five runs each by default, and reports medians
+# with their spread. GitHub-hosted runners are shared machines whose disk and
+# fsync timings vary from run to run by 10-20 % or more, so the comparison is
+# relative to one runner, never across runners or operating systems, and
+# nothing here fails: it writes a table to the job summary.
+#
+# The harness comes from the head ref and is built against both libraries,
+# so `base_ref` must have the API the harness uses (a recent commit of the
+# same line of work). It must also be an ancestor of the head: the workflow
+# builds and runs only code already in the head's history.
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: 'library revision to compare against (commit, branch or tag)'
+        required: true
+        type: string
+      data_gb:
+        description: 'logical data per scenario, in GB'
+        type: string
+        default: '1'
+      repeats:
+        description: 'alternating runs per side'
+        type: number
+        default: 5
+      only:
+        description: 'comma list of scenarios (empty: all)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    # CI runs on the public repository only; see ci.yml.
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: A/B (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            exe: ''
+          - os: windows-latest
+            exe: '.exe'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # One checkout of the head, with history. The base is not checked out
+      # by ref from the input: it is taken from that history, below, and only
+      # when it is an ancestor of the head, so the only code built is code
+      # already merged into this line of work. No credentials stay behind.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Take the base from the head's history
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          case "$BASE_REF" in
+            ''|-*|*[!A-Za-z0-9._/-]*) echo "base_ref must be a plain ref or commit" >&2; exit 1 ;;
+          esac
+          base="$(git -C head rev-parse --verify --quiet "$BASE_REF^{commit}" \
+            || git -C head rev-parse --verify --quiet "origin/$BASE_REF^{commit}")" \
+            || { echo "base_ref $BASE_REF is not in the head's history" >&2; exit 1; }
+          if ! git -C head merge-base --is-ancestor "$base" HEAD; then
+            echo "base_ref $BASE_REF ($base) is not an ancestor of the head" >&2
+            exit 1
+          fi
+          git -C head worktree add --detach ../base "$base"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - name: Use the head harness for both builds
+        run: |
+          rm -rf base/tools/format-bench
+          cp -r head/tools/format-bench base/tools/format-bench
+          rm -rf base/tools/format-bench/target
+      - name: Build both (Varlit only; HDF5 needs CMake and is left out)
+        run: |
+          for side in base head; do
+            cargo build --release --locked --no-default-features \
+              --manifest-path "$side/tools/format-bench/Cargo.toml"
+          done
+      - name: Run the A/B
+        # Inputs reach the script through the environment, never pasted into
+        # it.
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+          HEAD_SHA: ${{ github.sha }}
+          DATA_GB: ${{ inputs.data_gb }}
+          REPEATS: ${{ inputs.repeats }}
+          ONLY: ${{ inputs.only }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          # Windows runners name the interpreter `python`.
+          PY="$(command -v python3 || command -v python)"
+          only=()
+          if [ -n "$ONLY" ]; then only=(--only "$ONLY"); fi
+          "$PY" head/tools/format-bench/ab.py \
+            --base "base/tools/format-bench/target/release/varlit-format-bench$EXE" \
+            --head "head/tools/format-bench/target/release/varlit-format-bench$EXE" \
+            --base-label "$BASE_REF" --head-label "$HEAD_SHA" \
+            --data-gb "$DATA_GB" --repeats "$REPEATS" "${only[@]}" \
+            --out ab-out --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ab-${{ matrix.os }}
+          path: ab-out/
+          retention-days: 30

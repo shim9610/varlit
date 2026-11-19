@@ -323,7 +323,7 @@ where
     // what stops the operating system from recycling its identity behind an
     // unlink, so the post-publication re-check below cannot be satisfied by a
     // different object wearing the same device/inode pair.
-    let verified = OpenOptions::new().read(true).open(&path)?;
+    let verified = crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)?;
     let current_identity = opened_file_identity(&verified)?;
     if current_identity != snapshot_identity {
         return Err(state_error(
@@ -356,11 +356,10 @@ where
     // and can only tell "still my sidecar" from "somebody else's file at the
     // same name" while this handle keeps the identity from being reissued.
     let published = crate::file::PinnedObject::open(&sidecar).ok();
-    let republished_identity = OpenOptions::new()
-        .read(true)
-        .open(&path)
-        .ok()
-        .and_then(|file| opened_file_identity(&file).ok());
+    let republished_identity =
+        crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)
+            .ok()
+            .and_then(|file| opened_file_identity(&file).ok());
     if republished_identity.as_deref() != Some(snapshot_identity.as_slice()) {
         return Err(state_error(retire_sidecar_for_replaced_primary(
             &sidecar, published,
@@ -451,6 +450,13 @@ struct StreamReaderState {
     tail_records: u64,
 }
 
+/// A generation `prepare_follow` read and checked, ready to install.
+struct FollowedGeneration {
+    snapshot: SnapshotFile,
+    state: StreamReaderState,
+    added: u64,
+}
+
 impl VarlitStreamReader {
     pub fn open(spec: FormatSpec, path: impl AsRef<Path>, options: StreamOptions) -> Result<Self> {
         refuse_matrix_stream(spec)?;
@@ -481,7 +487,10 @@ impl VarlitStreamReader {
         options: StreamOptions,
     ) -> Result<Self> {
         let spec = stream_spec(spec, options, false)?;
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true), path)?,
+            None,
+        );
         let header_len = read_primary_header(spec, &mut file)?.0;
         let captured_len = file.len()?;
         if captured_len < header_len {
@@ -500,6 +509,22 @@ impl VarlitStreamReader {
     /// working data remains invisible. Returns the additional native record
     /// count; no native prefix scan or write transaction is performed.
     pub fn follow(&mut self) -> Result<u64> {
+        self.follow_records()
+    }
+
+    /// Follows through the verified driver: everything fallible happens in
+    /// `prepare_follow`, which only reads the handle, so a failed follow
+    /// leaves the reader exactly as it was.
+    fn follow_records(&mut self) -> Result<u64> {
+        crate::publication_protocol::follow(self, Self::prepare_follow, |reader, followed| {
+            match followed {
+                Some(followed) => reader.adopt_follow(followed),
+                None => 0,
+            }
+        })
+    }
+
+    fn prepare_follow(&self) -> Result<Option<FollowedGeneration>> {
         let state = self._state.as_ref().ok_or(Error::StreamingUnsupported)?;
         let (store, next) = state
             .store
@@ -523,16 +548,25 @@ impl VarlitStreamReader {
         let native = self.committed_native_snapshot(&next)?;
         tail_records += advance_reader_tail(self.spec, &mut tail, &native.physical()?)?;
         if unchanged && tail.committed() == self.snapshot.len() {
-            return Ok(0);
+            return Ok(None);
         }
-        let added = (next.record_count() + tail_records).saturating_sub(before);
-        self.snapshot = native.with_len(tail.committed())?;
-        let state = self._state.as_mut().expect("state checked");
-        state.snapshot = next;
-        state.store = store;
-        state.tail = tail;
-        state.tail_records = tail_records;
-        Ok(added)
+        Ok(Some(FollowedGeneration {
+            added: (next.record_count() + tail_records).saturating_sub(before),
+            snapshot: native.with_len(tail.committed())?,
+            state: StreamReaderState {
+                snapshot: next,
+                store,
+                tail,
+                tail_records,
+            },
+        }))
+    }
+
+    /// Installs a prepared generation; infallible by construction.
+    fn adopt_follow(&mut self, followed: FollowedGeneration) -> u64 {
+        self.snapshot = followed.snapshot;
+        self._state = Some(followed.state);
+        followed.added
     }
 
     /// Refresh and extend this handle's event cursor without rescanning its prefix.
@@ -582,10 +616,6 @@ impl VarlitStreamReader {
         let native = self.snapshot.with_len(index.committed_eof())?;
         verify_primary_generation(self.spec, index.primary_generation(), &native)?;
         Ok(native)
-    }
-
-    pub(crate) fn adopt_snapshot(&mut self, snapshot: SnapshotFile) {
-        self.snapshot = snapshot;
     }
 
     pub fn verify_all(&self) -> Result<u64> {
@@ -661,14 +691,6 @@ impl VarlitStreamReader {
 
     pub fn resident_state(&self) -> StreamResidentState {
         resident_state(self.spec)
-    }
-
-    pub(crate) const fn spec(&self) -> FormatSpec {
-        self.spec
-    }
-
-    pub(crate) fn snapshot(&self) -> &SnapshotFile {
-        &self.snapshot
     }
 }
 
@@ -898,7 +920,7 @@ pub struct VarlitStreamWriter {
     record_buffer: Vec<u8>,
     immediate_state: crate::immediate::ImmediateState,
     /// The open link of this writer's sync-marker chain; `Some` exactly when
-    /// the writer is checkpointed (a state sidecar, or an indexed writer).
+    /// the writer is checkpointed (it has a state sidecar).
     /// See [`crate::sync_marker`].
     sync_chain: Option<crate::sync_marker::SyncChain>,
     _lock: WriterLock,
@@ -938,8 +960,7 @@ impl Drop for StreamWriterState {
 
 impl Drop for VarlitStreamWriter {
     fn drop(&mut self) {
-        // As `VarlitIndexedWriter`'s drop: confirm a state sidecar over every
-        // synced record, best effort.
+        // Confirm a state sidecar over every synced record, best effort.
         if self.state.as_ref().is_some_and(|state| state.dirty)
             && !self.sync_pending()
             && self.check_mutation(STREAM_WRITER_POISON_CONTEXT).is_ok()
@@ -959,6 +980,16 @@ impl GuardedWriter for VarlitStreamWriter {
 }
 
 impl VarlitStreamWriter {
+    /// A permit through the stream's one poison flag, for the compile-fail
+    /// instance-binding probes.
+    #[cfg(feature = "scalable-fault-injection")]
+    pub(crate) fn mutation_permit(
+        &mut self,
+        context: &'static str,
+    ) -> Result<StreamMutationPermit<'_>> {
+        self.writer_permit(context)
+    }
+
     pub fn create(
         spec: FormatSpec,
         path: impl AsRef<Path>,
@@ -1068,12 +1099,14 @@ impl VarlitStreamWriter {
         let path = canonical_write_path(path.as_ref())?;
         let mut lock = WriterLock::acquire(&path)?;
         let mut file = PrimaryFile::new(
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&path)?,
+            crate::primary_file::open_data_file(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false),
+                &path,
+            )?,
             None,
         );
         // Bind the authoritative object lock onto the freshly created file. The
@@ -1138,6 +1171,9 @@ impl VarlitStreamWriter {
                 .ensure_writable()?
                 .append_prepared(MANIFEST_BLOCK_ID, record)?;
         }
+        // The nonce and manifest are the format's own records, not writes the
+        // caller made: an immediate policy counts from the first caller write.
+        writer.immediate_state.reset();
         Ok(writer)
     }
 
@@ -1197,8 +1233,10 @@ impl VarlitStreamWriter {
         let spec = stream_spec(spec, options, false)?;
         let path = std::fs::canonicalize(path.as_ref())?;
         let lock = WriterLock::acquire(&path)?;
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         let header_len = read_primary_header(spec, &mut file)?.0;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;
@@ -1254,8 +1292,10 @@ impl VarlitStreamWriter {
         let spec = stream_spec(spec, options, false)?;
         let path = std::fs::canonicalize(path.as_ref())?;
         let lock = WriterLock::acquire(&path)?;
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         let header_len = read_primary_header(spec, &mut file)?.0;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;
@@ -1431,8 +1471,7 @@ impl VarlitStreamWriter {
         };
         self.record_buffer = buffer;
         let info = result?;
-        // An unmanaged stream belongs to an indexed writer; that owner must
-        // publish its index before running the durability boundary.
+        // Only a checkpointed writer has a durability boundary to run.
         if self.state.is_some() {
             self.apply_immediate::<T>(info, crate::ImmediateOperation::Append, mandatory)?;
         }
@@ -1491,40 +1530,57 @@ impl VarlitStreamWriter {
         self.sync_with(false)
     }
 
+    /// Syncs through the verified commit driver: readiness and the sync
+    /// marker, the primary barrier, the state publication (poisoning the
+    /// writer when its outcome is uncertain), then the bookkeeping.
     fn sync_with(&mut self, force_confirm: bool) -> Result<()> {
-        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
-        if self.state.is_some() {
-            self.append_sync_marker()?;
-        }
-        crate::scalable_fault_point("sync.native_sync");
-        let sync = self.file.sync_all();
-        crate::scalable_fault_point("sync.native_sync");
-        sync?;
-        let eof = self.snapshot.len();
-        let records = self.record_count;
-        let due = self.state.as_ref().is_some_and(|state| {
-            state.dirty
-                && (force_confirm
-                    || state
-                        .store
-                        .options()
-                        .confirm
-                        .due(eof - state.confirmed_eof, records - state.confirmed_records))
-        });
-        if due {
-            self.ensure_writable()?.commit_state_chunk()?;
-            let frontier = checkpoint_frontier(&self.checkpoint());
-            let state = self.state.as_mut().expect("state checked");
-            if let Err(error) = state.store.publish_clean(frontier) {
-                self.poison.poison();
-                return Err(state_error(error));
+        use crate::publication_protocol::CommitStep;
+        let mut confirmed = None;
+        crate::publication_protocol::commit(|step| {
+            match step {
+                CommitStep::Prepare => {
+                    self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+                    if self.state.is_some() {
+                        self.append_sync_marker()?;
+                    }
+                }
+                CommitStep::PrimarySync => {
+                    crate::scalable_fault_point("sync.native_sync");
+                    let sync = self.file.sync_all();
+                    crate::scalable_fault_point("sync.native_sync");
+                    sync?;
+                }
+                CommitStep::Publish => {
+                    let eof = self.snapshot.len();
+                    let records = self.record_count;
+                    let due = self.state.as_ref().is_some_and(|state| {
+                        state.dirty
+                            && (force_confirm
+                                || state.store.options().confirm.due(
+                                    eof - state.confirmed_eof,
+                                    records - state.confirmed_records,
+                                ))
+                    });
+                    if due {
+                        self.ensure_writable()?.commit_state_chunk()?;
+                        let frontier = checkpoint_frontier(&self.checkpoint());
+                        let state = self.state.as_mut().expect("state checked");
+                        state.store.publish_clean(frontier).map_err(state_error)?;
+                        confirmed = Some((eof, records));
+                    }
+                }
+                CommitStep::Poison => self.poison.poison(),
+                CommitStep::Finish => {
+                    if let (Some((eof, records)), Some(state)) = (confirmed, self.state.as_mut()) {
+                        state.dirty = false;
+                        state.confirmed_eof = eof;
+                        state.confirmed_records = records;
+                    }
+                    self.immediate_state.reset();
+                }
             }
-            state.dirty = false;
-            state.confirmed_eof = eof;
-            state.confirmed_records = records;
-        }
-        self.immediate_state.reset();
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Records that the state sidecar covers exactly this EOF and opens the
@@ -1596,14 +1652,6 @@ impl VarlitStreamWriter {
 
     pub fn resident_state(&self) -> StreamResidentState {
         resident_state(self.spec)
-    }
-
-    pub(crate) const fn spec(&self) -> FormatSpec {
-        self.spec
-    }
-
-    pub(crate) fn snapshot(&self) -> &SnapshotFile {
-        &self.snapshot
     }
 
     pub(crate) fn checkpoint(&self) -> StreamCheckpoint {
@@ -1848,7 +1896,7 @@ impl VarlitStreamWriter {
     /// (round 11, invariant 3).
     ///
     /// Fault-testing hook only: each armed failure makes the next sidecar
-    /// chunk commit - on either the stream or the indexed writer - fail its
+    /// chunk commit fail its
     /// primary-generation restamp *after* the chunk's records have been
     /// appended to the native file. The observable contract under this fault
     /// is that the caller receives `Error::PublishedButIndexStale` and a
@@ -1861,17 +1909,33 @@ impl VarlitStreamWriter {
         INJECTED_GENERATION_RESTAMP_FAILURES.with(|armed| armed.set(count));
     }
 
+    /// Returns how many times this thread computed a primary generation
+    /// witness by scanning the primary's leading window.
+    ///
+    /// Fault-testing hook only: once the window is full the witness is frozen,
+    /// so steady-state appends must leave this counter unchanged.
+    #[cfg(feature = "scalable-fault-injection")]
+    #[doc(hidden)]
+    pub fn primary_generation_scans() -> u64 {
+        crate::disk_index::scaling_counters::primary_generation_scans()
+    }
+
+    /// Resets this thread's [`Self::primary_generation_scans`] counter.
+    #[cfg(feature = "scalable-fault-injection")]
+    #[doc(hidden)]
+    pub fn reset_scaling_counters() {
+        crate::disk_index::scaling_counters::reset();
+    }
+
     /// Arms `count` injected native-append failures whose rollback also fails
     /// (round 12, ).
     ///
     /// Fault-testing hook only. Each armed failure makes the next prepared
-    /// chunk append - on either the stream or the indexed writer - behave as
+    /// chunk append behave as
     /// though the native write failed *and* the truncate-or-seek that rolls it
     /// back failed too. That pair is the one path into
-    /// `Error::WriteRollbackFailed`, and it is what  proved was not
-    /// enforced: the stream poisoned itself, the indexed writer kept a second
-    /// flag that stayed clear, and the next single-record put or delete was
-    /// accepted.
+    /// `Error::WriteRollbackFailed`; the writer must poison itself so that the
+    /// next single-record put or delete is refused.
     ///
     /// The observable contract under this fault is that the call returns
     /// `Error::WriteRollbackFailed` and that *every* later mutation of either
@@ -1889,27 +1953,6 @@ impl VarlitStreamWriter {
     /// point demands. See [`writer_permit`].
     fn ensure_writable(&mut self) -> Result<StreamMutationPermit<'_>> {
         self.writer_permit(STREAM_WRITER_POISON_CONTEXT)
-    }
-
-    /// The same check, reported under `context`.
-    ///
-    /// This is how a writer layered on this stream — today only
-    /// [`crate::VarlitIndexedWriter`] — reaches the stream's mutating entry
-    /// points: it must observe the one authoritative poison flag to obtain a
-    /// permit, but names itself in the error so the caller is told which
-    /// writer refused.  was exactly the absence of this: the layered
-    /// writer kept a *second* flag and the two could disagree.
-    pub(crate) fn mutation_permit(
-        &mut self,
-        context: &'static str,
-    ) -> Result<StreamMutationPermit<'_>> {
-        self.writer_permit(context)
-    }
-
-    /// Refuses every future mutation of this writer and of anything layered on
-    /// it. Not reversible.
-    pub(crate) fn poison(&mut self) {
-        self.poison.poison();
     }
 
     /// Opens the sync-marker chain at the current EOF. Called once the writer
@@ -1946,62 +1989,6 @@ impl VarlitStreamWriter {
             .append_prepared(crate::sync_marker::SYNC_BLOCK_ID, record)?;
         self.sync_chain = Some(crate::sync_marker::SyncChain::new(self.snapshot.len()));
         Ok(Some(info))
-    }
-
-    pub(crate) const fn record_count(&self) -> u64 {
-        self.record_count
-    }
-
-    /// Prepares a matrix storage record for the next append: internal, and
-    /// rewritten in place after it lands (its payload is outside the record
-    /// checksum and the sync-marker link).
-    pub(crate) fn prepare_matrix_record(
-        &self,
-        version: u16,
-        payload: &[u8],
-    ) -> Result<PreparedStreamRecord> {
-        crate::file::prepare_stream_matrix_record(
-            self.spec,
-            version,
-            payload,
-            self.next_sequence()?,
-            self.snapshot.len(),
-        )
-    }
-
-    /// Appends a record prepared by [`Self::prepare_matrix_record`].
-    pub(crate) fn append_matrix_record(
-        &mut self,
-        record: PreparedStreamRecord,
-    ) -> Result<AppendInfo> {
-        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
-        self.ensure_writable()?
-            .append_prepared(crate::file::MATRIX_TILE_BLOCK_ID, record)
-    }
-
-    /// Overwrites bytes inside a matrix storage record, around anchors.
-    pub(crate) fn overwrite_matrix_bytes(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
-        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
-        let end = offset
-            .checked_add(bytes.len() as u64)
-            .filter(|end| *end <= self.snapshot.len())
-            .ok_or(Error::InvalidMatrixLayout)?;
-        let _ = end;
-        self.file.overwrite_at(offset, bytes)
-    }
-
-    /// Reads logical bytes of this primary as they are now.
-    pub(crate) fn read_logical(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
-        self.snapshot.read_exact_at(offset, buf)
-    }
-
-    /// One storage barrier on the primary (data and length).
-    pub(crate) fn sync_primary_data(&mut self) -> Result<()> {
-        crate::scalable_fault_point("sync.native_sync");
-        let sync = self.file.sync_data();
-        crate::scalable_fault_point("sync.native_sync");
-        sync?;
-        Ok(())
     }
 
     pub(crate) fn next_sequence(&self) -> Result<u64> {
@@ -2818,8 +2805,7 @@ impl StreamMutationPermit<'_> {
                 info.sequence,
             );
         }
-        self.immediate_state
-            .advance(records.len() as u64, bytes.len() as u64);
+        self.immediate_state.advance(records.len() as u64, byte_len);
         // The records are published in the native file, so any sidecar failure
         // from here on must poison the writer.
         if let Err(error) = self.stage_state_records(records, new_eof) {
@@ -3385,61 +3371,6 @@ mod tests {
     }
 
     #[test]
-    fn restore_validates_format_tails_before_native_truncate() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("invalid-restore.varlit");
-        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
-        let first;
-        {
-            let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
-            first = writer.push_info(&TestBlock(1))?;
-            writer.sync()?;
-        }
-        let clean_len = fs::metadata(&path)?.len();
-        fs::remove_file(state_sidecar_path(&path))?;
-        let native = VarlitStreamReader::open_native(spec, &path, StreamOptions::default())?;
-        let identity = primary_identity(spec, native.snapshot())?;
-        drop(native);
-        let mut store = create_state_store(
-            &path,
-            DiskIndexOptions::default(),
-            DiskIndexMetadata::new_state(
-                identity,
-                // Two records: the internal creation nonce plus the one push,
-                // so the exclusive sequence frontier moves from 1 to 2.
-                DiskIndexFrontier::new(clean_len, 2, Some(2)),
-                tail_limit_for_spec(spec).map_err(state_error)?,
-            ),
-            &[DiskIndexTail {
-                block_id: 99,
-                record_offset: first.record_offset,
-                sequence: first.sequence,
-            }],
-        )?;
-        store.begin_generation().map_err(state_error)?;
-        drop(store);
-        let mut file = OpenOptions::new().append(true).open(&path)?;
-        file.write_all(b"dirty-tail")?;
-        file.sync_all()?;
-        drop(file);
-        let dirty_len = fs::metadata(&path)?.len();
-
-        assert!(matches!(
-            VarlitStreamWriter::restore_checkpoint_and_open(spec, &path, StreamOptions::default()),
-            Err(Error::DiskIndex(_))
-        ));
-        assert_eq!(fs::metadata(&path)?.len(), dirty_len);
-        assert!(dirty_len > clean_len);
-        let store = DiskIndexStore::open(state_sidecar_path(&path), DiskIndexOptions::default())
-            .map_err(state_error)?;
-        assert_eq!(
-            store.read_metadata().map_err(state_error)?.state,
-            crate::disk_index::DiskIndexState::Dirty
-        );
-        Ok(())
-    }
-
-    #[test]
     fn low_level_stream_methods_cannot_bypass_keyed_chain_indexing() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("keyed-bypass.varlit");
@@ -3579,40 +3510,6 @@ mod tests {
         const ENDIAN: Option<Endian> = None;
         const IS_KEYED: bool = false;
         const SCHEMA_FINGERPRINT: u64 = 0x5354_5245_414D_0117;
-    }
-
-    /// In-place staging must produce exactly the bytes of the owning form,
-    /// whatever already sits in the chunk buffer.
-    #[test]
-    fn in_place_record_staging_matches_the_owning_form() -> Result<()> {
-        for policy in [IndexPolicy::ScanOnOpen, IndexPolicy::BlockOffsetChain] {
-            let spec = spec(policy, CommitPolicy::None);
-            let value = SamplesBlock((0..5000u16).map(|v| v.wrapping_mul(31)).collect());
-            for prefix in [0usize, 1, 333] {
-                let mut out = vec![0xEE; prefix];
-                let parts = prepare_stream_user_record_into(
-                    spec,
-                    &value,
-                    9,
-                    4096,
-                    Some(64),
-                    None,
-                    &mut out,
-                )?;
-                let owned = prepare_stream_user_record(spec, &value, 9, 4096, Some(64), None)?;
-                assert_eq!(&out[..prefix], &vec![0xEE; prefix][..]);
-                assert_eq!(&out[prefix..], &owned.bytes[..]);
-                assert_eq!(parts.len, owned.bytes.len());
-                assert_eq!(parts.checksum, owned.checksum);
-                assert_eq!(parts.info, owned.info);
-            }
-            let small = TestBlock(7);
-            let mut out = vec![1, 2, 3];
-            prepare_stream_user_record_into(spec, &small, 1, 100, None, None, &mut out)?;
-            let owned = prepare_stream_user_record(spec, &small, 1, 100, None, None)?;
-            assert_eq!(&out[3..], &owned.bytes[..]);
-        }
-        Ok(())
     }
 
     /// An over-limit payload is refused like the owning form and leaves the

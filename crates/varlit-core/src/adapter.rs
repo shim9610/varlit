@@ -766,7 +766,8 @@ impl SidecarIdentity {
     }
 
     fn from_main_file_inner(main: &Path, max_scan_bytes: u64) -> Result<Self> {
-        let mut file = fs::File::open(main)?;
+        let mut file =
+            crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), main)?;
         let main_len = file.metadata()?.len();
         if main_len > max_scan_bytes {
             return Err(Error::LimitExceeded {

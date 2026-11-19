@@ -78,6 +78,11 @@ def decoder_fixture():
         return source[start:end]
     start = source.index('pub struct Decoder<')
     structure = source[start:source.index("impl<'a> Decoder", start)]
+    # Keyed storage's callback names the crate's keyed block trait, which
+    # this fixture does not carry; no proof here decodes through it.
+    keyed = structure.find('struct KeyedCallback')
+    if keyed != -1:
+        structure = structure[:keyed] + structure[structure.index('struct CallbackGuard', keyed):]
     methods = ['new', 'new_limited', 'decode_from_slice_accounted', 'remaining',
                'decode_nested', 'charge_materialization', 'decode_complete',
                'decode_value','with_callback','with_existing_callback',

@@ -111,7 +111,7 @@ fn release_docs_and_installation_match_the_package_version() {
     let readme = fs::read_to_string(root.join("README.md")).unwrap();
     assert!(readme.contains(&format!("Version: **{version}**")));
     assert!(readme.contains(&format!("version = \"{version}\"")));
-    // A pre-release (`0.13.0-alpha.1`) is recorded in the changelog under
+    // A pre-release (`0.13.0-alpha.2`) is recorded in the changelog under
     // its own version; the API change notes describe the release it leads to
     // (`0.13.0`) and keep that heading and its anchor across pre-releases.
     let release = version.split('-').next().unwrap();

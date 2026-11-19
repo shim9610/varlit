@@ -1,5 +1,6 @@
 //! Varlit matrix: one matrix cell per grid cell, (cells / 1024) x 1024 keyspace.
-//! Updates write cells in place (copy-on-write generation pages); `sync()`
+//! Each cell is written and committed in one call (`write_matrix_run_bytes`,
+//! the load as runs of 4096 cells); `sync()`
 //! publishes a generation atomically. The matrix has no publication without a
 //! storage barrier, so the loss bound cannot be relaxed.
 //! app-built: nothing
@@ -44,9 +45,12 @@ pub fn create(p: &Path) -> Result<Box<dyn CellWriter>> {
     Ok(Box::new(W(CellGrid::spec().create_with_dims(p, dims)?)))
 }
 impl CellWriter for W {
+    fn load(&mut self, first: u32, data: &[u8]) -> Result<()> {
+        self.0.write_matrix_run_bytes::<Cell>(key(first), data)?;
+        Ok(())
+    }
     fn write(&mut self, id: u32, cell: &[u8]) -> Result<()> {
-        self.0.write_matrix_cell_payload::<Cell>(key(id), cell)?;
-        self.0.commit_matrix_cell::<Cell>(key(id))?;
+        self.0.write_matrix_run_bytes::<Cell>(key(id), cell)?;
         Ok(())
     }
     fn publish(&mut self, _durable: bool) -> Result<()> {

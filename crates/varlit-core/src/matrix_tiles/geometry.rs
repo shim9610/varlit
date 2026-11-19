@@ -7,7 +7,7 @@ use vstd::prelude::*;
 
 pub(crate) const TILE_MAGIC: &[u8; 4] = b"VTIL";
 pub(crate) const META_MAGIC: &[u8; 4] = b"VMTA";
-pub(crate) const LAYOUT_VERSION: u16 = 1;
+pub(crate) const LAYOUT_VERSION: u16 = 2;
 
 /// Tile record: fixed header, then the commit bitmap and its checksum (one
 /// unit, rewritten whole), then the slots (each the cell bytes and their
@@ -15,8 +15,12 @@ pub(crate) const LAYOUT_VERSION: u16 = 1;
 #[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) const TILE_HEADER_LEN: u64 = 40;
 /// Bytes of the metadata record before the per-block directory roots:
-/// fields (48), the creation nonce (16), their CRC32 (4), padding.
-pub(crate) const META_FIXED_LEN: u64 = 72;
+/// fields (48), the creation nonce (16), their CRC32 (4), padding, and the
+/// head of the overflow region list.
+pub(crate) const META_FIXED_LEN: u64 = 80;
+/// Where in the metadata record the newest overflow region's payload offset
+/// is (`0`: none). Outside the CRC: it changes through the ring like a root.
+pub(crate) const META_OVERFLOW_HEAD_AT: u64 = 72;
 /// One directory root: `(page offset, height)`.
 pub(crate) const META_ROOT_LEN: u64 = 16;
 
@@ -234,23 +238,20 @@ impl BlockGeom {
         row * cols + col
     }
 
-    /// A tile record's initial payload: header, an empty bitmap with its
-    /// checksum, zeroed slots.
+    /// An empty tile's 40-byte header. Every other byte of an empty tile is
+    /// zero but its bitmap's checksum, at [`Self::bitmap_at`] plus
+    /// [`Self::bitmap_len`].
     #[cfg_attr(verus_keep_ghost, verifier::external)]
-    pub(crate) fn encode_empty_tile(&self, at: TileCoord, out: &mut [u8]) {
-        debug_assert_eq!(out.len() as u64, self.tile_bytes());
-        out.fill(0);
-        out[0..4].copy_from_slice(TILE_MAGIC);
-        out[4..6].copy_from_slice(&LAYOUT_VERSION.to_le_bytes());
-        out[8..12].copy_from_slice(&self.block_id.to_le_bytes());
-        out[16..24].copy_from_slice(&at.row.to_le_bytes());
-        out[24..32].copy_from_slice(&at.col.to_le_bytes());
-        let crc = crc32fast::hash(&out[..32]);
-        out[32..36].copy_from_slice(&crc.to_le_bytes());
-        let bitmap = crate::width::bounded(self.bitmap_at(), out.len());
-        let len = crate::width::bounded(self.bitmap_len(), out.len());
-        let crc = crc32fast::hash(&out[bitmap..bitmap + len]);
-        out[bitmap + len..bitmap + len + 4].copy_from_slice(&crc.to_le_bytes());
+    pub(crate) fn empty_tile_header(&self, at: TileCoord) -> [u8; 40] {
+        let mut header = [0u8; 40];
+        header[0..4].copy_from_slice(TILE_MAGIC);
+        header[4..6].copy_from_slice(&LAYOUT_VERSION.to_le_bytes());
+        header[8..12].copy_from_slice(&self.block_id.to_le_bytes());
+        header[16..24].copy_from_slice(&at.row.to_le_bytes());
+        header[24..32].copy_from_slice(&at.col.to_le_bytes());
+        let crc = crc32fast::hash(&header[..32]);
+        header[32..36].copy_from_slice(&crc.to_le_bytes());
+        header
     }
 
     /// Checks a tile header read back from `offset` is this block's tile `at`.
@@ -342,7 +343,12 @@ impl TileCache {
 
     pub(crate) fn insert(&mut self, block: usize, tile: u64, at: u64) {
         let slot = self.slot(block, tile);
-        self.slots[slot] = (block as u32 + 1, tile, at);
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "block indexes a format's matrix blocks, a static list far below 2^32"
+        )]
+        let tag = block as u32 + 1;
+        self.slots[slot] = (tag, tile, at);
     }
 
     #[cfg(test)]
@@ -409,7 +415,12 @@ impl Geometry {
         out[0..4].copy_from_slice(META_MAGIC);
         out[4..6].copy_from_slice(&LAYOUT_VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&u16::from(self.growing).to_le_bytes());
-        out[8..12].copy_from_slice(&(self.blocks.len() as u32).to_le_bytes());
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a format's matrix blocks, a static list far below 2^32"
+        )]
+        let count = self.blocks.len() as u32;
+        out[8..12].copy_from_slice(&count.to_le_bytes());
         out[16..24].copy_from_slice(&self.dims[0].to_le_bytes());
         out[24..32].copy_from_slice(&self.dims[1].to_le_bytes());
         out[32..40].copy_from_slice(&ring.0.to_le_bytes());

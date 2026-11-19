@@ -1,6 +1,9 @@
 #[path = "support/pages.rs"]
 mod pages;
 
+#[path = "support/source_tree.rs"]
+mod source_tree;
+
 #[cfg(any(feature = "integrity", feature = "mmap"))]
 use std::fs::OpenOptions;
 use std::fs::{File, metadata, remove_file};
@@ -458,6 +461,190 @@ fn raw_matrix_spec() -> FormatSpec {
         BLOCKS,
     )
     .with_block_identities(&[RawMatrixCell::IDENTITY])
+    .with_matrix_spec(DIMS, COMMITS, MATRIX_BLOCKS)
+    .with_read_limits(ReadLimits::finite_all(u64::MAX))
+}
+
+/// A matrix cell of one plain `u32`, declared in the host's byte order.
+#[cfg(feature = "zero-copy")]
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
+)]
+#[varlit(id = 251, version = 1, kind = "matrix")]
+struct NativeWordCell {
+    value: u32,
+}
+
+#[cfg(feature = "zero-copy")]
+impl VarlitMatrixBlock for NativeWordCell {
+    const DIMENSIONS: [&'static str; 2] = ["scan", "ch"];
+    const CATEGORY: &'static str = "native";
+    const SLOT_STRIDE: u64 = 4;
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawMatrixBlock for NativeWordCell {
+    const RAW_ENDIAN: Endian = Endian::NATIVE;
+}
+
+/// The same layout declared big-endian, the order the (little-endian) file is
+/// not, so its raw view is refused on every host and the cell is decoded.
+/// (Declaring the host's *other* order instead would be a false promise on a
+/// big-endian host, `Little` for big-endian bytes, which the file's order
+/// would let through.)
+#[cfg(feature = "zero-copy")]
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
+)]
+#[varlit(id = 252, version = 1, kind = "matrix")]
+struct ForeignWordCell {
+    value: u32,
+}
+
+#[cfg(feature = "zero-copy")]
+impl VarlitMatrixBlock for ForeignWordCell {
+    const DIMENSIONS: [&'static str; 2] = ["scan", "ch"];
+    const CATEGORY: &'static str = "foreign";
+    const SLOT_STRIDE: u64 = 4;
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawMatrixBlock for ForeignWordCell {
+    const RAW_ENDIAN: Endian = Endian::Big;
+}
+
+/// A matrix cell of one `U32<LE>`: alignment 1 and a stated byte order, so it
+/// is viewed in place on every host and at any slot position.
+#[cfg(feature = "zero-copy")]
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
+)]
+#[varlit(id = 253, version = 1, kind = "matrix")]
+struct ByteorderWordCell {
+    value: varlit::zerocopy::byteorder::U32<varlit::zerocopy::byteorder::LittleEndian>,
+}
+
+#[cfg(feature = "zero-copy")]
+impl VarlitMatrixBlock for ByteorderWordCell {
+    const DIMENSIONS: [&'static str; 2] = ["scan", "ch"];
+    const CATEGORY: &'static str = "byteorder";
+    const SLOT_STRIDE: u64 = 4;
+}
+
+#[cfg(feature = "zero-copy")]
+unsafe impl varlit::VarlitRawMatrixBlock for ByteorderWordCell {
+    const RAW_ENDIAN: Endian = Endian::Little;
+}
+
+#[cfg(feature = "zero-copy")]
+fn word_matrix_spec() -> FormatSpec {
+    static BLOCKS: &[BlockDescriptor] = &[
+        BlockDescriptor {
+            id: NativeWordCell::ID,
+            name: "NativeWordCell",
+            version: NativeWordCell::VERSION,
+            kind: BlockKind::Matrix,
+            fields: NativeWordCell::FIELDS,
+        },
+        BlockDescriptor {
+            id: ForeignWordCell::ID,
+            name: "ForeignWordCell",
+            version: ForeignWordCell::VERSION,
+            kind: BlockKind::Matrix,
+            fields: ForeignWordCell::FIELDS,
+        },
+        BlockDescriptor {
+            id: ByteorderWordCell::ID,
+            name: "ByteorderWordCell",
+            version: ByteorderWordCell::VERSION,
+            kind: BlockKind::Matrix,
+            fields: ByteorderWordCell::FIELDS,
+        },
+    ];
+    static DIMS: &[MatrixDimensionDescriptor] = &[
+        MatrixDimensionDescriptor { name: "scan" },
+        MatrixDimensionDescriptor { name: "ch" },
+    ];
+    static COMMITS: &[MatrixCommitDescriptor] = &[
+        MatrixCommitDescriptor {
+            name: NativeWordCell::CATEGORY,
+            kind: MatrixCommitKind::Cell,
+        },
+        MatrixCommitDescriptor {
+            name: ForeignWordCell::CATEGORY,
+            kind: MatrixCommitKind::Cell,
+        },
+        MatrixCommitDescriptor {
+            name: ByteorderWordCell::CATEGORY,
+            kind: MatrixCommitKind::Cell,
+        },
+    ];
+    static MATRIX_BLOCKS: &[MatrixBlockDescriptor] = &[
+        MatrixBlockDescriptor {
+            block_id: NativeWordCell::ID,
+            dimensions: NativeWordCell::DIMENSIONS,
+            category: NativeWordCell::CATEGORY,
+            slot_stride: NativeWordCell::SLOT_STRIDE,
+            tile: [0, 0],
+        },
+        MatrixBlockDescriptor {
+            block_id: ForeignWordCell::ID,
+            dimensions: ForeignWordCell::DIMENSIONS,
+            category: ForeignWordCell::CATEGORY,
+            slot_stride: ForeignWordCell::SLOT_STRIDE,
+            tile: [0, 0],
+        },
+        MatrixBlockDescriptor {
+            block_id: ByteorderWordCell::ID,
+            dimensions: ByteorderWordCell::DIMENSIONS,
+            category: ByteorderWordCell::CATEGORY,
+            slot_stride: ByteorderWordCell::SLOT_STRIDE,
+            tile: [0, 0],
+        },
+    ];
+    FormatSpec::new(
+        b"WMTX",
+        1,
+        Endian::Little,
+        0,
+        IndexPolicy::ScanOnOpen,
+        varlit::IntegrityPolicy::None,
+        varlit::RecoveryPolicy::Strict,
+        varlit::ManifestPolicy::None,
+        BLOCKS,
+    )
+    .with_block_identities(&[
+        NativeWordCell::IDENTITY,
+        ForeignWordCell::IDENTITY,
+        ByteorderWordCell::IDENTITY,
+    ])
     .with_matrix_spec(DIMS, COMMITS, MATRIX_BLOCKS)
     .with_read_limits(ReadLimits::finite_all(u64::MAX))
 }
@@ -1302,6 +1489,83 @@ fn matrix_zero_copy_raw_cell_views_committed_slot() -> varlit::Result<()> {
     Ok(())
 }
 
+/// `raw_cell_or_decode` views a cell where its byte order is the host's and
+/// decodes it, converting, where it is not: the value is the same either way,
+/// and the fallback says so.
+#[cfg(feature = "zero-copy")]
+#[test]
+fn raw_cell_or_decode_views_or_falls_back_with_the_same_value() -> varlit::Result<()> {
+    let path = temp_path("matrix_raw_or_decode");
+    cleanup(&path);
+    let spec = word_matrix_spec();
+    let key = MatrixKey::new(1, 1);
+    let value = 0x0102_0304u32;
+    {
+        let dims = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
+        let mut writer = spec.create_writer_with_dims(&path, dims)?;
+        writer.write_matrix_cell(key, &NativeWordCell { value })?;
+        writer.commit_matrix_cell::<NativeWordCell>(key)?;
+        writer.write_matrix_cell(key, &ForeignWordCell { value })?;
+        writer.commit_matrix_cell::<ForeignWordCell>(key)?;
+        writer.write_matrix_cell(
+            key,
+            &ByteorderWordCell {
+                value: value.into(),
+            },
+        )?;
+        writer.commit_matrix_cell::<ByteorderWordCell>(key)?;
+        writer.sync()?;
+    }
+    {
+        let reader = spec.open_reader(&path)?;
+        // SAFETY: The fixture is not modified while the mapping is alive.
+        let mmap = unsafe { reader.mmap_matrix()? };
+        // The file is little-endian: a native-order view opens on a
+        // little-endian host and falls back on a big-endian one.
+        // A view is also refused when the slot is not aligned for `u32`
+        // (slots are packed with their checksums), so the fallback is taken
+        // exactly when the raw view is refused, for either reason.
+        let raw = unsafe { mmap.raw_cell::<NativeWordCell>(key) };
+        let native = unsafe { mmap.raw_cell_or_decode::<NativeWordCell>(key) }?;
+        assert_eq!(native.value, value);
+        assert_eq!(native.is_fallback(), raw.is_err());
+        match raw {
+            Ok(view) => assert_eq!(view.value, value),
+            Err(Error::ZeroCopyEndianMismatch { .. }) => {
+                assert_ne!(Endian::NATIVE, Endian::Little);
+            }
+            Err(Error::ZeroCopyAlignmentMismatch { .. }) => {}
+            Err(other) => panic!("unexpected refusal {other:?}"),
+        }
+        // Declared in the other order, the view is refused on every host and
+        // the decoded value is still right.
+        let foreign = unsafe { mmap.raw_cell_or_decode::<ForeignWordCell>(key) }?;
+        assert_eq!(foreign.value, value);
+        assert!(foreign.is_fallback());
+        assert!(matches!(
+            unsafe { mmap.raw_cell::<ForeignWordCell>(key) },
+            Err(Error::ZeroCopyEndianMismatch { .. } | Error::ZeroCopyAlignmentMismatch { .. })
+        ));
+        // Alignment 1 and a stated order: viewed in place on every host, at a
+        // slot position a `u32` could not be viewed at.
+        let viewed = unsafe { mmap.raw_cell::<ByteorderWordCell>(key) }?;
+        assert_eq!(viewed.value.get(), value);
+        let view = unsafe { mmap.raw_cell_or_decode::<ByteorderWordCell>(key) }?;
+        assert!(!view.is_fallback());
+        assert_eq!(view.value.get(), value);
+        let mut decoded = <ByteorderWordCell as varlit::VarlitEmpty>::empty();
+        reader.read_matrix_cell(key, &mut decoded)?;
+        assert_eq!(decoded.value.get(), value);
+        // A cell that was never committed is refused, not decoded.
+        assert!(matches!(
+            unsafe { mmap.raw_cell_or_decode::<NativeWordCell>(MatrixKey::new(0, 0)) },
+            Err(Error::MatrixNotCommitted)
+        ));
+    }
+    cleanup(&path);
+    Ok(())
+}
+
 struct TempPath {
     path: PathBuf,
     _dir: tempfile::TempDir,
@@ -1437,8 +1701,8 @@ fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
          to the policy that scopes it"
     );
 
-    let file_rs = std::fs::read_to_string(root.join("crates/varlit-core/src/file.rs"))
-        .expect("crates/varlit-core/src/file.rs is readable");
+    // With the files `file.rs` includes, where `VarlitWriter` lives.
+    let file_rs = source_tree::expanded_source(&root.join("crates/varlit-core/src/file.rs"));
     assert!(
         file_rs.contains("Allocator Failure And Published Outcomes"),
         "the rustdoc on write_matrix_cell_durable is the copy a user reads from \

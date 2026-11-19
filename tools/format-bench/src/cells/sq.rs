@@ -1,11 +1,15 @@
 //! SQLite: one row per cell (`id INTEGER PRIMARY KEY, data BLOB`); an update
 //! is one transaction. WAL + `synchronous=NORMAL` makes a commit visible
 //! without a WAL sync; durable updates run at FULL; WAL checkpoints at durable
-//! commits once ~4 MB accumulated. Readers hold one read transaction per poll.
+//! commits once ~4 MB accumulated; the initial load commits every 256 MiB.
+//! Readers hold one read transaction per poll.
 //! Candidates: page size, optional memory map.
 //! app-built: nothing
 use super::*;
 use ::rusqlite::{Connection, OpenFlags, params};
+
+/// Initial-load bytes per transaction.
+const LOAD_COMMIT: usize = 256 << 20;
 
 pub const CANDIDATES: &[&str] = &["p4096", "p16384", "p4096-mmap"];
 
@@ -49,12 +53,24 @@ impl CellWriter for W {
         for (i, cell) in data.chunks_exact(CELL).enumerate() {
             st.execute(params![(first as usize + i) as i64, cell])?;
         }
+        // Commit and fold the WAL into the database every LOAD_COMMIT bytes:
+        // with autocheckpoint off, one load transaction would keep the whole
+        // data set in the WAL and need twice its size on disk.
+        self.wal += data.len();
+        if self.wal >= LOAD_COMMIT {
+            self.c.execute_batch("COMMIT")?;
+            self.c
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+            self.c.execute_batch("BEGIN")?;
+            self.wal = 0;
+        }
         Ok(())
     }
     fn loaded(&mut self) -> Result<()> {
         self.c.execute_batch("COMMIT")?;
         self.c
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        self.wal = 0;
         self.c.execute_batch("PRAGMA synchronous=NORMAL;")?;
         Ok(())
     }

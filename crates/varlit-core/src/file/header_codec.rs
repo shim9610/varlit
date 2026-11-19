@@ -1,4 +1,4 @@
-//! header codec implementation, kept within the original parent privacy boundary.
+//! Encoding and decoding the file header, schema manifest, index checkpoints, segment payloads and the header-slot and header-tail regions.
 use super::*;
 
 #[cfg(test)]
@@ -278,7 +278,8 @@ pub(super) fn encode_schema_manifest(spec: FormatSpec) -> Result<Vec<u8>> {
         None => payload.push(0),
     }
     encode_manifest_compression_policy(&mut payload, spec.compression_policy);
-    payload.extend_from_slice(&(spec.blocks.len() as u32).to_le_bytes());
+    let block_count = u32::try_from(spec.blocks.len()).map_err(|_| Error::InvalidSchemaManifest)?;
+    payload.extend_from_slice(&block_count.to_le_bytes());
     for block in spec.blocks {
         payload.extend_from_slice(&block.id.to_le_bytes());
         payload.extend_from_slice(&block.version.to_le_bytes());
@@ -287,7 +288,9 @@ pub(super) fn encode_schema_manifest(spec: FormatSpec) -> Result<Vec<u8>> {
         let name_len = u16::try_from(name.len()).map_err(|_| Error::InvalidSchemaManifest)?;
         payload.extend_from_slice(&name_len.to_le_bytes());
         payload.extend_from_slice(name);
-        payload.extend_from_slice(&(block.fields.len() as u32).to_le_bytes());
+        let field_count =
+            u32::try_from(block.fields.len()).map_err(|_| Error::InvalidSchemaManifest)?;
+        payload.extend_from_slice(&field_count.to_le_bytes());
         for field in block.fields {
             payload.extend_from_slice(&field.id.to_le_bytes());
             payload.push(wire_type_byte(field.wire_type));
@@ -1192,7 +1195,7 @@ fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
             | SEGMENT_BLOCK_ID
             | MATRIX_CHUNK_BLOCK_ID
             | OPEN_DIGEST_BLOCK_ID => entry.block_version == 1,
-            MATRIX_TILE_BLOCK_ID => (1..=4).contains(&entry.block_version),
+            MATRIX_TILE_BLOCK_ID => (1..=7).contains(&entry.block_version),
             _ => true, // Preserve unknown internal extensions without interpreting them.
         };
         if !supported {
@@ -1228,6 +1231,17 @@ pub(crate) fn file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
     // the bytes it produced before this existed.
     if spec.header_slots.is_declared() {
         payload.extend_from_slice(&encode_empty_header_slots_region(spec)?);
+    }
+    // The published end, last of all, for formats whose records become
+    // visible at commit markers: a durable commit's marker must not be
+    // adopted before its barrier returns. Under the other policies a record
+    // is visible once written, by contract, so nothing waits on a barrier. A
+    // file without the block (written before it existed) is read to its end,
+    // as it always was.
+    if crate::published_end::applies_to(spec) {
+        payload.extend_from_slice(PUBLISHED_END_MAGIC);
+        payload.extend_from_slice(&crate::width::small32(PUBLISHED_END_PAYLOAD_LEN).to_le_bytes());
+        payload.extend_from_slice(&crate::published_end::empty_payload());
     }
     Ok(payload)
 }
@@ -1341,7 +1355,8 @@ pub(super) fn encode_header_tails_slot(
     let (flags, count) = if overflow {
         (HEADER_TAILS_FLAG_OVERFLOW, 0u32)
     } else {
-        (0u16, tails.len() as u32)
+        // `tails.len() <= capacity`, which fits u32 (checked above).
+        (0u16, u32::try_from(tails.len()).unwrap_or(capacity_u32))
     };
     let mut slot = Vec::new();
     slot.try_reserve_exact(slot_len)
@@ -1393,6 +1408,7 @@ pub(super) fn is_known_header_extension_magic(magic: &[u8; 4]) -> bool {
         || magic == HEADER_TAILS_MAGIC
         || magic == LIVENESS_MAGIC
         || magic == HEADER_SLOTS_MAGIC
+        || magic == PUBLISHED_END_MAGIC
 }
 
 /// Whether the file is allowed to disagree with this spec about the block's
@@ -1420,7 +1436,7 @@ pub(super) fn is_known_header_extension_magic(magic: &[u8; 4]) -> bool {
 pub(super) fn encode_liveness_block(flags: u16) -> [u8; 8 + LIVENESS_PAYLOAD_LEN] {
     let mut block = [0u8; 8 + LIVENESS_PAYLOAD_LEN];
     block[..4].copy_from_slice(LIVENESS_MAGIC);
-    block[4..8].copy_from_slice(&(LIVENESS_PAYLOAD_LEN as u32).to_le_bytes());
+    block[4..8].copy_from_slice(&crate::width::small32(LIVENESS_PAYLOAD_LEN).to_le_bytes());
     block[8..10].copy_from_slice(&LIVENESS_BLOCK_VERSION.to_le_bytes());
     block[10..12].copy_from_slice(&flags.to_le_bytes());
     let checksum = liveness_checksum(&block[8..12]);
@@ -1521,8 +1537,10 @@ impl HeaderSlotsView<'_> {
 
     /// What the checksum should be: everything in the payload except the four
     /// bytes holding the checksum itself.
-    pub(super) fn expected_checksum(&self, capacity: usize) -> u32 {
-        let prefix = header_slots_prefix(self.flags, capacity as u32, self.used as u32);
+    pub(super) fn expected_checksum(&self, capacity: u32) -> u32 {
+        // Decoding refused a `used` above the capacity, a u32.
+        let used = u32::try_from(self.used).unwrap_or(capacity);
+        let prefix = header_slots_prefix(self.flags, capacity, used);
         header_slots_checksum_continue(header_slots_checksum(&prefix), self.entries)
     }
 }
@@ -1664,7 +1682,6 @@ pub(super) fn encode_empty_header_slots_region(spec: FormatSpec) -> Result<Vec<u
     let framed = crate::format::header_slots_region_len(spec);
     let framed_len = usize::try_from(framed)
         .map_err(|_| Error::InvalidFormatSpec("header_slots region length overflows"))?;
-    let capacity = spec.header_slots.capacity as usize;
     let payload_len =
         framed_len - crate::width::small(crate::format::HEADER_SLOTS_BLOCK_FRAMING_LEN);
     let payload_len_u32 = u32::try_from(payload_len)
@@ -1678,7 +1695,7 @@ pub(super) fn encode_empty_header_slots_region(spec: FormatSpec) -> Result<Vec<u
         })?;
     region.extend_from_slice(HEADER_SLOTS_MAGIC);
     region.extend_from_slice(&payload_len_u32.to_le_bytes());
-    let prefix = header_slots_prefix(0, capacity as u32, 0);
+    let prefix = header_slots_prefix(0, spec.header_slots.capacity, 0);
     region.extend_from_slice(&prefix);
     region.resize(framed_len, 0);
     let checksum = header_slots_checksum_continue(header_slots_checksum(&prefix), &region[24..]);
@@ -1727,7 +1744,10 @@ pub(super) fn encode_header_slots_payload(
 }
 
 pub(super) fn is_mutable_header_extension_magic(magic: &[u8; 4]) -> bool {
-    magic == HEADER_TAILS_MAGIC || magic == LIVENESS_MAGIC || magic == HEADER_SLOTS_MAGIC
+    magic == HEADER_TAILS_MAGIC
+        || magic == LIVENESS_MAGIC
+        || magic == HEADER_SLOTS_MAGIC
+        || magic == PUBLISHED_END_MAGIC
 }
 
 /// Walk the extension region as a block sequence.
@@ -1909,6 +1929,21 @@ pub(super) fn mutable_header_block_extents(
 }
 
 /// One named mutable block's extent, for a writer that needs to hit exactly it.
+/// Header offset of the `VPUB` slots, when the file has a published end
+/// block of this build's geometry.
+pub(super) fn published_end_slots_at(header_len: u64, extensions: &[u8]) -> Result<Option<u64>> {
+    let Some(extent) = mutable_header_block_extent(header_len, extensions, PUBLISHED_END_MAGIC)?
+    else {
+        return Ok(None);
+    };
+    if extent.payload_len != PUBLISHED_END_PAYLOAD_LEN {
+        return Ok(None);
+    }
+    Ok(Some(
+        extent.payload_offset + crate::published_end::SLOTS_AT as u64,
+    ))
+}
+
 pub(super) fn mutable_header_block_extent(
     header_len: u64,
     extensions: &[u8],
@@ -1977,10 +2012,17 @@ pub(super) fn validate_file_header_extensions(spec: FormatSpec, extensions: &[u8
     let present = parse_file_header_extension_blocks(extensions)?;
     let expected_blocks = parse_file_header_extension_blocks(&expected)?;
     for expected_block in &expected_blocks {
-        let found = present
+        let Some(found) = present
             .iter()
             .find(|block| block.magic == expected_block.magic)
-            .ok_or(Error::InvalidCompressionHeader)?;
+        else {
+            // A file written before the published end existed has no block,
+            // and is read to its end.
+            if &expected_block.magic == PUBLISHED_END_MAGIC {
+                continue;
+            }
+            return Err(Error::InvalidCompressionHeader);
+        };
         if is_mutable_header_extension_magic(&expected_block.magic) {
             // Contents are the file's to change; the length is not. Comparing
             // it is what keeps every offset derived from `header_len` valid.

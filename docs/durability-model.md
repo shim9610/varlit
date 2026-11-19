@@ -57,6 +57,36 @@ one `Err`:
   `Error::PublishedButParentSyncPending`, described in the next section, and
   leaves the request pending so a later `sync` retries it.
 
+### What readers see before the barrier returns
+
+Under a transaction-marker commit policy a reader, opened or following,
+adopts a commit only once the writer has *published* it, and a durable
+commit is published after its barrier returns. The writer's records and the
+marker reach the file with positional writes before the barrier, so without
+this a follower could adopt a transaction that a power loss would then take
+away. The published end is a `VPUB` header block (see the
+[specification](spec.md#published-end)) that the writer rewrites in place:
+
+- `commit_durable` and `sync` publish after their barrier returns;
+- `commit`, `flush` (with `OnFlush` markers) and releasing the writer promise
+  visibility without durability, and publish at once;
+- a read-write open syncs what an earlier writer left and publishes it.
+
+Publishing costs one 24-byte positional write and no barrier. A reader stops
+at the published end; bytes past it are not part of the file it sees. If the
+barrier fails, the commit stays unpublished until a later `sync` succeeds
+(`a_follower_does_not_adopt_a_commit_whose_barrier_did_not_return`); a clean
+release then publishes it, as the paragraph above describes.
+
+After an operating-system crash the newest published end may not have reached
+the disk, since it is never synced on its own. A reader then stops at the end
+published before it (the next barrier makes each end durable), which can hide
+the last durable commit until a writer opens the file again and publishes
+what it holds. It never shows a commit that was not durable.
+
+Formats under other commit policies have no block: their records are visible
+once written, by contract, and no visibility waits on a barrier.
+
 This is the same published-outcome family as `PublishedButRebindFailed`,
 `MatrixCommittedButHookFailed` and `MatrixCommittedButDurabilityUnproven`: a
 caller that receives one of them must not treat the operation as
@@ -191,8 +221,8 @@ parent directory with write access, and no open or flush failure is ever
 promoted to a `Durable` result. On filesystems that refuse a directory
 write-open or flush, every publication surfaces
 `PublishedButParentSyncPending` rather than a false durability claim; the same
-honesty applies to the native sidecar publication sites (stream/indexed sidecar
-create, stream bootstrap, disk-index rebuild and compaction), which surface the pending state
+honesty applies to the native sidecar publication sites (stream sidecar
+create, stream bootstrap and sidecar compaction), which surface the pending state
 while preserving the already-published sidecar instead of silently discarding
 it.
 
@@ -238,14 +268,14 @@ directory pages that locate it. After that, cell slots, tile commit bitmaps,
 directory entries, single and per-channel commit flags and aux bytes are
 rewritten in place. Overwrites do not grow the file
 (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`,
-`the_ring_holds_the_disk_space_constant`). There is no companion file:
+`the_ring_holds_the_disk_space_constant`), except that a publication larger
+than half the ring adds overflow records once, which later large publications
+of the same writer reuse (see below). There is no companion file:
 `matrix_generation_path()` returns the primary path, and copying the primary
 copies the whole matrix. Primary-file replacement, rewrite and defragmentation
-are refused for matrix files with `InvalidFormatSpec`. An indexed
-(high-cardinality) primary can carry a matrix the same way; its sync markers
-leave the in-place matrix payloads out of their checksums
-(`keyed_records_and_a_matrix_share_an_indexed_primary`,
-`recovery_keeps_links_whose_tiles_were_rewritten_since`).
+are refused for matrix files with `InvalidFormatSpec`. Stream handles refuse
+a format that declares a matrix block with `StreamingUnsupported`; the indexed
+primary that could carry a matrix was removed.
 
 Readers trust only commit bits. A clear commit bit means `NotCommitted`
 regardless of slot bytes. A slot holds the payload followed by its CRC32;
@@ -298,9 +328,56 @@ The ring size is fixed when the matrix is created.
 `FormatSpec::with_matrix_ring_bytes(bytes)` declares it; otherwise it is twice
 the slot bytes of the declared extents, kept between 256 KiB and 16 MiB and no
 larger than the `RecordPayloadLen` limit. A ring larger than 64 MiB is refused
-with `LimitExceeded`. A frame holds at most a quarter of the ring, and one
-staged unit (a slot, a tile bitmap, a 256-byte page of flags or aux bytes)
-that does not fit in a frame is refused with `LimitExceeded`.
+with `LimitExceeded`. A frame holds at most a quarter of the ring.
+
+### Publications larger than the ring
+
+A publication is not limited by the ring, and its size never grows the
+writer's memory. Every staged byte goes from the caller's buffer to the file
+when it is staged: into a ring frame while the publication is small, and once
+its frames would take more than half the ring (or a reader's overlay could
+not hold its ranges, or one range does not fit a frame), into overflow space,
+with an on-disk index (a B+tree keyed by target) recording where each range's
+newest bytes are. The commit frame then names the index root: one 64-byte
+frame whatever the publication's size. The commit is unchanged: the file,
+index pages and overflow data included, is synced before the commit frame is
+written, so readers see the whole publication or none of it
+(`a_sync_larger_than_the_ring_publishes_whole_and_reuses_its_overflow`,
+`a_crash_inside_a_streamed_publication_recovers_all_or_nothing`).
+
+Readers look ranges up in the index through a fixed page cache; a checkpoint
+walks the index in key order and writes each range in place through a fixed
+copy buffer. Before a publication starts an index the writer puts every
+published generation in place, so the overflow space earlier indexes used is
+free again: repeating a large rewrite reuses the same regions instead of
+growing the file. Overflow data is written over only after its generation is
+checkpointed and the ring header records that no reader may still read it
+(`reclaimed`); a reader that was behind gets `MatrixSnapshotExpired`, never
+the newer bytes. Regions are whole mebibytes, each at least as long as what
+its publication put in overflow space before it (so a long publication takes
+a few regions of doubling size) and at most the record payload limit. The
+metadata record points at a list of the regions, so a reopened writer finds
+and reuses them too.
+
+Free overflow space also takes new tiles and directory pages: one that fits
+is placed at the end of a free region instead of being appended, and the
+region's header records the space as taken with the publication that first
+points at it. Rewriting a large part of the matrix and then extending it
+therefore fills the space the rewrite used before the file grows
+(`new_tiles_fill_free_overflow_space_and_the_space_survives_a_reopen`,
+`a_crash_while_tiles_fill_overflow_space_recovers_all_or_nothing`).
+
+### Memory
+
+A matrix handle allocates what it needs when it is opened: the ring overlay
+(`ring length / 256` ranges), a 256-page index cache, 64 KiB scan and copy
+buffers, and cell, bitmap and key-order buffers sized by the format. After
+that, writing and committing cells, publishing (through the ring or an
+index), following, reading and checkpointing allocate nothing
+(`matrix_data_paths_allocate_nothing_after_open`). New tiles, directory
+pages and overflow regions are appended as records of zeros written from a
+static page, without a buffer of their size; the file's in-memory record
+index still grows by one entry for each such record.
 
 When a frame does not fit, the writer runs a checkpoint inside that call. It
 chooses the oldest published generations whose removal leaves room for the
@@ -540,7 +617,7 @@ If detailed source/path storage cannot be allocated, they return
 append/commit sequence, published index, replacement rebind (including pending
 parent sync), published replacement, or experimental reuse generation and its
 uncertainty. Details can be lost; the completed/uncertain outcome is retained.
-A caller must inspect that outcome before retrying. Disk-index wrapping preserves
+A caller must inspect that outcome before retrying. Stream sidecar wrapping preserves
 a primary publication error even when an additional wrapper cannot be allocated.
 
 This replaces the earlier abort-on-error-box policy. Preallocation of a scalar

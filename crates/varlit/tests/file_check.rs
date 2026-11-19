@@ -426,15 +426,19 @@ varlit_format! {
         magic: b"DISK-CHECK"; version: 1; endian: little; schema_hash: computed;
         index: keyed_offset_chain;
         blocks {
-            variable DiskReading(id = 4, key = [station], key_index = disk) {
+            variable DiskReading(id = 4, key = [station]) {
                 station: u64, value: u64,
             }
         }
     }
 }
 
+/// A keyed native file has no companion file: the disk-index companion this
+/// check used to leave `Unverified` was removed with the indexed primary
+/// (`key_index = disk` is now a compile error), so the coherence check does
+/// not apply and the file passes on its own bytes.
 #[test]
-fn declared_disk_companion_is_not_silently_certified() -> varlit::Result<()> {
+fn a_keyed_file_has_no_companion_to_certify() -> varlit::Result<()> {
     let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("disk.varlit");
     {
@@ -446,13 +450,13 @@ fn declared_disk_companion_is_not_silently_certified() -> varlit::Result<()> {
         file.sync()?;
     }
     let report = DiskChecked::check_file(&path)?;
-    assert!(!report.passed());
     let check = report
         .checks()
         .iter()
         .find(|c| c.code == "sidecar.coherence")
         .unwrap();
-    assert_eq!(check.status, FileCheckStatus::Unverified, "{report:#?}");
+    assert_eq!(check.status, FileCheckStatus::NotApplicable, "{report:#?}");
+    assert!(report.passed(), "{report:#?}");
     Ok(())
 }
 

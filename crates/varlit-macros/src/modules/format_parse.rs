@@ -14,6 +14,8 @@ pub(super) struct FormatInput {
     pub(super) integrity: IntegrityChoice,
     pub(super) liveness: LivenessChoice,
     pub(super) header_slots: Option<HeaderSlotsChoice>,
+    /// `keyed_storage: in_place(free_space = N%)`: the free-space percent.
+    pub(super) keyed_storage: Option<u16>,
     pub(super) recovery: RecoveryChoice,
     pub(super) manifest: ManifestChoice,
     pub(super) compression: CompressionChoice,
@@ -266,12 +268,6 @@ pub(super) enum InlineBlockKind {
     Matrix(MatrixBlockMeta),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum KeyIndexChoice {
-    Memory,
-    Disk,
-}
-
 pub(super) struct InlineBlock {
     pub(super) kind: InlineBlockKind,
     pub(super) name: Ident,
@@ -279,7 +275,6 @@ pub(super) struct InlineBlock {
     pub(super) version: u16,
     pub(super) key_fields: Vec<Ident>,
     pub(super) finite_key: Option<finite_key::FiniteKey>,
-    pub(super) key_index: KeyIndexChoice,
     pub(super) durability: Option<LitStr>,
     pub(super) immediate_if: Option<LitStr>,
     pub(super) fields: Vec<InlineField>,
@@ -347,6 +342,7 @@ impl Parse for FormatInput {
         let mut integrity = IntegrityChoice::None;
         let mut liveness = LivenessChoice::None;
         let mut header_slots: Option<HeaderSlotsChoice> = None;
+        let mut keyed_storage: Option<u16> = None;
         let mut recovery = RecoveryChoice::Strict;
         let mut manifest = ManifestChoice::None;
         let mut compression = CompressionChoice::None;
@@ -459,6 +455,8 @@ impl Parse for FormatInput {
                         ));
                     }
                 }
+            } else if key == "keyed_storage" {
+                keyed_storage = Some(parse_keyed_storage(&content)?);
             } else if key == "extension" {
                 extension = Some(content.parse()?);
             } else if key == "index" {
@@ -613,6 +611,7 @@ impl Parse for FormatInput {
             integrity,
             liveness,
             header_slots,
+            keyed_storage,
             recovery,
             manifest,
             compression,
@@ -1189,8 +1188,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
     let mut id = None;
     let mut version = 1u16;
     let mut key_fields = Vec::new();
-    let mut key_index = KeyIndexChoice::Memory;
-    let mut key_index_span = None;
     let mut finite_key_decl = None;
     let mut durability = None;
     let mut immediate_if = None;
@@ -1249,18 +1246,11 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
                 immediate_if = Some(LitStr::new(&quote!(#value).to_string(), key.span()));
             }
             "key_index" => {
-                if key_index_span.is_some() {
-                    return Err(syn::Error::new_spanned(key, "duplicate key_index"));
-                }
-                let value: Ident = meta.parse()?;
-                key_index = match value.to_string().as_str() {
-                    "memory" => KeyIndexChoice::Memory,
-                    "disk" => KeyIndexChoice::Disk,
-                    _ => {
-                        return Err(syn::Error::new_spanned(value, "expected memory or disk"));
-                    }
-                };
-                key_index_span = Some(key.span());
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "key_index was removed: keyed records no longer keep a disk \
+                     index sidecar; see docs/design/bounded-keyed-storage.md",
+                ));
             }
             "dims" => {
                 let inner;
@@ -1302,7 +1292,7 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
             _ => {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "expected id, version, key, key_values, key_domain, key_index, durability, immediate_if, dims, category, or tile",
+                    "expected id, version, key, key_values, key_domain, durability, immediate_if, dims, category, or tile",
                 ));
             }
         }
@@ -1311,12 +1301,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
         }
     }
     let kind = if matches!(&kind, InlineBlockKind::Matrix(_)) {
-        if let Some(span) = key_index_span {
-            return Err(syn::Error::new(
-                span,
-                "key_index is not supported on matrix blocks",
-            ));
-        }
         if !key_fields.is_empty() {
             return Err(syn::Error::new_spanned(
                 &name,
@@ -1350,14 +1334,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
         }
         kind
     };
-    if let Some(span) = key_index_span
-        && key_fields.is_empty()
-    {
-        return Err(syn::Error::new(
-            span,
-            "key_index requires a keyed fixed or variable block",
-        ));
-    }
     let body;
     braced!(body in input);
     let mut fields = Vec::new();
@@ -1459,7 +1435,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
         version,
         key_fields,
         finite_key,
-        key_index,
         durability,
         immediate_if,
         fields,
@@ -1836,4 +1811,36 @@ pub(super) fn parse_variable_compression_choice(
         only_if_smaller,
         max_len,
     })
+}
+
+/// `in_place` or `in_place(free_space = N%)`, N from 1 to 5: the free-space
+/// percent, 5 when not given.
+pub(super) fn parse_keyed_storage(input: ParseStream<'_>) -> Result<u16> {
+    let kind: Ident = input.parse()?;
+    if kind != "in_place" {
+        return Err(syn::Error::new_spanned(
+            kind,
+            "expected in_place: keyed blocks stored once per key and updated in place",
+        ));
+    }
+    if !input.peek(syn::token::Paren) {
+        return Ok(5);
+    }
+    let inner;
+    parenthesized!(inner in input);
+    let name: Ident = inner.parse()?;
+    if name != "free_space" {
+        return Err(syn::Error::new_spanned(name, "expected free_space = N%"));
+    }
+    inner.parse::<Token![=]>()?;
+    let value: LitInt = inner.parse()?;
+    inner.parse::<Token![%]>()?;
+    let percent = value.base10_parse::<u16>()?;
+    if !(1..=5).contains(&percent) {
+        return Err(syn::Error::new_spanned(
+            value,
+            "free_space must be 1% to 5%",
+        ));
+    }
+    Ok(percent)
 }

@@ -1,4 +1,4 @@
-//! locks implementation, kept within the original parent privacy boundary.
+//! Writer exclusion: the lock marker beside a file, the native lock on the file object, and the operating-system calls behind both.
 use super::*;
 
 /// Opens the diagnostic `<target>.lock` marker for mutation, refusing any
@@ -39,7 +39,9 @@ pub(super) fn open_lock_marker_without_following(path: &Path) -> Result<File> {
         .write(true)
         .create(true)
         .truncate(false)
-        .custom_flags(libc::O_NOFOLLOW)
+        // O_NONBLOCK: a FIFO planted at the marker's name must not hold the
+        // open; the type check that follows refuses it.
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
     {
         Ok(file) => Ok(file),
@@ -396,11 +398,12 @@ impl WriterLock {
 /// A missing file has no aliases, so there is nothing to lock yet; creators
 /// call [`WriterLock::bind_native`] on the handle they create instead.
 pub(super) fn probe_native_target_lock(target_path: &Path) -> Result<Option<File>> {
-    let native = match OpenOptions::new().read(true).open(target_path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
+    let native =
+        match crate::primary_file::open_data_file(OpenOptions::new().read(true), target_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
     match try_lock_native_guard(&native) {
         Ok(()) => Ok(Some(native)),
         Err(WriterGuardLockError::WouldBlock) => {
@@ -506,9 +509,10 @@ pub(super) fn unlock_exclusive_range(file: &File, offset: u64) -> std::io::Resul
     use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_0_0};
 
     let mut overlapped = OVERLAPPED::default();
+    let [b0, b1, b2, b3, b4, b5, b6, b7] = offset.to_le_bytes();
     overlapped.Anonymous.Anonymous = OVERLAPPED_0_0 {
-        Offset: offset as u32,
-        OffsetHigh: (offset >> 32) as u32,
+        Offset: u32::from_le_bytes([b0, b1, b2, b3]),
+        OffsetHigh: u32::from_le_bytes([b4, b5, b6, b7]),
     };
     // SAFETY: mirrors `try_lock_exclusive_range` - `file` is open for the
     // duration, the OVERLAPPED value is initialized for the same synchronous
@@ -538,9 +542,10 @@ pub(super) fn try_lock_exclusive_range(
     use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_0_0};
 
     let mut overlapped = OVERLAPPED::default();
+    let [b0, b1, b2, b3, b4, b5, b6, b7] = offset.to_le_bytes();
     overlapped.Anonymous.Anonymous = OVERLAPPED_0_0 {
-        Offset: offset as u32,
-        OffsetHigh: (offset >> 32) as u32,
+        Offset: u32::from_le_bytes([b0, b1, b2, b3]),
+        OffsetHigh: u32::from_le_bytes([b4, b5, b6, b7]),
     };
     // SAFETY: `file` remains open for the lifetime of the acquired lock, the
     // OVERLAPPED value is initialized for a synchronous one-byte range lock,
@@ -807,11 +812,12 @@ fn clear_and_verify_writer_lock_marker(
 
 pub(super) fn read_writer_lock_info(target_path: &Path) -> Result<Option<WriterLockInfo>> {
     let path = lock_path(target_path);
-    let mut file = match File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(Error::WriterLockMalformed(path.display().to_string())),
-    };
+    let mut file =
+        match crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), &path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(Error::WriterLockMalformed(path.display().to_string())),
+        };
     read_writer_lock_info_file(&path, &mut file)
 }
 

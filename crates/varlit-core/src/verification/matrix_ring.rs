@@ -4,7 +4,7 @@
 //! are outside these harnesses.
 use super::{
     ENTRY_HEADER, FRAME_HEADER, FRAMES_AT, FramePlan, HEADER_SLOT, MAX_RING_BYTES, MIN_RING, Ring,
-    RingHeader, frame_entry,
+    RingHeader, overlap, stream_entry,
 };
 
 fn any_ring() -> Ring {
@@ -200,37 +200,53 @@ fn room_promised_by_a_checkpoint_is_room_placement_finds() {
     }
 }
 
-/// An entry is taken from a frame body only when its header and all its
-/// bytes lie inside the body, and the next entry starts after it: parsing
-/// any bytes reads nothing outside the body and always advances.
+/// An entry is taken from a frame body only when all its bytes lie inside
+/// what is left of the body after its header: a scan streaming the entries
+/// reads nothing outside the frame and always advances.
 #[kani::proof]
-fn a_frame_entry_lies_inside_the_frame_body() {
-    let body: [u8; 40] = kani::any();
+fn a_streamed_entry_lies_inside_the_frame_body() {
+    let header: [u8; ENTRY_HEADER as usize] = kani::any();
+    let remaining: u64 = kani::any();
+    let len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
+    match stream_entry(&header, remaining) {
+        Some((target, n)) => {
+            assert_eq!(n, len);
+            assert!(u64::from(n) <= remaining);
+            let stored = u64::from_le_bytes([
+                header[0], header[1], header[2], header[3], header[4], header[5], header[6],
+                header[7],
+            ]);
+            assert_eq!(target, stored);
+        }
+        None => assert!(u64::from(len) > remaining),
+    }
+}
+
+/// The writer reads what it staged through the bytes it still buffers: for
+/// any read and any buffered range, the overlap it copies lies inside both,
+/// names the same file offsets in each, and is exactly their intersection,
+/// so every byte the buffer holds for the read is served from it and no
+/// other byte is.
+#[kani::proof]
+fn a_read_through_the_frame_buffer_copies_exactly_the_overlap() {
+    let offset: u64 = kani::any();
     let len: usize = kani::any();
-    let cursor: usize = kani::any();
-    kani::assume(len <= body.len());
-    let body = &body[..len];
-    match frame_entry(body, cursor) {
-        Some(entry) => {
-            assert!(cursor <= body.len());
-            assert_eq!(entry.bytes_at, cursor + ENTRY_HEADER as usize);
-            assert!(entry.bytes_at <= entry.next);
-            assert_eq!(entry.next, entry.bytes_at + entry.len as usize);
-            assert!(entry.next <= body.len());
-            assert!(entry.next > cursor);
+    let held_at: u64 = kani::any();
+    let held: usize = kani::any();
+    let fits =
+        offset.checked_add(len as u64).is_some() && held_at.checked_add(held as u64).is_some();
+    let byte: u64 = kani::any();
+    let in_read = byte >= offset && byte - offset < len as u64;
+    let in_held = byte >= held_at && byte - held_at < held as u64;
+    match overlap(offset, len, held_at, held) {
+        Some((dst, src, n)) => {
+            assert!(fits && n > 0);
+            assert!(dst + n <= len && src + n <= held);
+            assert_eq!(offset + dst as u64, held_at + src as u64);
+            let start = offset + dst as u64;
+            let covered = byte >= start && byte - start < n as u64;
+            assert_eq!(covered, in_read && in_held);
         }
-        None => {
-            // Refused exactly when the header or the bytes would not fit.
-            let fits = cursor <= body.len() && body.len() - cursor >= ENTRY_HEADER as usize && {
-                let n = u32::from_le_bytes([
-                    body[cursor + 8],
-                    body[cursor + 9],
-                    body[cursor + 10],
-                    body[cursor + 11],
-                ]);
-                (n as usize) <= body.len() - cursor - ENTRY_HEADER as usize
-            };
-            assert!(!fits);
-        }
+        None => assert!(!fits || !(in_read && in_held)),
     }
 }

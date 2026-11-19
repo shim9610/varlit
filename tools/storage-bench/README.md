@@ -19,7 +19,7 @@ template, without recorded timing or resource results.
 - Numerical arrays use 16 f64 channels per sample and test bulk writes, scans,
   point queries and windows. A physical block contains many samples. HDF5 uses
   typed datasets; SQLite offers typed columns and BLOB layouts; Varlit offers
-  native, stream, indexed and matrix candidates.
+  native, stream and matrix candidates.
 - The SQLite-oriented table case uses independent 64-byte rows, multirow
   transactions and primary-key queries. Varlit includes row-cell and packed
   transaction-cell candidates. This case is distinct from grouped acquisition.
@@ -115,7 +115,7 @@ rewrite or replacement. See [mmap safety](../../SECURITY.md#mapped-files-and-ext
 `compare_read_validation.py` accepts frozen `--before`, `--after` and
 `--pre-security` binary directories, an `--output` directory and `--repeats`.
 Use `--help` on the comparison and analysis scripts for their input contracts.
-The `payload` and `writer` binaries support focused diagnostics. Retain data CRC,
+The `payload` binary supports focused diagnostics. Retain data CRC,
 structure checks and publication guards according to the selected profile;
 independent policy comparisons do not make different integrity contracts equal.
 

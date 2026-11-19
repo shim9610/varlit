@@ -22,11 +22,10 @@ mod enabled {
 
     use varlit::{
         BatchOptions, BlockDescriptor, BlockKind, CommitPolicy, Decoder, DiskIndexBatchOptions,
-        DiskIndexOptions, DiskIndexPlan, DiskIndexedBlock, Encoder, Endian, Error, FormatSpec,
-        IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result,
-        StreamOptions, TransactionMarkerMode, VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode,
-        VarlitFile, VarlitIndexedReader, VarlitIndexedWriter, VarlitKeyedBlock, VarlitStreamReader,
-        VarlitStreamWriter, WireType, disk_index_sidecar_path,
+        DiskIndexOptions, Encoder, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
+        ManifestPolicy, ReadLimits, RecoveryPolicy, Result, StreamOptions, TransactionMarkerMode,
+        VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitFile, VarlitKeyedBlock,
+        VarlitStreamReader, VarlitStreamWriter, WireType,
     };
 
     /// The injected-failure counters are process-global, so any test in this
@@ -59,12 +58,6 @@ mod enabled {
         fn empty() -> Self {
             Self { key: 0, value: 0 }
         }
-    }
-
-    /// Looks `key` up through a fresh output value.
-    fn fetch(reader: &VarlitIndexedReader, key: u64) -> Result<Option<FaultRecord>> {
-        let mut out = FaultRecord::empty();
-        Ok(reader.get::<FaultRecord>(&key, &mut out)?.then_some(out))
     }
 
     impl FaultRecord {
@@ -135,10 +128,6 @@ mod enabled {
         spec(b"VPFSTR", IndexPolicy::BlockOffsetChain)
     }
 
-    fn indexed_spec() -> FormatSpec {
-        spec(b"VPFIDX", IndexPolicy::KeyedOffsetChain)
-    }
-
     fn spec(magic: &'static [u8], index_policy: IndexPolicy) -> FormatSpec {
         FormatSpec::new(
             magic,
@@ -153,11 +142,6 @@ mod enabled {
         )
         .with_block_identities(&[FaultRecord::IDENTITY])
         .with_read_limits(ReadLimits::STANDARD)
-    }
-
-    fn index_plan() -> DiskIndexPlan {
-        const INDEXED: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<FaultRecord>()];
-        DiskIndexPlan::canonical(indexed_spec(), INDEXED).expect("canonical failure-result plan")
     }
 
     fn disk_options() -> DiskIndexOptions {
@@ -229,6 +213,46 @@ mod enabled {
     // bare `Err` entitles the caller to believe nothing happened and re-run the
     // transaction, appending a second marker for work already recorded.
 
+    /// A reader never adopts a durable commit before its barrier has
+    /// returned. With the barrier failed the marker is in the file, and a
+    /// follower still does not see the transaction; the retried `sync`
+    /// publishes it.
+    #[test]
+    fn a_follower_does_not_adopt_a_commit_whose_barrier_did_not_return() -> Result<()> {
+        let _gate = fault_gate();
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("visible-after-durable.varlit");
+
+        let mut writer = VarlitFile::create(durable_commit_spec(), &path)?;
+        writer.push_info(&FaultRecord::ok(1))?;
+        writer.commit_durable()?;
+        let mut reader = VarlitFile::open_readonly(durable_commit_spec(), &path)?;
+        let committed = reader.record_count()?;
+        assert!(committed > 0, "the first commit is visible once durable");
+
+        writer.push_info(&FaultRecord::ok(2))?;
+        VarlitFile::inject_commit_durability_failures(1);
+        let result = writer.commit_durable();
+        VarlitFile::inject_commit_durability_failures(0);
+        assert!(matches!(
+            result,
+            Err(Error::CommittedButDurabilityUnproven { .. })
+        ));
+        assert_eq!(reader.follow()?, 0, "the marker's barrier never returned");
+        assert_eq!(reader.record_count()?, committed);
+        let late = VarlitFile::open_readonly(durable_commit_spec(), &path)?;
+        assert_eq!(
+            late.record_count()?,
+            committed,
+            "nor does a new reader see it"
+        );
+
+        writer.sync()?;
+        assert!(reader.follow()? > 0, "the completed barrier publishes it");
+        assert!(reader.record_count()? > committed);
+        Ok(())
+    }
+
     #[test]
     fn a_durability_failure_after_the_commit_marker_is_reported_as_published() -> Result<()> {
         let _gate = fault_gate();
@@ -275,6 +299,120 @@ mod enabled {
     }
 
     // --- publication already happened: the caller must see the pending state.
+    #[test]
+    fn unfaulted_flush_and_sync_report_success() -> Result<()> {
+        let _gate = fault_gate();
+        let directory = tempfile::tempdir()?;
+        let stream_path = directory.path().join("control-stream.varlit");
+
+        let mut stream = VarlitStreamWriter::create(stream_spec(), &stream_path, stream_options())?;
+        stream
+            .push_iter::<FaultRecord, _>(vec![FaultRecord::ok(0)], one_record_chunks())
+            .map_err(|error| error.source)?;
+        stream.flush()?;
+        stream.sync()?;
+        drop(stream);
+
+        assert_eq!(read_stream(&stream_path)?, vec![FaultRecord::ok(0)]);
+        assert!(
+            ENCODE_CALLS.get() > 0,
+            "the fault-capable encoder must actually be exercised"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_writer_preserves_concurrent_readers_and_retry_after_recovery() -> Result<()> {
+        let _gate = fault_gate();
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("concurrent-failed-batch.varlit");
+        let mut writer = VarlitStreamWriter::create(stream_spec(), &path, stream_options())?;
+        writer.push_info(&FaultRecord::ok(0))?;
+        writer.push_info(&FaultRecord::ok(1))?;
+        writer.sync()?;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(9));
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let mut reader = VarlitStreamReader::open(stream_spec(), &path, stream_options())?;
+            let barrier = barrier.clone();
+            threads.push(std::thread::spawn(move || -> Result<()> {
+                let cursor = reader.blocks::<FaultRecord>();
+                let snapshot = |reader: &VarlitStreamReader| -> Result<Vec<FaultRecord>> {
+                    let mut blocks = reader.blocks::<FaultRecord>()?;
+                    let mut record = FaultRecord::empty();
+                    let mut records = Vec::new();
+                    while blocks.next_into(&mut record)? {
+                        records.push(record);
+                    }
+                    Ok(records)
+                };
+                barrier.wait();
+                // Reads overlap the writer's failed batch. This handle must
+                // retain its complete original generation throughout.
+                let mut intact = true;
+                for _ in 0..256 {
+                    intact &= snapshot(&reader)? == [FaultRecord::ok(0), FaultRecord::ok(1)];
+                }
+                barrier.wait();
+                barrier.wait();
+                // Do not panic before the final barrier: the test runner's
+                // timeout is a failure, never evidence of a good interleaving.
+                let followed = reader.follow();
+                barrier.wait();
+                assert!(intact);
+                followed?;
+                // The failed batch's published record is cut by recovery.
+                assert_eq!(
+                    snapshot(&reader)?,
+                    [FaultRecord::ok(0), FaultRecord::ok(1), FaultRecord::ok(4)]
+                );
+                drop(reader);
+                // Cursor is now the last owner of this old snapshot.
+                let mut cursor = cursor?;
+                let mut record = FaultRecord::empty();
+                let mut old_generation = Vec::new();
+                while cursor.next_into(&mut record)? {
+                    old_generation.push(record);
+                }
+                assert_eq!(old_generation, vec![FaultRecord::ok(0), FaultRecord::ok(1)]);
+                Ok(())
+            }));
+        }
+        barrier.wait();
+        let failure = writer.push_iter::<FaultRecord, _>(
+            [FaultRecord::ok(2), FaultRecord::poison(3)],
+            one_record_chunks(),
+        );
+        barrier.wait();
+        assert!(matches!(
+            failure.unwrap_err().source,
+            Error::InvalidCanonicalEncoding(_)
+        ));
+        assert!(matches!(
+            writer.sync(),
+            Err(Error::WriterPoisoned("stream"))
+        ));
+        drop(writer);
+        // All eight old readers and cursors still exist. They must not retain
+        // the writer lock or prevent restoring the confirmed checkpoint.
+        let mut recovered = VarlitStreamWriter::restore_checkpoint_and_open(
+            stream_spec(),
+            &path,
+            stream_options(),
+        )?;
+        recovered.push_info(&FaultRecord::ok(4))?;
+        recovered.sync()?;
+        barrier.wait();
+        barrier.wait();
+        for thread in threads {
+            thread.join().unwrap()?;
+        }
+        drop(recovered);
+        let reopened = VarlitStreamWriter::open(stream_spec(), &path, stream_options())?;
+        drop(reopened);
+        println!("FAILED_SWMR readers=8 probes=2048 retained_cursors=8 recovered=true");
+        Ok(())
+    }
 
     #[test]
     fn stream_create_reports_parent_sync_pending_instead_of_success() -> Result<()> {
@@ -304,33 +442,6 @@ mod enabled {
         writer.sync()?;
         drop(writer);
         assert_eq!(read_stream(&path)?, vec![FaultRecord::ok(1)]);
-        Ok(())
-    }
-
-    #[test]
-    fn indexed_create_reports_parent_sync_pending_instead_of_success() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("indexed-create-pending.varlit");
-
-        VarlitFile::inject_parent_sync_failures(1);
-        match VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan()) {
-            Err(Error::PublishedButParentSyncPending { .. }) => {}
-            other => panic!(
-                "expected PublishedButParentSyncPending, got {:?}",
-                other.map(|_| "writer")
-            ),
-        }
-
-        assert!(disk_index_sidecar_path(&path).exists());
-        let mut writer =
-            VarlitIndexedWriter::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        writer.push_info(&FaultRecord::ok(2))?;
-        writer.sync()?;
-        drop(writer);
-        let reader =
-            VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(fetch(&reader, 2)?, Some(FaultRecord::ok(2)));
         Ok(())
     }
 
@@ -426,151 +537,6 @@ mod enabled {
         Ok(())
     }
 
-    #[test]
-    fn indexed_batch_failure_poisons_the_writer_conservatively() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("indexed-partial-batch.varlit");
-        let mut writer =
-            VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan())?;
-        writer
-            .push_iter::<FaultRecord, _>(
-                vec![FaultRecord::ok(0), FaultRecord::ok(1)],
-                one_record_chunks(),
-            )
-            .map_err(|error| error.source)?;
-        writer.sync()?;
-
-        let error = writer
-            .push_iter::<FaultRecord, _>(
-                vec![FaultRecord::ok(2), FaultRecord::poison(3)],
-                one_record_chunks(),
-            )
-            .expect_err("a failed indexed batch must not be reported as success");
-        assert!(
-            matches!(error.source, Error::InvalidCanonicalEncoding(_)),
-            "batch failure must carry the typed source, got {:?}",
-            error.source
-        );
-
-        // The indexed writer poisons on any batch failure, because a partial
-        // batch can leave the native file ahead of the sidecar transaction.
-        assert!(matches!(
-            writer.flush(),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer.sync(),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer.push_info(&FaultRecord::ok(4)),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        drop(writer);
-
-        // The synced generation survives; the poisoned batch did not publish.
-        let recovered = VarlitIndexedWriter::restore_checkpoint_and_open(
-            indexed_spec(),
-            &path,
-            disk_options(),
-            index_plan(),
-        )?;
-        drop(recovered);
-        let reader =
-            VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
-        assert_eq!(fetch(&reader, 1)?, Some(FaultRecord::ok(1)));
-        assert_eq!(fetch(&reader, 3)?, None);
-        Ok(())
-    }
-
-    #[test]
-    fn failed_writer_preserves_concurrent_readers_and_retry_after_recovery() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("concurrent-failed-batch.varlit");
-        let mut writer =
-            VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan())?;
-        writer.push_info(&FaultRecord::ok(0))?;
-        writer.push_info(&FaultRecord::ok(1))?;
-        writer.sync()?;
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(9));
-        let mut threads = Vec::new();
-        for _ in 0..8 {
-            let mut reader =
-                VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-            let barrier = barrier.clone();
-            threads.push(std::thread::spawn(move || -> Result<()> {
-                let cursor = reader.blocks::<FaultRecord>();
-                barrier.wait();
-                // Reads overlap the writer's failed batch. This handle must
-                // retain its complete original generation throughout.
-                let mut intact = true;
-                for _ in 0..256 {
-                    intact &= fetch(&reader, 0)?.is_some_and(|v| v == FaultRecord::ok(0));
-                    intact &= fetch(&reader, 2)?.is_none();
-                }
-                barrier.wait();
-                barrier.wait();
-                // Do not panic before the final barrier: the test runner's
-                // timeout is a failure, never evidence of a good interleaving.
-                let followed = reader.follow();
-                barrier.wait();
-                assert!(intact);
-                followed?;
-                assert_eq!(fetch(&reader, 4)?, Some(FaultRecord::ok(4)));
-                assert_eq!(fetch(&reader, 2)?, None);
-                drop(reader);
-                // Cursor is now the last owner of this old snapshot.
-                let mut cursor = cursor?;
-                let mut record = FaultRecord::empty();
-                let mut old_generation = Vec::new();
-                while cursor.next_into(&mut record)? {
-                    old_generation.push(record);
-                }
-                assert_eq!(old_generation, vec![FaultRecord::ok(0), FaultRecord::ok(1)]);
-                Ok(())
-            }));
-        }
-        barrier.wait();
-        let failure = writer.push_iter::<FaultRecord, _>(
-            [FaultRecord::ok(2), FaultRecord::poison(3)],
-            one_record_chunks(),
-        );
-        barrier.wait();
-        assert!(matches!(
-            failure.unwrap_err().source,
-            Error::InvalidCanonicalEncoding(_)
-        ));
-        assert!(matches!(
-            writer.sync(),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        drop(writer);
-        // All eight old readers and cursors still exist. They must not retain
-        // the writer lock or prevent restoring the confirmed checkpoint.
-        let mut recovered = VarlitIndexedWriter::restore_checkpoint_and_open(
-            indexed_spec(),
-            &path,
-            disk_options(),
-            index_plan(),
-        )?;
-        recovered.push_info(&FaultRecord::ok(4))?;
-        recovered.sync()?;
-        barrier.wait();
-        barrier.wait();
-        for thread in threads {
-            thread.join().unwrap()?;
-        }
-        drop(recovered);
-        let reopened =
-            VarlitIndexedWriter::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        drop(reopened);
-        println!("FAILED_SWMR readers=8 probes=2048 retained_cursors=8 recovered=true");
-        Ok(())
-    }
-
     // --- round 11, invariant 3: the native chunk write is the authoritative
     // commit for a prepared chunk, so *every* fallible sidecar step after it
     // must be a typed published outcome. The primary-generation restamp inside
@@ -627,53 +593,6 @@ mod enabled {
         assert!(matches!(
             writer.push_info(&FaultRecord::ok(4)),
             Err(Error::WriterPoisoned("stream"))
-        ));
-        Ok(())
-    }
-
-    /// Native chunks are independent of index commits. A failure at the final
-    /// index publication must report every native chunk already written.
-    #[test]
-    fn a_restamp_failure_after_a_published_indexed_chunk_is_reported_as_published() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("indexed-restamp.varlit");
-        let mut writer =
-            VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan())?;
-        let published_len = std::fs::metadata(&path)?.len();
-
-        VarlitStreamWriter::inject_generation_restamp_failures(1);
-        let error = writer
-            .push_iter::<FaultRecord, _>(
-                vec![FaultRecord::ok(0), FaultRecord::ok(1)],
-                one_record_chunks(),
-            )
-            .expect_err("the armed restamp failure must not be reported as success");
-        VarlitStreamWriter::inject_generation_restamp_failures(0);
-
-        assert!(
-            matches!(error.source, Error::PublishedButIndexStale { .. }),
-            "a sidecar failure after the chunk was published must be typed, got {:?}",
-            error.source
-        );
-        // The summary is derived before the native write and assigned after
-        // it, so it reports the chunk that reached the file even on the
-        // failing path.
-        assert_eq!(
-            error.written.records, 2,
-            "both published native chunks must be reported to the caller"
-        );
-        assert!(
-            std::fs::metadata(&path)?.len() > published_len,
-            "the chunk whose failure was reported as published must be in the file"
-        );
-        assert!(matches!(
-            writer.flush(),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer.push_info(&FaultRecord::ok(2)),
-            Err(Error::WriterPoisoned("indexed"))
         ));
         Ok(())
     }
@@ -741,170 +660,5 @@ mod enabled {
         Ok(())
     }
 
-    #[test]
-    fn a_failed_append_rollback_poisons_every_later_indexed_mutation() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("indexed-rollback-failure.varlit");
-        let mut writer =
-            VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan())?;
-        writer.push_info(&FaultRecord::ok(0))?;
-        writer.sync()?;
-        let published_len = std::fs::metadata(&path)?.len();
-
-        // The single-record indexed put is the exact path  named: it
-        // passes the indexed guard and then calls the stream's internal
-        // append.
-        VarlitStreamWriter::inject_append_rollback_failures(1);
-        let error = writer
-            .push_info(&FaultRecord::ok(1))
-            .expect_err("an append whose rollback also failed must not report success");
-        VarlitStreamWriter::inject_append_rollback_failures(0);
-        assert!(
-            matches!(error, Error::WriteRollbackFailed { .. }),
-            "a failed write plus a failed rollback must be typed, got {error:?}"
-        );
-
-        // The three mutation shapes the report asks for, plus the unindexed
-        // append and the two durability entry points. Before the fix the first
-        // two of these succeeded, appending records through a stream that had
-        // already given up on keeping its own state consistent.
-        assert!(matches!(
-            writer.push_info(&FaultRecord::ok(2)),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer.delete_info::<FaultRecord>(&0),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer
-                .push_iter::<FaultRecord, _>(vec![FaultRecord::ok(3)], one_record_chunks())
-                .map_err(|error| error.source),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer.flush(),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer.sync(),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        drop(writer);
-
-        // The refused mutations really are absent from the file, and the
-        // record that was synced before the fault is still readable.
-        assert_eq!(std::fs::metadata(&path)?.len(), published_len);
-        let recovered = VarlitIndexedWriter::restore_checkpoint_and_open(
-            indexed_spec(),
-            &path,
-            disk_options(),
-            index_plan(),
-        )?;
-        drop(recovered);
-        let reader =
-            VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
-        for key in 1..=4 {
-            assert_eq!(
-                fetch(&reader, key)?,
-                None,
-                "no mutation after the rollback failure may be in the file"
-            );
-        }
-        Ok(())
-    }
-
-    /// The single-record indexed *delete* is the second half of : it takes
-    /// the same direct route into the stream, so a rollback failure raised by a
-    /// delete must refuse the next put just as a put refuses the next delete.
-    #[test]
-    fn a_failed_append_rollback_during_an_indexed_delete_poisons_the_writer() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let path = directory
-            .path()
-            .join("indexed-delete-rollback-failure.varlit");
-        let mut writer =
-            VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan())?;
-        writer.push_info(&FaultRecord::ok(0))?;
-        writer.sync()?;
-
-        VarlitStreamWriter::inject_append_rollback_failures(1);
-        let error = writer
-            .delete_info::<FaultRecord>(&0)
-            .expect_err("a delete whose rollback also failed must not report success");
-        VarlitStreamWriter::inject_append_rollback_failures(0);
-        assert!(
-            matches!(error, Error::WriteRollbackFailed { .. }),
-            "a failed write plus a failed rollback must be typed, got {error:?}"
-        );
-
-        assert!(matches!(
-            writer.push_info(&FaultRecord::ok(1)),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        assert!(matches!(
-            writer.delete_info::<FaultRecord>(&0),
-            Err(Error::WriterPoisoned("indexed"))
-        ));
-        drop(writer);
-
-        // The delete never reached the file, so the record is still there.
-        // The poisoned writer never synced, so the sidecar is restored from
-        // its last clean checkpoint first.
-        let recovered = VarlitIndexedWriter::restore_checkpoint_and_open(
-            indexed_spec(),
-            &path,
-            disk_options(),
-            index_plan(),
-        )?;
-        drop(recovered);
-        let reader =
-            VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
-        Ok(())
-    }
-
     // --- control: without an armed fault the same calls must report success.
-
-    #[test]
-    fn unfaulted_flush_and_sync_report_success() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let stream_path = directory.path().join("control-stream.varlit");
-        let indexed_path = directory.path().join("control-indexed.varlit");
-
-        let mut stream = VarlitStreamWriter::create(stream_spec(), &stream_path, stream_options())?;
-        stream
-            .push_iter::<FaultRecord, _>(vec![FaultRecord::ok(0)], one_record_chunks())
-            .map_err(|error| error.source)?;
-        stream.flush()?;
-        stream.sync()?;
-        drop(stream);
-
-        let mut indexed = VarlitIndexedWriter::create(
-            indexed_spec(),
-            &indexed_path,
-            disk_options(),
-            index_plan(),
-        )?;
-        indexed
-            .push_iter::<FaultRecord, _>(vec![FaultRecord::ok(0)], one_record_chunks())
-            .map_err(|error| error.source)?;
-        indexed.flush()?;
-        indexed.sync()?;
-        drop(indexed);
-
-        assert_eq!(read_stream(&stream_path)?, vec![FaultRecord::ok(0)]);
-        let reader =
-            VarlitIndexedReader::open(indexed_spec(), &indexed_path, disk_options(), index_plan())?;
-        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
-        assert!(
-            ENCODE_CALLS.get() > 0,
-            "the fault-capable encoder must actually be exercised"
-        );
-        Ok(())
-    }
 }

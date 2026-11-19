@@ -1,15 +1,15 @@
 //! Variable records longer than 64 KiB carry a CRC per 64 KiB chunk, plain
 //! or compressed per chunk; shorter ones keep the plain layout. Every write
-//! path (native, indexed) produces them and every whole-record read path
+//! path (native, stream) produces them and every whole-record read path
 //! reads them back, verified.
 #![cfg(feature = "integrity")]
 
-use varlit::{DiskIndexOptions, Error, VarlitEmpty, varlit_format};
+use varlit::{Error, StreamOptions, VarlitEmpty, varlit_format};
 
 varlit_format! {
     pub format Plain {
         magic: b"CHUNKPLN"; version: 1; endian: little; integrity: crc32_with_header;
-        blocks { variable Blob(id = 1, key = [id], key_index = disk) { id: u64, bytes: Vec<u8> } }
+        blocks { variable Blob(id = 1, key = [id]) { id: u64, bytes: Vec<u8> } }
     }
 }
 
@@ -45,47 +45,6 @@ fn chunked(len: usize) -> Option<bool> {
         65_537.. => Some(true),
         _ => None,
     }
-}
-
-#[test]
-fn native_and_indexed_records_round_trip_at_chunk_boundaries() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let native = dir.path().join("native");
-    let indexed = dir.path().join("indexed");
-    {
-        let mut w = Plain::spec().create_writer(&native)?;
-        let mut iw = Plain::create_indexed_writer(&indexed, DiskIndexOptions::default())?;
-        for (i, len) in SIZES.iter().enumerate() {
-            let blob = Blob {
-                id: i as u64,
-                bytes: bytes(*len, i as u64),
-            };
-            w.push_keyed(&blob)?;
-            iw.push_blob(&blob)?;
-        }
-        w.sync()?;
-        iw.sync()?;
-    }
-    let r = Plain::spec().open_reader(&native)?;
-    let mut entries = Vec::new();
-    r.block_entries_into::<Blob>(&mut entries)?;
-    let mut scratch = Vec::new();
-    for (i, entry) in entries.iter().enumerate() {
-        // The payload holds the id and the length prefix besides the bytes.
-        if let Some(expected) = chunked(SIZES[i]) {
-            assert_eq!(entry.is_chunked(), expected, "size {}", SIZES[i]);
-        }
-        let mut out = Blob::empty();
-        r.decode_block_into(entry, &mut scratch, &mut out)?;
-        assert_eq!(out.bytes, bytes(SIZES[i], i as u64));
-    }
-    let ir = Plain::open_indexed_reader(&indexed, DiskIndexOptions::default())?;
-    for (i, len) in SIZES.iter().enumerate() {
-        let mut out = Blob::empty();
-        assert!(ir.get_blob(&(i as u64), &mut out)?);
-        assert_eq!(out.bytes, bytes(*len, i as u64));
-    }
-    Ok(())
 }
 
 #[cfg(feature = "compression-zstd")]
@@ -304,43 +263,6 @@ fn a_paged_read_stops_at_the_damaged_chunk() -> varlit::Result<()> {
     Ok(())
 }
 
-/// The indexed reader finds a key's record and reads it a buffer at a time.
-#[test]
-fn an_indexed_key_reads_through_a_caller_buffer() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("indexed-paged");
-    {
-        let mut w = Plain::create_indexed_writer(&path, DiskIndexOptions::default())?;
-        w.push_blob(&Blob {
-            id: 5,
-            bytes: bytes(250_000, 5),
-        })?;
-        w.push_blob(&Blob {
-            id: 6,
-            bytes: bytes(10, 6),
-        })?;
-        w.sync()?;
-    }
-    let r = varlit::VarlitIndexedReader::open(
-        Plain::spec(),
-        &path,
-        DiskIndexOptions::default(),
-        Plain::disk_index_plan()?,
-    )?;
-    let entry = r.lookup_entry::<Blob>(&5)?.expect("present");
-    let paged = read_paged(
-        &|out| r.read_record_into(&entry, out),
-        &|cursor, out| r.read_record_from(cursor, out),
-        4096,
-    )?;
-    let mut decoded = Blob::empty();
-    assert!(r.get::<Blob>(&5, &mut decoded)?);
-    assert!(paged.len() > 250_000);
-    assert!(paged.ends_with(&decoded.bytes));
-    assert!(r.lookup_entry::<Blob>(&99)?.is_none());
-    Ok(())
-}
-
 /// A record crossing anchors reads the same paged as whole.
 #[test]
 fn a_record_across_anchors_reads_paged() -> varlit::Result<()> {
@@ -486,37 +408,6 @@ fn a_view_exposes_packed_sequences_and_optional_fields() -> varlit::Result<()> {
     let mut wrong = other[0].clone();
     wrong.block_id = 99;
     assert!(r.view_block::<Frame>(&wrong).is_err());
-    Ok(())
-}
-
-/// An indexed key's record reads field by field through caller buffers.
-#[test]
-fn an_indexed_view_reads_a_field_through_a_caller_buffer() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("indexed-view");
-    {
-        let mut w = Plain::create_indexed_writer(&path, DiskIndexOptions::default())?;
-        w.push_blob(&Blob {
-            id: 8,
-            bytes: bytes(150_000, 8),
-        })?;
-        w.sync()?;
-    }
-    // Through the generated typed reader.
-    let r = Plain::open_indexed_reader(&path, DiskIndexOptions::default())?;
-    let entry = r.lookup_entry::<Blob>(&8)?.expect("present");
-    let view = r.view_block::<Blob>(&entry)?;
-    assert_eq!(r.decode_field::<u64>(&entry, view.id)?, 8);
-    let data = view.bytes.data()?;
-    let mut out = vec![0u8; 7000];
-    let mut all = Vec::new();
-    let mut page = r.read_span_into(&entry, data, &mut out)?;
-    loop {
-        all.extend_from_slice(&out[..page.filled]);
-        let Some(next) = page.next else { break };
-        page = r.read_record_from(next, &mut out)?;
-    }
-    assert_eq!(all, bytes(150_000, 8));
     Ok(())
 }
 
@@ -829,5 +720,49 @@ fn typed_decodes_charge_the_materialization_limit() -> varlit::Result<()> {
         matches!(walked, Err(Error::LimitExceeded { .. })),
         "{walked:?}"
     );
+    Ok(())
+}
+
+#[test]
+fn native_and_stream_records_round_trip_at_chunk_boundaries() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let native = dir.path().join("native");
+    let streamed = dir.path().join("stream");
+    {
+        let mut w = Plain::spec().create_writer(&native)?;
+        let mut sw = Plain::create_stream_writer(&streamed, StreamOptions::default())?;
+        for (i, len) in SIZES.iter().enumerate() {
+            let blob = Blob {
+                id: i as u64,
+                bytes: bytes(*len, i as u64),
+            };
+            w.push_keyed(&blob)?;
+            sw.push_blob(&blob)?;
+        }
+        w.sync()?;
+        sw.sync()?;
+    }
+    let r = Plain::spec().open_reader(&native)?;
+    let mut entries = Vec::new();
+    r.block_entries_into::<Blob>(&mut entries)?;
+    let mut scratch = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        // The payload holds the id and the length prefix besides the bytes.
+        if let Some(expected) = chunked(SIZES[i]) {
+            assert_eq!(entry.is_chunked(), expected, "size {}", SIZES[i]);
+        }
+        let mut out = Blob::empty();
+        r.decode_block_into(entry, &mut scratch, &mut out)?;
+        assert_eq!(out.bytes, bytes(SIZES[i], i as u64));
+    }
+    let sr = Plain::open_stream_reader(&streamed, StreamOptions::default())?;
+    let mut blobs = sr.blobs()?;
+    for (i, len) in SIZES.iter().enumerate() {
+        let mut out = Blob::empty();
+        assert!(blobs.next_into(&mut out)?);
+        assert_eq!(out.id, i as u64);
+        assert_eq!(out.bytes, bytes(*len, i as u64));
+    }
+    assert!(!blobs.next_into(&mut Blob::empty())?);
     Ok(())
 }
