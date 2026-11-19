@@ -313,7 +313,7 @@ fn open_follow_marker(path: &Path) -> Option<File> {
 /// leaf once.
 pub(crate) struct SequenceSet {
     index: crate::disk_index::ScratchIndex,
-    pending: std::collections::BTreeSet<u64>,
+    pending: crate::fcoll::BTreeSet<u64>,
 }
 
 impl std::fmt::Debug for SequenceSet {
@@ -333,7 +333,7 @@ impl SequenceSet {
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             index: crate::disk_index::ScratchIndex::new(0)?,
-            pending: std::collections::BTreeSet::new(),
+            pending: crate::fcoll::BTreeSet::new(),
         })
     }
 
@@ -343,9 +343,10 @@ impl SequenceSet {
         if self.pending.contains(&sequence) || self.index.get(&sequence.to_be_bytes())?.is_some() {
             return Err(duplicate());
         }
-        self.pending.insert(sequence);
+        use crate::fcoll::{Put, PutSet};
+        self.pending.put(sequence, "native sequence set")?;
         if self.pending.len() >= SEQUENCE_BATCH {
-            let mut batch = std::collections::BTreeMap::new();
+            let mut batch = crate::fcoll::BTreeMap::new();
             for sequence in std::mem::take(&mut self.pending) {
                 let mut key = Vec::new();
                 key.try_reserve_exact(8)
@@ -354,9 +355,9 @@ impl SequenceSet {
                         requested: 8,
                     })?;
                 key.extend_from_slice(&sequence.to_be_bytes());
-                batch.insert(key, [0; 52]);
+                batch.put(key, [0; 52], "native sequence batch")?;
             }
-            self.index.apply(&batch)?;
+            self.index.apply_iter(batch.iter())?;
         }
         Ok(())
     }

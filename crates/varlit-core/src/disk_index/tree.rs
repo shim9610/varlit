@@ -13,10 +13,12 @@
 use super::{DiskIndexError, DiskIndexResult, LATEST_LEN};
 use crate::fallible::Arc;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use crate::fcoll::{self, PushBack, Put, Reserve};
+use std::collections::BTreeMap;
 use std::fs::File;
 
 pub(super) const PAGE: usize = 4096;
+const RESOURCE: &str = "index page cache";
 const HEADER: usize = 32;
 const LEAF_ENTRY: usize = 28 + LATEST_LEN;
 const BRANCH_ENTRY: usize = 28 + 16;
@@ -305,24 +307,34 @@ enum Cached {
     Key(u64),
 }
 
-#[derive(Default)]
 struct Cache {
-    pages: HashMap<u64, Option<Node>>,
-    keys: HashMap<u64, Option<Vec<u8>>>,
-    order: VecDeque<Cached>,
+    pages: fcoll::HashMap<u64, Option<Node>>,
+    keys: fcoll::HashMap<u64, Option<Vec<u8>>>,
+    order: fcoll::VecDeque<Cached>,
     bytes: usize,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            pages: fcoll::hash_map(),
+            keys: fcoll::hash_map(),
+            order: fcoll::VecDeque::new(),
+            bytes: 0,
+        }
+    }
 }
 
 // A lease temporarily owns an existing cache value. Its occupied slot remains
 // charged and cannot be evicted until Drop returns it without allocating.
 // This replaces per-page/per-key Arc allocations with single ownership.
 trait Resident: Sized {
-    fn slots(cache: &mut Cache) -> &mut HashMap<u64, Option<Self>>;
+    fn slots(cache: &mut Cache) -> &mut fcoll::HashMap<u64, Option<Self>>;
     fn charge(&self) -> usize;
     fn tag(offset: u64) -> Cached;
 }
 impl Resident for Node {
-    fn slots(cache: &mut Cache) -> &mut HashMap<u64, Option<Self>> {
+    fn slots(cache: &mut Cache) -> &mut fcoll::HashMap<u64, Option<Self>> {
         &mut cache.pages
     }
     fn charge(&self) -> usize {
@@ -333,7 +345,7 @@ impl Resident for Node {
     }
 }
 impl Resident for Vec<u8> {
-    fn slots(cache: &mut Cache) -> &mut HashMap<u64, Option<Self>> {
+    fn slots(cache: &mut Cache) -> &mut fcoll::HashMap<u64, Option<Self>> {
         &mut cache.keys
     }
     fn charge(&self) -> usize {
@@ -366,7 +378,7 @@ impl<T: Resident> Drop for Lease<'_, T> {
         }
     }
 }
-fn oom(_: std::collections::TryReserveError) -> DiskIndexError {
+fn oom<E>(_: E) -> DiskIndexError {
     std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
 }
 fn buffer(len: usize) -> DiskIndexResult<Vec<u8>> {
@@ -685,10 +697,10 @@ impl Reader {
             && Self::reserve(&mut cache, charge, self.budget);
         if cached {
             // Reserve both structures before charging or installing a slot.
-            cache.order.try_reserve(1).map_err(oom)?;
-            T::slots(&mut cache).try_reserve(1).map_err(oom)?;
-            T::slots(&mut cache).insert(offset, None);
-            cache.order.push_back(T::tag(offset));
+            cache.order.reserve_for(1, RESOURCE).map_err(oom)?;
+            T::slots(&mut cache).reserve_for(1, RESOURCE).map_err(oom)?;
+            T::slots(&mut cache).put(offset, None, RESOURCE).map_err(oom)?;
+            cache.order.push(T::tag(offset), RESOURCE).map_err(oom)?;
             cache.bytes += charge;
         }
         Ok(Lease {
@@ -703,10 +715,10 @@ impl Reader {
         let mut cache = self.cache.borrow_mut();
         debug_assert!(!T::slots(&mut cache).contains_key(&offset));
         if Self::reserve(&mut cache, charge, self.budget) {
-            cache.order.try_reserve(1).map_err(oom)?;
-            T::slots(&mut cache).try_reserve(1).map_err(oom)?;
-            T::slots(&mut cache).insert(offset, Some(value));
-            cache.order.push_back(T::tag(offset));
+            cache.order.reserve_for(1, RESOURCE).map_err(oom)?;
+            T::slots(&mut cache).reserve_for(1, RESOURCE).map_err(oom)?;
+            T::slots(&mut cache).put(offset, Some(value), RESOURCE).map_err(oom)?;
+            cache.order.push(T::tag(offset), RESOURCE).map_err(oom)?;
             cache.bytes += charge;
         }
         Ok(())
@@ -730,24 +742,29 @@ impl Reader {
                 .order
                 .pop_front()
                 .expect("cache accounting has an owner");
+            // A leased (`None`) slot is pinned: put it back at the tail.
             let released = match tag {
-                Cached::Page(offset) => match cache.pages.entry(offset) {
-                    std::collections::hash_map::Entry::Occupied(entry) if entry.get().is_some() => {
-                        Some(Self::charge(&entry.remove().unwrap()))
-                    }
+                Cached::Page(offset) => match cache.pages.get(&offset) {
+                    Some(Some(_)) => cache.pages.remove(&offset).flatten().map(|n| Self::charge(&n)),
                     _ => None,
                 },
-                Cached::Key(offset) => match cache.keys.entry(offset) {
-                    std::collections::hash_map::Entry::Occupied(entry) if entry.get().is_some() => {
-                        Some(entry.remove().unwrap().capacity() + 128)
-                    }
+                Cached::Key(offset) => match cache.keys.get(&offset) {
+                    Some(Some(_)) => cache
+                        .keys
+                        .remove(&offset)
+                        .flatten()
+                        .map(|key| key.capacity() + 128),
                     _ => None,
                 },
             };
             if let Some(bytes) = released {
                 cache.bytes -= bytes;
             } else {
-                cache.order.push_back(tag);
+                // The popped slot's capacity is still there; this cannot
+                // allocate in either backend.
+                if cache.order.push(tag, RESOURCE).is_err() {
+                    return false;
+                }
             }
         }
         true

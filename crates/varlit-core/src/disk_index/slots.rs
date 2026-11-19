@@ -9,7 +9,8 @@
 //! page sees a damaged-sidecar error rather than another chunk's rows.
 use super::*;
 use crate::fallible::Arc;
-use std::{cell::RefCell, collections::VecDeque, fs::File};
+use crate::fcoll::{self, PushBack, Put, Reserve};
+use std::{cell::RefCell, fs::File};
 use tree::{PAGE, PageAlloc, PageFormat, read_at, write_at};
 const MAGIC: &[u8; 8] = b"VIXSLOT1";
 const MAGIC_REUSE: &[u8; 8] = b"VIXSLOT2";
@@ -20,7 +21,7 @@ const WIDTH: usize = 64;
 // Offset, sequence, extent and verification flags/CRC. Block IDs come from the
 // schema directory, enum codes from array positions; neither is stored per row.
 const ROW: usize = 40;
-fn oom(_: std::collections::TryReserveError) -> DiskIndexError {
+fn oom<E>(_: E) -> DiskIndexError {
     std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
 }
 fn buffer(len: usize) -> DiskIndexResult<Vec<u8>> {
@@ -319,9 +320,10 @@ impl Directory {
 #[derive(Default)]
 struct Cache {
     bytes: usize,
-    values: BTreeMap<u64, Vec<u8>>,
-    order: VecDeque<u64>,
+    values: fcoll::BTreeMap<u64, Vec<u8>>,
+    order: fcoll::VecDeque<u64>,
 }
+const RESOURCE: &str = "index slot cache";
 pub(super) struct Reader {
     file: Arc<File>,
     end: u64,
@@ -418,7 +420,7 @@ impl Reader {
             }
         }
         let result = decode(&bytes)?;
-        cache.order.try_reserve(1).map_err(oom)?;
+        cache.order.reserve_for(1, RESOURCE).map_err(oom)?;
         // Reserve half the budget for directory and cache bookkeeping.
         while cache.bytes + len + 128 > self.budget / 2 {
             let old = cache.order.pop_front().ok_or_else(bad)?;
@@ -426,9 +428,10 @@ impl Reader {
                 cache.bytes -= bytes.len() + 128;
             }
         }
-        // BTreeMap node allocation remains the explicitly deferred collection.
-        cache.values.insert(offset, bytes);
-        cache.order.push_back(offset);
+        // With `unstable-jzap` the map's node allocation is fallible too;
+        // with `std` it is the one remaining aborting allocation here.
+        cache.values.put(offset, bytes, RESOURCE).map_err(oom)?;
+        cache.order.push(offset, RESOURCE).map_err(oom)?;
         cache.bytes += len + 128;
         Ok(result)
     }

@@ -27,6 +27,7 @@ mod primary_file;
 mod disk_index;
 mod error;
 mod fallible;
+mod fcoll;
 mod file;
 mod format;
 mod immediate;

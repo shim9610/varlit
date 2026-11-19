@@ -4,6 +4,7 @@ mod matrix_bulk;
 
 use crate::primary_file::PrimaryFile;
 use std::borrow::Cow;
+use crate::fcoll::{Put, Reserve};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions, remove_file};

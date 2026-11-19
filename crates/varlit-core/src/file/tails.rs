@@ -407,9 +407,9 @@ fn note_block_tail_entries_moved(count: u64) {
 /// caller-supplied predecessor (the generated writer's own path) invalidates
 /// the cached map for that block id, because the file cannot learn which key
 /// that record carried.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct KeyedTails {
-    tails: HashMap<u32, KeyedTailMap>,
+    tails: crate::fcoll::HashMap<u32, KeyedTailMap>,
 }
 
 /// One block id's tail map plus the running total of the key payload bytes it
@@ -421,11 +421,21 @@ struct KeyedTails {
 /// per append. Recomputing it by summing key lengths would be Theta(distinct
 /// keys) on the append hot path and is exactly what this field exists to
 /// avoid.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct KeyedTailMap {
-    offsets: HashMap<Vec<u8>, u64>,
+    offsets: crate::fcoll::HashMap<Vec<u8>, u64>,
     key_payload_bytes: u64,
     spilled: Option<crate::disk_index::ScratchIndex>,
+}
+
+impl Default for KeyedTailMap {
+    fn default() -> Self {
+        Self {
+            offsets: crate::fcoll::hash_map(),
+            key_payload_bytes: 0,
+            spilled: None,
+        }
+    }
 }
 
 impl KeyedTailMap {
@@ -480,19 +490,16 @@ impl KeyedTailMap {
             self.spill()?;
         }
         // One bounded key is the minimum work unit even with a zero cache.
-        self.offsets
-            .try_reserve(1)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "keyed tail offsets",
-                requested: key.len() as u64,
-            })?;
+        self.offsets.reserve_for(1, "keyed tail offsets")?;
         Ok(())
     }
-    fn insert(&mut self, key: Vec<u8>, offset: u64) {
+    /// Inserts into the slot [`Self::reserve`] made.
+    fn insert(&mut self, key: Vec<u8>, offset: u64) -> Result<()> {
         let bytes = key.len() as u64;
-        if self.offsets.insert(key, offset).is_none() {
+        if self.offsets.put(key, offset, "keyed tail offsets")?.is_none() {
             self.key_payload_bytes += bytes;
         }
+        Ok(())
     }
     /// Bytes this map is accountable for: its inline storage plus the key
     /// payload heap it owns. Excludes `HashMap` control bytes and load-factor
@@ -515,7 +522,7 @@ impl KeyedTailMap {
 impl KeyedTails {
     fn new_empty() -> Self {
         Self {
-            tails: HashMap::new(),
+            tails: crate::fcoll::hash_map(),
         }
     }
 

@@ -2,12 +2,12 @@
 //! owner-local buffers; overflow moves them to disposable private files.
 use super::*;
 use crate::disk_index::ScratchIndex;
-use std::collections::BTreeMap;
+use crate::fcoll::{self, Put};
 use std::hash::BuildHasher;
 
 struct BufferedIndex {
     disk: Option<ScratchIndex>,
-    pending: HashMap<Vec<u8>, [u8; 52]>,
+    pending: fcoll::HashMap<Vec<u8>, [u8; 52]>,
     bytes: usize,
     limit: usize,
 }
@@ -16,7 +16,7 @@ impl BufferedIndex {
     fn new(limit: usize) -> Result<Self> {
         Ok(Self {
             disk: None,
-            pending: HashMap::new(),
+            pending: fcoll::hash_map(),
             bytes: 0,
             limit: limit.max(128) / 2,
         })
@@ -32,12 +32,11 @@ impl BufferedIndex {
             if self.disk.is_none() {
                 self.disk = Some(ScratchIndex::new(self.limit)?);
             }
-            let sorted = self
-                .pending
-                .iter()
-                .map(|(k, v)| Ok((k.try_clone()?, *v)))
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            self.disk.as_mut().unwrap().apply(&sorted)?;
+            let mut sorted = fcoll::BTreeMap::new();
+            for (key, value) in self.pending.iter() {
+                sorted.put(key.try_clone()?, *value, "external merge batch")?;
+            }
+            self.disk.as_mut().unwrap().apply_iter(sorted.iter())?;
             self.pending.clear();
             self.bytes = 0;
         }
@@ -72,7 +71,7 @@ impl BufferedIndex {
             self.flush()?;
         }
         self.bytes = self.bytes.saturating_add(bytes);
-        self.pending.insert(key, value);
+        self.pending.put(key, value, "external merge index")?;
         Ok(())
     }
 }

@@ -25,6 +25,9 @@ bytes = "1"
 # to build the other engines alone, e.g. on Windows CI.
 default = ["hdf5"]
 hdf5 = ["dep:hdf5", "dep:ndarray"]
+# Builds varlit with its internal jzap-std containers, for A/B against the
+# default build of the same commit.
+jzap = ["varlit/unstable-jzap"]
 
 [profile.release]
 opt-level = 3

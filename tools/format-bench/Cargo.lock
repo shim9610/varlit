@@ -523,6 +523,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "jzap-std"
+version = "0.1.0"
+source = "git+https://github.com/shim9610/jzap-std?rev=9cc4242cfa0bdf43d01a2462f52fa07309f8866c#9cc4242cfa0bdf43d01a2462f52fa07309f8866c"
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1147,6 +1152,7 @@ name = "varlit-core"
 version = "0.13.0-alpha.2"
 dependencies = [
  "crc32fast",
+ "jzap-std",
  "libc",
  "memmap2",
  "tempfile",

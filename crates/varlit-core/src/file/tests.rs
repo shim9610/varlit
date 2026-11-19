@@ -2253,7 +2253,7 @@ fn keyed_tail_spill_allocation_failures_preserve_entries_and_retry() -> Result<(
         };
         for key in 0..8u64 {
             tails.offsets.try_reserve(1).unwrap();
-            tails.insert(key.to_be_bytes().to_vec(), key + 100);
+            tails.insert(key.to_be_bytes().to_vec(), key + 100).unwrap();
         }
         let charge = tails.key_payload_bytes;
         let outcome = crate::pib_probe::with_allocation_refusal(at, || tails.spill());

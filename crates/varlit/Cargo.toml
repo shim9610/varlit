@@ -27,6 +27,7 @@ mmap = ["varlit-core/mmap"]
 zero-copy = ["mmap", "varlit-core/zero-copy"]
 compression-zstd = ["varlit-core/compression-zstd"]
 experimental-matrix-reuse = ["varlit-core/experimental-matrix-reuse"]
+unstable-jzap = ["varlit-core/unstable-jzap"]
 scalable-fault-injection = [
     "varlit-core/scalable-fault-injection",
 ]

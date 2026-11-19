@@ -2400,6 +2400,7 @@ impl ScratchIndex {
         }
         result.map_err(index_error)
     }
+    #[cfg(test)]
     pub(crate) fn apply(&mut self, values: &BTreeMap<Vec<u8>, [u8; 52]>) -> crate::Result<()> {
         self.apply_iter(values.iter())
     }

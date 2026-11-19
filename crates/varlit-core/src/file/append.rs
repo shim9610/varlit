@@ -130,7 +130,7 @@ impl VarlitFile {
                         }
                     }
                     built.reserve(spec, &key)?;
-                    built.insert(key, entry.record_offset);
+                    built.insert(key, entry.record_offset)?;
                 }
                 Ok(())
             };
@@ -151,12 +151,10 @@ impl VarlitFile {
             }
             self.keyed_tails
                 .tails
-                .try_reserve(1)
-                .map_err(|_| Error::AllocationFailed {
-                    resource: "keyed tail cache",
-                    requested: std::mem::size_of::<KeyedTailMap>() as u64,
-                })?;
-            self.keyed_tails.tails.insert(T::ID, built);
+                .reserve_for(1, "keyed tail cache")?;
+            self.keyed_tails
+                .tails
+                .put(T::ID, built, "keyed tail cache")?;
         }
         Ok(self.keyed_tails.tails.get_mut(&T::ID).unwrap())
     }
@@ -229,8 +227,15 @@ impl VarlitFile {
                         || tails.offsets.capacity() > tails.offsets.len()) =>
             {
                 let payload_len = key.len() as u64;
-                if tails.offsets.insert(key, record_offset).is_none() {
-                    tails.key_payload_bytes = tails.key_payload_bytes.saturating_add(payload_len);
+                match tails.offsets.put(key, record_offset, "keyed tail offsets") {
+                    Ok(None) => {
+                        tails.key_payload_bytes =
+                            tails.key_payload_bytes.saturating_add(payload_len);
+                    }
+                    Ok(Some(_)) => {}
+                    // Reserved above, so unreachable; dropping the map is the
+                    // safe answer if it ever is reached.
+                    Err(_) => self.keyed_tails.invalidate(block_id),
                 }
             }
             _ => self.keyed_tails.invalidate(block_id),

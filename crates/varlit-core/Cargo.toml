@@ -33,6 +33,10 @@ zero-copy = ["mmap", "dep:zerocopy"]
 compression-zstd = ["dep:zstd"]
 scalable-fault-injection = []
 experimental-matrix-reuse = []
+# Internal containers from jzap-std (explicitly fallible). Experimental:
+# changes no public signature, only which allocator-facing containers the
+# library uses internally.
+unstable-jzap = ["dep:jzap"]
 
 [dependencies]
 # Stable fallible shared ownership; no weak references are needed internally.
@@ -43,6 +47,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 zerocopy = { workspace = true, optional = true, features = ["derive"] }
 zstd = { workspace = true, optional = true }
+jzap = { package = "jzap-std", git = "https://github.com/shim9610/jzap-std", rev = "9cc4242cfa0bdf43d01a2462f52fa07309f8866c", optional = true, default-features = false, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
