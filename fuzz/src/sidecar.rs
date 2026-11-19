@@ -8,11 +8,22 @@ use crate::{FuzzSidecarFormat, SidecarEvent, StreamItem};
 
 const MAX_BYTES: usize = 1_048_576;
 const MAX_OPERATIONS: usize = 64;
-// The format permits 256 physical records, including its creation nonce.
-const MAX_RECORDS: usize = 255;
+// Verification admits 256 physical records, including the creation nonce and
+// every sync marker. Keep generated state machines within that same ceiling.
+const MAX_PHYSICAL_RECORDS: usize = 256;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn state_machine_counts_sync_markers_toward_the_record_ceiling() {
+        let mut input = Vec::new();
+        for _ in 0..32 {
+            input.extend_from_slice(&[7, 0, 0, 7]);
+            input.extend_from_slice(&[4, 0, 0, 0]);
+        }
+        super::run_state_machine(&input);
+    }
+
     #[test]
     fn corrupted_confirmed_heads_do_not_restore_an_older_generation() {
         // Public sanitizer runs 38543670673 and 38546437279: both confirmed
@@ -189,12 +200,13 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
     let mut writer = Some(writer);
     let mut working = Model::default();
     let mut committed = Model::default();
-    let mut records = 0usize;
 
     for [opcode, key, value, count] in operations.iter().copied() {
-        if records >= MAX_RECORDS {
+        let physical_records = usize::try_from(working.verified_records()).unwrap_or(usize::MAX);
+        if physical_records >= MAX_PHYSICAL_RECORDS {
             break;
         }
+        let remaining_records = MAX_PHYSICAL_RECORDS - physical_records;
         if writer.is_none() {
             writer = FuzzSidecarFormat::open_stream_writer(path, stream_options())
                 .or_else(|_| FuzzSidecarFormat::restore_stream_writer(path, stream_options()))
@@ -213,7 +225,6 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
                     .is_ok()
                 {
                     working.appended(1);
-                    records += 1;
                 }
             }
             1 => {
@@ -226,13 +237,11 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
                     .is_ok()
                 {
                     working.appended(1);
-                    records += 1;
                 }
             }
             2 => {
                 if current.delete_stream_item(&u64::from(key % 16)).is_ok() {
                     working.appended(1);
-                    records += 1;
                 }
             }
             3 => {
@@ -257,13 +266,12 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
                 writer.take();
             }
             _ => {
-                let amount = (usize::from(count % 8) + 1).min(MAX_RECORDS - records);
+                let amount = (usize::from(count % 8) + 1).min(remaining_records);
                 let values = (0..amount).map(|offset| SidecarEvent {
                     value: u64::from(value) + offset as u64,
                 });
                 if let Ok(report) = current.push_sidecar_events(values, batch_options()) {
                     working.appended(report.records);
-                    records += report.records as usize;
                 }
             }
         }
