@@ -38,8 +38,10 @@ included, and about 24 to 48 bytes of index per staged unit. Those records are r
 reopened writer included, and their free space takes new tiles and directory
 pages; nothing returns them to the filesystem (`compact_matrix()` was
 removed in 0.13.0). Starting such a publication first puts every published
-generation in place, so a reader more than one generation behind gets
-`MatrixSnapshotExpired` and must `follow()`. A tiled matrix does not rely on
+generation in place, so a reader behind the newest published generation gets
+`MatrixSnapshotExpired` and must `follow()`. Staging alone can start one:
+overwriting one cell many times without a `sync` restages it each time, so a
+reader one publication behind can expire before the writer publishes again. A tiled matrix does not rely on
 sparse files, allocation maps or hole punching.
 
 Dimensions are fixed at creation unless explicitly declared growing. Generic
