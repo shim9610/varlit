@@ -48,3 +48,6 @@ __pycache__/
 # cherry-pick a commit touching this file between the two -- it carries neither
 # guarded path, so the pre-push hook has nothing to refuse.
 /CLAUDE.md
+
+# Seed corpora from longer fuzz runs are inputs, not run output.
+!/fuzz/seed-corpus/*.tar.zst

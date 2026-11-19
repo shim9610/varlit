@@ -78,6 +78,17 @@ jobs:
           key: fuzz-corpus-${{ github.run_id }}
           restore-keys: |
             fuzz-corpus-
+      # Seed corpus committed under fuzz/seed-corpus (inputs from longer runs
+      # elsewhere), unpacked over the restored corpus. libFuzzer names corpus
+      # files by content hash, so the union has no duplicates and nothing
+      # restored is overwritten.
+      - name: add the committed seed corpus
+        working-directory: fuzz
+        run: |
+          for archive in seed-corpus/*.tar.zst; do
+            [ -e "$archive" ] || continue
+            zstd -dc "$archive" | tar -xf - --skip-old-files
+          done
       # The target list comes from `cargo fuzz list`, not from a list written
       # here, so a target added to `fuzz/Cargo.toml` is in this job the same
       # week — a hardcoded list is how a new target silently never runs.

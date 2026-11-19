@@ -407,10 +407,13 @@ that target in the ring header before it writes. A reader whose snapshot is
 older than that target can no longer read its snapshot from the file and the
 ring, so its next read returns `MatrixSnapshotExpired { snapshot, checkpointed }`
 instead of a mix of generations. `follow()` (or a reopen) moves it to the
-newest generation. A reader expires only after the writer has published enough
-after its snapshot to need the ring space
+newest generation. A reader expires only once a newer generation has been
+published after its snapshot and the writer needs the ring space: for later
+publications, or for staging that outgrows half the ring and starts an
+overflow publication, which first puts the published generations in place
 (`a_reader_that_falls_behind_the_ring_is_told_to_follow`,
-`a_reader_keeps_its_snapshot_across_publications_and_checkpoints`). An open or
+`a_reader_keeps_its_snapshot_across_publications_and_checkpoints`). A reader
+on the newest published generation does not expire however much is staged. An open or
 `follow()` whose scan of the ring is overtaken by checkpoints 32 times in a row
 also returns `MatrixSnapshotExpired`.
 

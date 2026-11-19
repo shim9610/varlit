@@ -25,6 +25,17 @@ class RepositoryHygieneTests(unittest.TestCase):
                      "compiler/output.ullbc", "compiler/output.mir"]:
             self.assertTrue(gate.violations(path, 100), path)
 
+    def test_only_fuzz_seed_corpora_are_excepted_from_the_archive_rule(self):
+        self.assertEqual(gate.violations("fuzz/seed-corpus/round2.tar.zst", 100), [])
+        self.assertEqual(
+            gate.violations("fuzz/seed-corpus/round2.tar.zst", gate.MAX_SEED_CORPUS_BYTES), [])
+        self.assertTrue(
+            gate.violations("fuzz/seed-corpus/round2.tar.zst", gate.MAX_SEED_CORPUS_BYTES + 1))
+        for path in ["fuzz/seed-corpus/nested/round2.tar.zst", "fuzz/round2.tar.zst",
+                     "fuzz/seed-corpus/round2.zip", "fuzz/seed-corpus/round2.tar.gz",
+                     "other/seed-corpus/round2.tar.zst"]:
+            self.assertTrue(gate.violations(path, 100), path)
+
     def test_size_boundary_is_independent_of_extension(self):
         self.assertEqual(gate.violations("sample.bin", gate.MAX_BLOB_BYTES), [])
         self.assertTrue(gate.violations("sample.bin", gate.MAX_BLOB_BYTES + 1))

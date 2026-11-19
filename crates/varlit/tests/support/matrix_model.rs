@@ -1,5 +1,13 @@
 //! Shared deterministic/fuzz oracle: working, published and pinned generations are independent.
-use varlit::{MatrixCellStatus, MatrixKey, VarlitEmpty, varlit_format};
+//!
+//! A pinned reader keeps its snapshot only while the file can still serve it.
+//! Once a checkpoint puts a newer published generation in place, reads of an
+//! older snapshot return `MatrixSnapshotExpired` and the reader must follow
+//! (docs/durability-model.md, "Readers"). The oracle accepts exactly that:
+//! expiry of a reader that is behind the newest published generation, after
+//! which it follows and must match the published model. Expiry of a reader
+//! that is already current is still a failure.
+use varlit::{Error, MatrixCellStatus, MatrixKey, VarlitEmpty, varlit_format};
 varlit_format! {
     pub format Model {
         magic: b"MMDL";
@@ -74,29 +82,46 @@ pub fn run(data: &[u8]) -> varlit::Result<()> {
             }
         }
         let fresh = Model::open_reader(&path)?;
-        for (view, model, aux) in [
-            (&reader, &captured, captured_aux),
-            (&fresh, &published, published_aux),
-        ] {
-            assert_eq!(view.read_note_aux(0, 8)?, aux, "step={step}");
-            for (row, expected) in model.iter().enumerate() {
-                let key = EntryKey {
-                    row: row as u64,
-                    col: 0,
-                };
-                if let Some(value) = expected {
-                    assert_eq!(view.entry_status(key)?, MatrixCellStatus::Committed);
-                    let mut entry = Entry::empty();
-                    view.entry(key, &mut entry)?;
-                    assert_eq!(entry.value, *value, "step={step} row={row}");
-                } else {
-                    assert_eq!(
-                        view.entry_status(key)?,
-                        MatrixCellStatus::NotCommitted,
-                        "step={step} row={row}"
-                    );
-                }
+        match check(&reader, &captured, captured_aux, step) {
+            Err(Error::MatrixSnapshotExpired { .. })
+                if reader.matrix_generation() < fresh.matrix_generation() =>
+            {
+                reader.follow()?;
+                captured = published;
+                captured_aux = published_aux;
+                check(&reader, &captured, captured_aux, step)?;
             }
+            other => other?,
+        }
+        check(&fresh, &published, published_aux, step)?;
+    }
+    Ok(())
+}
+
+/// Every row and the aux area of `view` match `model`.
+fn check(
+    view: &ModelReader,
+    model: &[Option<u64>; 8],
+    aux: [u8; 8],
+    step: usize,
+) -> varlit::Result<()> {
+    assert_eq!(view.read_note_aux(0, 8)?, aux, "step={step}");
+    for (row, expected) in model.iter().enumerate() {
+        let key = EntryKey {
+            row: row as u64,
+            col: 0,
+        };
+        if let Some(value) = expected {
+            assert_eq!(view.entry_status(key)?, MatrixCellStatus::Committed);
+            let mut entry = Entry::empty();
+            view.entry(key, &mut entry)?;
+            assert_eq!(entry.value, *value, "step={step} row={row}");
+        } else {
+            assert_eq!(
+                view.entry_status(key)?,
+                MatrixCellStatus::NotCommitted,
+                "step={step} row={row}"
+            );
         }
     }
     Ok(())
