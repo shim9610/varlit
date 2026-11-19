@@ -8,13 +8,20 @@ ROOT = Path(__file__).resolve().parents[1]
 MAX_BLOB_BYTES = 1024 * 1024
 OUTPUT_ROOTS = ("formal-recovery/", "benchmark-results/", "performance-results/", "docs/performance/")
 GENERATED_SUFFIXES = (".tar", ".tar.gz", ".tar.xz", ".tar.zst", ".tgz", ".zip", ".7z", ".ullbc", ".ullbc.gz", ".llbc", ".mir")
+# Fuzz seed corpora are inputs the fuzz workflows unpack, not run output.
+# Only zstd tarballs directly under fuzz/seed-corpus/, each at most 1 MiB.
+SEED_CORPUS = re.compile(r"^fuzz/seed-corpus/[^/]+\.tar\.zst$")
+MAX_SEED_CORPUS_BYTES = 1024 * 1024
 
 
 def violations(path, size):
     errors = []
     if path.startswith(OUTPUT_ROOTS) or re.match(r"^docs/verification/[^/]+-20\d{6}/", path):
         errors.append("generated run-output directory")
-    if path.endswith(GENERATED_SUFFIXES):
+    if SEED_CORPUS.match(path):
+        if size > MAX_SEED_CORPUS_BYTES:
+            errors.append(f"seed corpus exceeds {MAX_SEED_CORPUS_BYTES} bytes ({size} bytes)")
+    elif path.endswith(GENERATED_SUFFIXES):
         errors.append("archive or compiler extract")
     if size > MAX_BLOB_BYTES:
         errors.append(f"blob exceeds {MAX_BLOB_BYTES} bytes ({size} bytes)")
@@ -46,7 +53,8 @@ def main():
     count, errors = check()
     if errors:
         raise SystemExit("\n".join(errors))
-    print(f"Repository hygiene: {count} tracked files; no run archives or blobs above 1 MiB")
+    print(f"Repository hygiene: {count} tracked files; no run archives or blobs above 1 MiB "
+          "(fuzz seed corpora excepted)")
 
 
 if __name__ == "__main__":
