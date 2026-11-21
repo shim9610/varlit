@@ -17,6 +17,18 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 
 - Breaking: typed reads decode into a value the caller owns (`out: &mut T`)
   instead of returning one.
+- Breaking: `blocks::<T>()` on `VarlitFile` and `VarlitReader`, and the
+  generated `<plural>()` accessor of a block without a key, fill one page of a
+  caller-owned buffer (`blocks::<T>(&mut payload, &mut out) -> Page`,
+  continued with `blocks_from`) instead of returning a `BlockVec<T>`. A
+  `BlockVec<T>` remains at `with_directory(&dir)?.blocks::<T>()`; keyed blocks
+  and stream readers keep their accessors.
+- Breaking (behavior): native lazy opens (`open_readonly_lazy`, `open_lazy`,
+  their report variants, `VarlitWriter`'s lazy opens and `reopen_readonly()` on
+  a lazily opened handle) return `LazyOpenMetadataUnavailable` or
+  `LazyOpenVerificationRequiresScan` instead of falling back to a full scan.
+  Signatures and file bytes are unchanged; `*_lazy_or_scan[_with_report]` keeps
+  the former behavior.
 - Breaking: matrices are stored as tiles in the primary file, overwritten in
   place through a write-ahead ring; the `VMAT` layout and the `.vmg` companion
   file are gone. A matrix spec's schema hash now includes its tile shape, so

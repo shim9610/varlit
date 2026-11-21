@@ -60,6 +60,8 @@ a fresh decode is charged and is refused at the same limit.
 
 | Before | Now |
 | --- | --- |
+| `VarlitFile::blocks::<T>()` / `VarlitReader::blocks::<T>() -> Result<BlockVec<T>>` | `blocks::<T>(&mut payload, &mut out) -> Result<Page>`, continued with `blocks_from::<T>(page.next?, &mut payload, &mut out)`; see [paged reads](api-reference.md#reading-a-block-type-page-by-page). A `BlockVec<T>` remains at `with_directory(&dir)?.blocks::<T>()`; `decode_blocks_into` collects every record |
+| Generated `<plural>() -> Result<BlockVec<T>>` for a block without a key (resident reader and writer) | `<plural>(&mut payload, &mut out) -> Result<Page>` and `<plural>_from(cursor, &mut payload, &mut out)`. Keyed blocks (`KeyedBlockVec`) and stream readers (`StreamingBlocks`) keep their accessors |
 | `BlockVec::get(i) -> Result<Option<T>>` | `get(i, &mut out) -> Result<bool>` |
 | `BlockVec::get_into(i, &mut payload) -> Result<Option<T>>` | `get_into(i, &mut payload, &mut out) -> Result<bool>` |
 | `BlockVec::iter()` / `BlockIter` (an `Iterator`) | `cursor()` / `BlockCursor::next_into(&mut out) -> Result<bool>` |

@@ -17,7 +17,10 @@ new record flag, which 0.12.x refuses. Matrix storage is now tiled and a
 matrix spec's schema hash includes its tile shape, so matrix files written by
 0.12.x (layout `VMAT` v5) are refused (with `SchemaHashMismatch` when the
 format declares a schema hash); recreate them from their source. Stream
-sidecars written by 0.13.0 cannot be read by 0.12.x. Indexed files (a native
+sidecars written by 0.13.0 cannot be read by 0.12.x. Files written by a 0.13
+pre-release are not guaranteed to open with 0.13.0; matrix files from an
+earlier pre-release are already refused with `InvalidMatrixLayout`. Rewrite
+them from their source with the release before keeping them. Indexed files (a native
 primary with a `.vki` sidecar) are no longer supported; see
 [Indexed primary removed](#indexed-primary-removed).
 
@@ -79,6 +82,37 @@ reuses the vector's existing elements. A hand-written `VarlitBlock` that you
 read through these APIs needs an `impl VarlitEmpty`; overriding
 `decode_varlit_into` is optional and only adds capacity reuse.
 
+`blocks::<T>()` on a `VarlitFile` or `VarlitReader`, and the generated
+`<plural>()` accessor of a block without a key, no longer return a
+`BlockVec<T>`. They fill one page of a buffer you own and return a `Page` whose
+`next` continues the walk; see
+[paged reads](api-reference.md#reading-a-block-type-page-by-page). Pick one:
+
+```rust
+// before
+for point in file.blocks::<Point>()?.iter() { use_it(&point?); }
+
+// after: page by page, nothing allocated per record
+let mut payload = Vec::new();
+let mut page: Vec<Point> = (0..256).map(|_| Point::empty()).collect();
+let mut read = file.blocks::<Point>(&mut payload, &mut page)?;
+loop {
+    for point in &page[..read.filled] { use_it(point); }
+    let Some(next) = read.next else { break };
+    read = file.blocks_from::<Point>(next, &mut payload, &mut page)?;
+}
+
+// after: keep the BlockVec, through a directory you hold
+let points = file.with_directory(&index)?.blocks::<Point>()?;
+
+// after: every record into a Vec
+let mut all = Vec::new();
+file.decode_blocks_into::<Point>(&mut all)?;
+```
+
+Keyed blocks (`keyed_blocks::<T>()` and their generated accessors) and stream
+readers keep their accessors.
+
 New read-policy, range-streaming and fallible ownership APIs are optional.
 Ordinary opens retain their existing validation policy. Review the
 [0.13.0 API changes](api-changes.md#0130) before selecting read checks or adding
@@ -87,6 +121,9 @@ allocation-failure retries, particularly after a write may have been published.
 Native lazy opens now return metadata errors without automatically scanning.
 Use `*_lazy_or_scan[_with_report]` to retain the former behavior, or match the
 error and explicitly call `VarlitFile::open_readonly_scan` / `open_scan`.
+The same strict policy applies where the library opens lazily for you:
+`reopen_readonly()` on a lazily opened handle, and `VarlitWriter`'s lazy
+opens. Check those call sites too, not only direct `*_lazy` calls.
 Strict lazy open selects header tails when declared, otherwise the trailing
 digest. See [lazy-open changes](api-changes.md#lazy-open-and-explicit-scan-selection).
 
