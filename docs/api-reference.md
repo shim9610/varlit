@@ -435,7 +435,7 @@ metadata entries and internal scratch may allocate separately. These `Vec` and
 | --- | --- |
 | `index_entries()` | `index_entries_into(&mut Vec<RecordIndexEntry>)` |
 | `all_metadata()` | `all_metadata_into(&mut Vec<(String, Vec<u8>)>)` |
-| `blocks::<T>()` | `block_entries_into::<T>(&mut Vec<RecordIndexEntry>)` |
+| `with_directory(&dir)?.blocks::<T>()` | `block_entries_into::<T>(&mut Vec<RecordIndexEntry>)` |
 | — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record into a growable output, decoding into the elements it already holds; not a bounded-memory iterator |
 | `blocks_migrated::<F, T, M>()` | `blocks_migrated_into::<F, T, M>(&mut Vec<T>)` |
 | `keyed_blocks::<T>()` | `keyed_blocks_into::<T>(&mut Vec<RecordIndexEntry>, &mut HashMap<..>)` |
@@ -444,13 +444,69 @@ metadata entries and internal scratch may allocate separately. These `Vec` and
 | `open_readonly(spec, path)` | `open_readonly_with_scratch(spec, path, &mut Vec<RecordIndexEntry>)` |
 | `open(spec, path)` | `open_with_scratch(spec, path, &mut Vec<RecordIndexEntry>)` |
 
-`decode_blocks_into` is deliberately **not** named as the twin of `blocks()`:
-`blocks()` returns a lazy collection whose peak is one payload however many
-records it covers, and this one materialises all of them.
+`decode_blocks_into` is deliberately **not** named as the twin of
+`with_directory(..)?.blocks()`: that returns a lazy collection whose peak is one
+payload however many records it covers, and this one materialises all of them.
+On the handle itself, `blocks` is the paged read below.
 
 The generated per-block accessors carry the same pair — `<plural>_entries_into`,
 `<plural>_decoded_into`, and `<plural>_into` for a keyed block — on both the
 inherent and the trait route.
+
+### Reading a block type page by page
+
+`VarlitFile::blocks` and `VarlitReader::blocks` fill one page of a caller-owned
+buffer and say where the next page starts:
+
+```rust
+pub fn blocks<T: VarlitBlock>(&self, payload: &mut Vec<u8>, out: &mut [T]) -> Result<Page>;
+pub fn blocks_from<T: VarlitBlock>(&self, from: PageCursor, payload: &mut Vec<u8>, out: &mut [T]) -> Result<Page>;
+
+pub struct Page { pub filled: usize, pub next: Option<PageCursor> }
+```
+
+- `out.len()` is the page size. The first `page.filled` elements hold this page,
+  decoded in place (keeping what they own); the rest are untouched.
+- `payload` is the one read buffer the whole page shares.
+- `page.next` is `None` when the walk reached the end of the file. A full page
+  can report `Some` and be followed by an empty, final page: the walk does not
+  read ahead to find out.
+- A `PageCursor` names a record boundary in the append log, so it stays valid
+  across appends: a later page simply sees more records.
+- Each record's materialization is charged on its own. A record of `T` written
+  under another block version is refused, not skipped.
+- Every handle answers it, including one opened without a directory.
+
+```rust
+let mut payload = Vec::new();
+let mut page: Vec<Point> = (0..256).map(|_| Point::empty()).collect();
+let mut at = None;
+loop {
+    let read = match at {
+        None => file.blocks::<Point>(&mut payload, &mut page)?,
+        Some(cursor) => file.blocks_from::<Point>(cursor, &mut payload, &mut page)?,
+    };
+    for point in &page[..read.filled] {
+        consume(point);
+    }
+    match read.next {
+        Some(cursor) => at = Some(cursor),
+        None => break,
+    }
+}
+```
+
+The generated per-block accessors follow the block kind:
+
+| block | generated accessor |
+| --- | --- |
+| not keyed, resident handle | `<plural>(&mut payload, &mut out) -> Result<Page>` and `<plural>_from(cursor, &mut payload, &mut out)` |
+| keyed, resident handle | `<plural>() -> Result<KeyedBlockVec<K, T>>` (unchanged) |
+| stream reader | `<plural>() -> Result<StreamingBlocks<T>>` (unchanged) |
+
+A `BlockVec<T>` (`get`, `cursor`) is still available through
+`with_directory(&dir)?.blocks::<T>()`; `decode_blocks_into` collects every
+record of `T` into a `Vec`.
 
 Reading one record you already hold an entry for, into a buffer you own:
 
