@@ -143,10 +143,16 @@ flowchart TD
     D --> E["select records by block id"]
     E --> F["read payload bytes on demand"]
     F --> G["decompress if needed"]
-    G --> H["decode User"]
+    G --> H["decode into the caller's User"]
 ```
 
-Physical APIs such as `scan()`, `RecordIndexEntry::read_payload`, and mmap
+Typed reads decode into values the caller owns and reuses: `User::empty()`
+once, then `users.get(&key, &mut user)`, a cursor's `next_into(&mut user)`, or
+a paged `points(&mut payload, &mut out)` that fills a caller slice and returns
+a cursor for the next page. Decoding grows only the caller's buffers, so a
+reused value stops allocating once it has seen its largest record.
+
+Physical APIs such as `scan()`, the generated `AppFormat::read_payload(&entry, path)`, and mmap
 payload windows expose stored bytes. Typed APIs expose logical decoded values.
 
 ### How Open Builds The Directory
@@ -196,9 +202,12 @@ flowchart TD
 The segment chain and the digest are both found by probing the end of the file,
 so both are appended last at a commit point; the header table sits at a fixed
 offset instead. All three need the writing session to end with `flush` or
-`commit`, because each corroborates itself against the end of the file, and all
-three fall back to the full scan for a file they cannot account for and produce
-the identical answer when they do.
+`commit`, because each corroborates itself against the end of the file. For a
+file it cannot account for, an ordinary open falls back from the segment chain
+to the full scan and produces the identical answer. A lazy open
+(`open_readonly_lazy`, which uses the digest or the header table) is strict and
+returns `LazyOpenMetadataUnavailable` instead; `open_readonly_lazy_or_scan`
+scans in that case.
 
 A **checkpoint** record (`checkpoint_on_flush`) is a third internal record and is
 *not* one of these: open validates one it meets during the scan and discards the
@@ -250,9 +259,18 @@ let found = users.get(&7, &mut user)?;
 For repeated keys, keyed lookup returns the newest record by sequence. For
 stateful updates, use `push_op`, tombstones, merge, and compact APIs.
 
+That model appends every update, so the file grows with the number of updates
+and lookup needs a resident index. A format that declares
+`keyed_storage: in_place` instead keeps one record per key in a B-tree inside
+the file, updated in place: `put_user`, `remove_user`,
+`get_user(&key, &mut scratch, &mut out)` and `range_user(..)` read and change it,
+and lookup reads only the pages on the path. Changes are staged through a
+write-ahead ring and published atomically, like matrix cells. See
+[keyed storage](api-reference.md#keyed-storage).
+
 ## Commit Policies
 
-Varlit supports three append-log commit modes:
+Varlit supports these append-log commit modes:
 
 | Policy | Meaning |
 | --- | --- |
@@ -260,6 +278,7 @@ Varlit supports three append-log commit modes:
 | `record_footer` | each visible record must have a valid footer |
 | `transaction_marker(on_flush)` | `flush()` appends a marker; readers see marker-covered records |
 | `transaction_marker(explicit)` | only `commit()` or `commit_durable()` appends a marker |
+| `transaction_marker(<mode>, single_barrier)` | as above, but `commit_durable()` uses one storage barrier instead of two; open verifies the newest transaction before trusting it ([single-barrier commit](durability-model.md#single-barrier-commit)) |
 
 Offset chains use `VARVE3` footers to link previous records with the same block
 id and, for keyed generated writers, previous records with the same key.

@@ -157,10 +157,11 @@ Generated typed methods depend on block names:
 
 | Declaration | Writer method | Reader method |
 | --- | --- | --- |
-| `fixed Point` | `push_point(&Point)`, `replace_point(index, &Point)` | `points() -> BlockVec<Point>` |
+| `fixed Point` | `push_point(&Point)`, `replace_point(index, &Point)` | `points(&mut payload, &mut out) -> Page`, `points_from(cursor, ..)` (see [paged reads](#reading-a-block-type-page-by-page)) |
 | `variable User(key=[id])` | `push_user(&User)`, `replace_user(index, &User)`, `delete_user(&key)` | `users() -> KeyedBlockVec<K, User>` |
-| `matrix Cell` | `write_cell(key, &Cell)`, `commit_cell(key)` | `cell(key)`, `cell_status(key)` |
-| `aux { thumbnail: 16 }` | `write_thumbnail_aux(offset, bytes)` | `read_thumbnail_aux(offset, len)` |
+| `variable User(key=[id])` in a `keyed_storage: in_place` format | `put_user(&User)`, `remove_user(&key)`, `get_user`, `range_user` | `get_user(&key, &mut scratch, &mut out)`, `range_user(..)` (see [keyed storage](#keyed-storage)) |
+| `matrix Cell` | `write_cell(key, &Cell)`, `commit_cell(key)`, `clear_cell(key)`, `rebuild_cell_commit_from_crc()` | `cell(key, &mut out)`, `cell_status(key)`, and bulk reads such as `cell_run_into` and `cell_row_into` |
+| `aux { thumbnail: 16 }` | `write_thumbnail_aux(offset, bytes)` | `read_thumbnail_aux(offset, len) -> Vec<u8>`, `thumbnail_aux_len()` |
 
 ## FormatSpec
 
@@ -178,6 +179,16 @@ Generated typed methods depend on block names:
 | `with_read_limits(limits)` | set declaration-level resource policy without changing schema identity |
 | `with_resource_limits(limits)` | resolve standard/default policy and overlay runtime values |
 | `tighten_read_limits(limits)` | component-wise meet; a finite ceiling can never be widened |
+| `with_index_policy`, `with_liveness_policy`, `with_integrity_policy`, `with_recovery_policy`, `with_manifest_policy` | the policies a `varlit_format!` declaration sets with `index:`, `liveness:`, `integrity:`, `recovery:` and `manifest:` |
+| `with_anchors(AnchorPolicy)` | whether created files carry anchors |
+| `with_header_slots(slots)` | reserve an [editable header region](#an-editable-region-in-the-header); changes the computed schema hash |
+| `with_block_residency(descriptors)` | keep the listed blocks out of the resident index |
+| `with_chunk_compression(compression)` | compress each matrix block's slot regions inside a chunk record; inert unless called |
+| `with_keyed_storage(KeyedStorage)` | store keyed blocks in place ([keyed storage](#keyed-storage)) |
+| `with_matrix_ring_bytes(bytes)` | write-ahead ring size for new matrix files |
+| `with_growing_matrix_dimension(..)` | the matrix dimension that grows past its declared extent |
+| `with_layout(layout)` | custom physical layout ([physical layout API](#physical-layout-api)) |
+| `with_resource_defaults(defaults)` | operational defaults (not wire-format ceilings) |
 | `with_matrix_spec(dims, commits, blocks)` | manual matrix registry |
 | `with_matrix_aux(aux)` | manual matrix aux registry |
 | `with_block_identities(identities)` | attach the per-block identity table (endian override, keyedness, generated codec fingerprint) hashed by `computed_schema_hash()`; generated `spec()` does this automatically |
@@ -216,9 +227,9 @@ to an ordinary entrypoint. Values above a finite ceiling return
 `ReadLimits::missing()` is a partial-overlay builder base,
 `ReadLimits::finite_all(n)` sets every ceiling to `n`, and the const
 `with_max_*` builders set individual finite values. `ReadLimits::STANDARD`
-places no total ceiling on append-log file length, scan length, record count,
-segment count, or cumulative index bytes; it limits one-shot payload decoding
-and materialization. Compatibility `*_with_limits` methods perform a meet, so
+places no total ceiling on append-log file length, scan length, record count or
+segment count; it caps held index memory (`max_index_bytes`) at 1 GiB and limits
+one-shot payload decoding and materialization. Compatibility `*_with_limits` methods perform a meet, so
 `Finite(64 MiB)` tightened by `Finite(16 MiB)` is `Finite(16 MiB)`.
 `*_with_resource_limits` overlays fields and may raise or lower defaults.
 
@@ -272,9 +283,10 @@ decrease, so a crafted or damaged file cannot make a walk loop.
 
 `ReadLimits::UNTRUSTED` (`ReadLimits::untrusted()`) is the finite companion to
 `STANDARD` for input from untrusted sources. Every aggregate dimension that
-`STANDARD` leaves effectively unbounded is finite: `max_records` 16,000,000,
-`max_scan_bytes` 16 GiB, `max_index_bytes` 1 GiB,
-`max_segments` 65,536, and `max_keyed_tail_bytes` 256 MiB, inheriting the
+`STANDARD` leaves effectively unbounded is finite: `max_file_len` 16 GiB,
+`max_records` 16,000,000, `max_scan_bytes` 16 GiB and `max_segments` 65,536;
+`max_index_bytes` (1 GiB) and `max_keyed_tail_bytes` (256 MiB) match `STANDARD`,
+inheriting the
 `STANDARD` per-item caps for everything else — including
 `max_file_header_extension_len`, which is 64 KiB in both. Use it when a resident open must not let a hostile file choose the reader's
 CPU, I/O, or memory; large trusted files should use the scalable APIs or explicit
@@ -333,9 +345,8 @@ resident input directory or the per-block priming scans.
 | `VarlitWriter` | write-capable wrapper |
 | `VarlitFile` | lower-level read/write type used by both wrappers |
 
-Native handles may scan records at open, but directory and scan buffers are
-bounded by an explicit finite `max_index_bytes`; the unbounded default uses
-2 MiB per buffer. Excess rows use private
+Native handles may scan records at open; each directory and scan buffer holds
+at most 2 MiB, less when `max_index_bytes` leaves less. Excess rows use private
 temporary files. An ordinary private directory row is 13 bytes: an offset,
 block ID and committed-state byte. Eligible rewritten directories use compressed
 private rows within the existing allowance; full entries are reconstructed from
@@ -371,18 +382,18 @@ do not.**
 - `IndexPolicy::header_tails` avoids it too, from the file header rather than
   from a record: the same three facts, in a fixed region of the header that is
   rewritten in place at the end of every commit point, so nothing appended can
-  move it or bury it. `open_readonly_lazy` tries it before the digest and
-  reports `LazyOpenSource::HeaderTails`; the handle keeps no directory either,
+  move it or bury it. On a format declaring it, `open_readonly_lazy` opens
+  from it (no fallback to the digest) and reports `LazyOpenSource::HeaderTails`; the handle keeps no directory either,
   and the open frames the commit marker the table names, whatever closes the
   same commit point, and one record per block tail. The region is sized by the
   block count alone — 360 bytes for a two-block format. It requires
   `block_offset_chain` (which it turns on for you), `integrity: crc32` and a
-  `transaction_marker` commit policy, and is refused both alongside
-  `open_digest_on_flush` and on a format declaring matrix blocks. See [Format
+  `transaction_marker` commit policy, and is refused alongside
+  `open_digest_on_flush`; it combines with matrix blocks. See [Format
   Author Guide](format-author-guide.md#when-a-later-append-must-not-be-able-to-hide-the-answer).
 - `IndexPolicy::CheckpointOnFlush` does **not** seed an open from a checkpoint.
-  Every open without the segment chain calls `load_index` → `scan_records_range`,
-  which walks from the header to the file length; a checkpoint met on the way is
+  Every scanning open without the segment chain walks from the header to the
+  file length; a checkpoint met on the way is
   validated and its decoded entries are discarded. What the policy bounds is
   writer-side checkpoint bytes (it spaces full checkpoints geometrically), not
   open cost. `docs/spec.md` describes a checkpoint-seeded open as a design
@@ -391,9 +402,10 @@ do not.**
   schema manifest and hash bytes and is consulted nowhere else in `varlit-core`, so
   clearing it does not produce a non-scanning open.
 
-`ReadLimits::STANDARD` leaves `max_records`, `max_index_bytes` and
-`max_scan_bytes` at `u64::MAX`, so the default profile places no ceiling on
-resident index size; use `ReadLimits::UNTRUSTED` for input you did not produce.
+`ReadLimits::STANDARD` leaves `max_records` and `max_scan_bytes` at
+`u64::MAX` and caps `max_index_bytes` at 1 GiB, so the default profile bounds
+held index memory but not the work of a scan; use `ReadLimits::UNTRUSTED` for
+input you did not produce.
 `max_file_len` is accepted and inert — nothing enforces a file-length ceiling;
 see [Known Limitations](known-limitations.md).
 
@@ -402,6 +414,28 @@ Handles](#scalable-stream-handles) below, available by default. `VarlitReader` i
 another handle appends afterwards are not visible until it advances with
 `follow()` or is reopened. See
 [Known Limitations §2.1](known-limitations.md#21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index).
+
+### Files a handle accepts and how commits reach storage
+
+- **Regular files only.** Every native and stream open and create checks the
+  opened handle (not the path) and refuses anything but a regular file — a
+  FIFO, socket, device or directory — with an `InvalidInput` I/O error. On Unix
+  the open is non-blocking, so a FIFO cannot stall it.
+- **Published end.** Under a transaction-marker commit policy a reader adopts
+  a commit only once the writer has published it (a `VPUB` header block
+  rewritten in place; `commit_durable` and `sync` publish after their barrier
+  returns), so a follower never adopts a transaction a power loss could take
+  away. See [what readers see before the barrier returns](durability-model.md#what-readers-see-before-the-barrier-returns).
+- **Single-barrier commit.** `transaction_marker(<mode>, single_barrier)`
+  (`TransactionMarkerMode::{OnFlushSingleBarrier, ExplicitSingleBarrier}`,
+  `CommitPolicy::single_barrier`) makes `commit_durable` issue one storage
+  barrier instead of two; open then verifies the newest transaction before it
+  is trusted. It requires `crc32_with_header`. See
+  [single-barrier commit](durability-model.md#single-barrier-commit).
+- **Disk index confirmation.** A stream writer's sidecar confirms its end of
+  file on the schedule a `DiskIndexConfirmPolicy` sets (default every 64 MiB or
+  65,536 records; `EVERY_SYNC` confirms at each sync). See
+  [scalable I/O](scalable-io.md).
 
 ### Reads that fill a buffer you own
 
@@ -413,12 +447,17 @@ it already owns. Start from `T::empty()` (`VarlitEmpty`) or any existing value
 and keep it across a loop:
 
 ```rust
-let mut cursor = reader.frames()?;
+// A stream reader's plural accessor returns a cursor.
+let mut cursor = stream_reader.frames()?;
 let mut frame = Frame::empty();
 while cursor.next_into(&mut frame)? {
     consume(&frame); // borrow it; the next step decodes over it
 }
 ```
+
+On a native reader, the same loop goes through a `BlockVec`
+(`reader.with_directory(&index)?.blocks::<Frame>()?.cursor()`), or page by page
+with [`blocks`](#reading-a-block-type-page-by-page).
 
 A `bool` result means present (`true`) or absent / end of walk (`false`, `out`
 untouched). After an error `out` is valid but its contents are unspecified. The
@@ -433,7 +472,7 @@ metadata entries and internal scratch may allocate separately. These `Vec` and
 
 | allocating | caller-supplied |
 | --- | --- |
-| `index_entries()` | `index_entries_into(&mut Vec<RecordIndexEntry>)` |
+| `index_entries(&mut [RecordIndexEntry]) -> Page`, `index_entries_from(cursor, ..)` (paged, like [`blocks`](#reading-a-block-type-page-by-page)) | `index_entries_into(&mut Vec<RecordIndexEntry>)` |
 | `all_metadata()` | `all_metadata_into(&mut Vec<(String, Vec<u8>)>)` |
 | `with_directory(&dir)?.blocks::<T>()` | `block_entries_into::<T>(&mut Vec<RecordIndexEntry>)` |
 | — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record into a growable output, decoding into the elements it already holds; not a bounded-memory iterator |
@@ -560,6 +599,12 @@ walks the record chain forward one record at a time, only when asked.
 | `clear()` | empty the buffer and rewind to the start of the file |
 | `release()` | empty the buffer and keep the position |
 
+`record_map_from(&mut buffer, offset)` starts the walk at a record offset you
+already hold: the start of the append log or a `resume_offset()` from an
+earlier map of the same file, so a later question continues where an earlier
+one stopped. An offset outside the handle's snapshot is refused, and one that
+is not a record boundary fails when the walk frames it.
+
 ```rust
 let mut buffer = Vec::new();
 let mut map = file.record_map(&mut buffer)?;          // no read yet
@@ -616,12 +661,12 @@ format without the option (`InvalidFormatSpec`).
 
 A reader open across it keeps its own generation whole — the old object is
 unlinked but alive while a handle holds it — and moves with `is_current()` plus
-`reopen_readonly()`. The cost of publishing that way is peak disk: both
+`reopen_readonly()` (`VarlitFile`) or `reopen()` (`VarlitReader`). The cost of publishing that way is peak disk: both
 generations exist at once.
 
 Refused (`InvalidFormatSpec`) without `liveness: footer_flags`, for custom
-physical layouts and for matrix storage; refused (`NoResidentDirectory`) on a
-handle that keeps no directory.
+physical layouts, for matrix storage and for keyed storage; refused
+(`NoResidentDirectory`) on a handle that keeps no directory.
 
 <a id="an-open-that-reads-no-record"></a>
 
@@ -633,8 +678,9 @@ the committed file ends, what sequence the next append takes, and where each
 block's newest record sits. `IndexPolicy::with_open_digest_on_flush(true)`
 writes them at each commit point.
 
-The handle keeps no directory. `blocks`, `scan` and `keyed_blocks` return
+The handle keeps no directory. `scan` and `keyed_blocks` return
 `Error::NoResidentDirectory` and are answered through `with_directory(&map)`;
+the paged `blocks`/`blocks_from` work on it directly;
 `block_chain`, `block_tail_offset`, `read_block_at` and every entry-taking
 `_into` read need no directory and work directly — which is what the block tails
 are in the digest for.
@@ -680,8 +726,10 @@ match VarlitFile::open_readonly_lazy(spec, path) {
 ```
 
 The option requires `block_offset_chain` and composes with both
-`segment_on_flush` and `checkpoint_on_flush` — the three answer different
-questions. It is off by default and a file written without it is byte-identical
+`segment_on_flush` and `checkpoint_on_flush` for read-only opens — the three
+answer different questions. A lazy *writer* open (`open_lazy`,
+`VarlitWriter::open_lazy`, and their `_or_scan` forms) refuses a format with
+either of those two policies with `Error::LazyWriterIndexPolicy { policy }`. It is off by default and a file written without it is byte-identical
 to one written before it existed.
 
 Common `VarlitWriter` APIs:
@@ -729,8 +777,10 @@ record. Only a caller naming an in-place method directly meets the refusal.
 
 `index: header_tails` is the one lazy route that is *not* refused, because its
 region has a cold state that claims nothing and a digest record has no
-equivalent. An in-place replacement resets the region instead: the next open
-reports `LazyOpenSource::FullScan` and the next commit warms it again.
+equivalent. An in-place replacement resets the region instead: until the next
+commit warms it again, a strict lazy open returns
+`LazyOpenMetadataUnavailable`, and `*_lazy_or_scan` scans and reports
+`LazyOpenSource::FullScan`.
 
 All four safe replacement entry points select their target by block id and refuse a
 stored `block_version` that differs from `T::VERSION` with
@@ -785,7 +835,7 @@ Common `VarlitReader` APIs:
 
 | API | Meaning |
 | --- | --- |
-| `blocks::<T>()` | lazy typed records by block type |
+| `blocks::<T>(&mut payload, &mut out) -> Page`, `blocks_from` | one page of typed records by block type ([paged reads](#reading-a-block-type-page-by-page)); `with_directory(&dir)?.blocks::<T>()` for a `BlockVec` |
 | `keyed_blocks::<T>()` | latest put by key after tombstones are applied |
 | `materialized_keyed_blocks::<T>()` | applies puts, ops, tombstones |
 | `metadata(key)` | latest metadata value |
@@ -816,7 +866,8 @@ varlit_format! {
 }
 
 let mut file = AppFormat::create("f.varlit")?;
-file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
+let watermark = Watermark { label: "ingested".into(), at: 42 };
+file.write_header_block(&watermark)?;
 let mut mark = Watermark::empty();
 assert!(file.read_header_block::<Watermark>(&mut mark)?);
 assert_eq!(mark, watermark);
@@ -924,9 +975,10 @@ than a per-record vector. The stream writer also exposes `flush()`, `sync()`,
 method for a keyed block, because it keeps no previous-key chain. Stream
 readers expose `events()`, `verify_all()`, lazy typed plural methods for
 explicit sequential scans, `follow()`, `follow_events`, `follow_blocks`,
-`snapshot_status()` and `release_snapshot()`. They have no lookup by key; see
-[bounded keyed storage](design/bounded-keyed-storage.md) for the design that
-will provide one.
+`snapshot_status()` and `release_snapshot()`. They have no lookup by key, and
+every stream constructor refuses a format that declares keyed storage
+(`StreamingUnsupported`); use the native handles' [keyed storage](#keyed-storage)
+for lookup by key.
 
 Stream readers also expose
 `verify_all_with_progress(ScanOptions, observer)`. Scan control uses:
@@ -1000,11 +1052,13 @@ See [Scalable Stream I/O](scalable-io.md) for declarations, durability
 ordering and checked extent types.
 
 `scan()` yields entries whose physical payload can be read through
-`RecordIndexEntry`. Use `read_payload_limited(path, physical_limit)` for a
-stored-byte ceiling and
-`read_logical_payload_limited(spec, path, physical_limit, logical_limit)` to
-bound both the stored allocation and decoded logical allocation.
-All path-taking `RecordIndexEntry` helpers are deliberately low-level and
+the generated format functions: `AppFormat::read_payload(&entry, path)`,
+`AppFormat::read_payload_limited(&entry, path, physical_limit)` for a
+stored-byte ceiling, and
+`AppFormat::read_logical_payload_limited(&entry, path, physical_limit, logical_limit)`
+(or `read_logical_payload_with_resource_limits`) to bound both the stored
+allocation and decoded logical allocation.
+All path-taking payload helpers are deliberately low-level and
 non-snapshot: they reopen whatever object the pathname currently names. Their
 default forms resolve finite standard/spec limits; `*_limited` lets tooling
 supply stricter or deliberately raised ceilings after validating provenance. Generated
@@ -1107,7 +1161,8 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
   block type: a record keeps its key fields once (in the key) and its other
   fields as the value, whole in its leaf up to 1 KiB, else its first bytes
   there and the rest in overflow pages. Pages are kept at least half full
-  and freed pages are reused once no reader can still show them. Beyond the
+  and a leaf under a quarter full merges with a neighbour when both fit one
+page; freed pages are reused once no reader can still show them. Beyond the
   records a file holds the tree's free space, the ring
   (`KeyedStorage::ring_bytes`, 2 MiB by default) and at most 1 MiB of pages
   not yet used; none of these grows with the number of updates. After
@@ -1119,7 +1174,13 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
 - **Refusals.** In a keyed-storage format, appending a keyed block to the log
   (`push_info`, `push_keyed`, `delete`) fails with
   `Error::KeyedStorageRequiresPut`; keyed calls on a format without keyed
-  storage fail with `Error::InvalidFormatSpec`.
+  storage fail with `Error::InvalidFormatSpec`. Operations that read only the
+  append log refuse a keyed-storage format: stream constructors
+  (`StreamingUnsupported`), `merge_keyed_files`, `compact_keyed_file[s]`,
+  `defragment`, `replace_block` and `replace_rewrite` (`InvalidFormatSpec`).
+  An equal-size `replace_fixed` of an ordinary block works. A format cannot
+  declare both keyed storage and `keyed_offset_chain`, or keyed storage and
+  matrix blocks.
 - **Stats.** `VarlitFile::keyed_storage_stats()` returns `KeyedStorageStats`:
   the generation shown, keys, live bytes, heap bytes, free region bytes,
   leaf pages and index pages.
@@ -1128,12 +1189,13 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
 
 | Type | Meaning |
 | --- | --- |
-| `BlockVec<T>` | lazy typed collection for one block type |
+| `BlockVec<T>` | lazy typed collection for one block type (from `with_directory(&dir)?.blocks::<T>()`) |
 | `BlockVec::len()` | number of visible records |
-| `BlockVec::get(index)` | decode one item on demand |
-| `BlockVec::iter()` | lazy iterator of decoded items |
+| `BlockVec::get(index, &mut out) -> bool` | decode one item into `out` |
+| `BlockVec::get_into(index, &mut payload, &mut out) -> bool` | the same, through a caller payload buffer |
+| `BlockVec::cursor()` | `BlockCursor`; `next_into(&mut out) -> bool` walks the items |
 | `KeyedBlockVec<K, T>` | latest visible put per key after tombstones |
-| `KeyedBlockVec::get(&key)` | decode latest value for key |
+| `KeyedBlockVec::get(&key, &mut out) -> bool` | decode latest value for key into `out` |
 | `KeyedBlockVec::keys()` | iterate known keys |
 
 `BlockVec` and `KeyedBlockVec` read payload bytes lazily from the captured file
@@ -1196,8 +1258,8 @@ keyed generic entry point — keyed collections, stream push/delete, merge and
 compact, low-level `VarlitFile`/reader/writer deletes, `keyed_blocks`,
 `key_tail_offsets`, and the self-test keyed case — evaluates `KeyedBlockContract::<T>::OK`, turning an
 `impl VarlitKeyedBlock` with `IS_KEYED = false` into a post-monomorphization
-compile error. First-seen registration remains the runtime backstop and also
-rejects a keyedness disagreement for the same block id
+compile error. At run time a block impl is checked against the format's
+declared identity for its id, which rejects a keyedness disagreement
 (`Error::BlockKeyednessMismatch`). Manual
 implementations must state `IS_KEYED` explicitly (no chain-unsafe default).
 
@@ -1632,7 +1694,7 @@ Feature-gated APIs:
 | `mmap` | `unsafe mmap_matrix()` | mmap matrix slot windows |
 | `mmap` | `unsafe mmap_matrix_cell::<T>(key)` | independently map one committed cell, patching only its COW pages |
 | `mmap` | `MmapMatrix::cell_numeric::<T, N>(key)` | endian-aware numeric scalar read |
-| `zero-copy` | `unsafe MmapPayloads::raw_fixed::<T>()` | raw fixed block view |
+| `zero-copy` | `unsafe MmapPayloads::raw_fixed::<T>(index) -> Option<&T>` | raw fixed block view |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell::<T>(key)` | raw matrix cell view |
 | `zero-copy` | `unsafe MmapPayloads::raw_fixed_or_decode::<T>(index, scratch)` | raw fixed view, or the record decoded where the view is refused for byte order or alignment (`RawView::Decoded`) |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell_or_decode::<T>(key)` | raw cell view, or the cell decoded on the same grounds |
@@ -1715,7 +1777,8 @@ safe window APIs stay memory-safe through these enforced invariants:
 These invariants describe the intended safety argument under the unsafe API's
 preconditions; they are not a machine-checked proof of the mmap implementation.
 If a caller cannot control every writer, it must use owned reads such as
-`blocks::<T>()`, `read_payload`, or matrix typed reads instead of mmap.
+`blocks::<T>(&mut payload, &mut out)`, `read_payload_into`, or matrix typed
+reads instead of mmap.
 
 ## Compression API
 
@@ -1846,6 +1909,7 @@ survives.
 | `compression-zstd` | zstd record compression | stable |
 | `mmap` | mmap payload/matrix views | stable, `unsafe` entry points |
 | `zero-copy` | raw mmap views; implies `mmap` | stable, `unsafe` entry points |
+| `experimental-matrix-reuse` | the `experimental_matrix` module: explicit opt-in matrix page reuse | **experimental**: own format and compatibility rules, see [experimental matrix reuse](experimental-matrix-reuse.md) |
 | `scalable-fault-injection` | fault-injection counters and hooks for the scalable-path tests | **test infrastructure**: not a production feature; the counters it exposes are `#[doc(hidden)]` |
 
 Generation-store page and checkpoint checksums remain active in every build.
@@ -1878,9 +1942,9 @@ minor-version policy as the rest of the library.
 | `KeyedChainRequiresKeyedApi { block_id }` | generic `push`/`push_info` cannot maintain the keyed offset chain; use `push_keyed`/`push_keyed_info` or the generated keyed writer |
 | `LimitExceeded { resource: "variable field ids" }` | decoding charged the materialization budget for distinct variable field ids above 63 and the budget ran out |
 | `LimitExceeded { resource: "merge distinct keys" }` | a `*_with_key_limit` merge/compact hit the caller's `K-ever` ceiling; nothing was published |
-| `BlockSchemaFingerprintMismatch` | a block impl disagrees with the format's declared identity for that block id, or two impls share an id with different `SCHEMA_FINGERPRINT` |
-| `BlockKeyednessMismatch` | two block impls share an id but disagree on keyedness |
-| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also surfaced by sidecar create/bootstrap/rebuild |
+| `BlockSchemaFingerprintMismatch` | a block impl disagrees with the format's declared identity for that block id |
+| `BlockKeyednessMismatch` | a block impl disagrees with the format's declared keyedness for that block id |
+| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also surfaced by sidecar create/bootstrap |
 | `MatrixCommittedButHookFailed { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` committed the cell and published its generation, then the caller's post-commit hook failed. Not a rollback: retry the notification with the carried `MatrixCommitEvent`, not the whole call |
 | `MatrixPublicationUncertain { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` failed while publishing, before the handle's generation advanced. The writer is poisoned and the hook did not run; reopen and read the cell before retrying |
 | `MatrixCommittedButDurabilityUnproven { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` published the cell's generation and a later step of `sync()` failed. Not a rollback, and the hook did **not** run. The writer is poisoned; reopen and `sync`, then issue the notification with the carried event |

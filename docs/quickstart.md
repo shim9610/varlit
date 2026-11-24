@@ -80,11 +80,12 @@ physical blocks and from the number of publications.
 
 ## Choose the next guide
 
-- Need block-key lookup: use a keyed block with the resident reader/writer
-  ([API reference](api-reference.md)), with a group key and slot/range inside
-  the returned block. Lookup is resident and each update appends a record;
-  stream readers have no lookup by key. Disk-backed keyed storage is
-  [designed, not implemented](design/bounded-keyed-storage.md).
+- Need block-key lookup: declare `keyed_storage: in_place` and use the
+  generated `put_*`, `get_*`, `remove_*` and `range_*` on the native
+  reader/writer ([keyed storage](api-reference.md#keyed-storage)). Each key has
+  one record, updated in place. Without the declaration, keyed blocks are
+  appended and lookup is resident. Stream handles have no lookup by key and
+  refuse a keyed-storage format.
 - Need direct cell addressing: use [matrix declarations](format-author-guide.md).
 - Need a small, directly indexed native file: see the [API reference](api-reference.md).
 - Need checks or limits: start with the [read-policy table](api-reference.md#read-validation).

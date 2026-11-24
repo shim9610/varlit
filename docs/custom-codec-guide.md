@@ -7,14 +7,22 @@ meaning.
 
 ## Implement Encode And Decode
 
-Implement `VarlitEncode` and `VarlitDecode` for the field type. Use the provided
-`Encoder` and `Decoder` methods so bytes stay endian-aware.
+Implement `VarlitEncode` and `VarlitDecode` for the field type, and
+`VarlitEmpty` if the type is a field of a derived or generated block: reads
+decode into a value the caller owns, so every field needs a starting value. Use
+the provided `Encoder` and `Decoder` methods so bytes stay endian-aware.
 
 ```rust
-use varlit::{Decoder, Encoder, VarlitDecode, VarlitEncode, WireType};
+use varlit::{Decoder, Encoder, VarlitDecode, VarlitEmpty, VarlitEncode, WireType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct TimestampMillis(u64);
+
+impl VarlitEmpty for TimestampMillis {
+    fn empty() -> Self {
+        Self(0)
+    }
+}
 
 impl VarlitEncode for TimestampMillis {
     const WIRE_TYPE: WireType = WireType::U64;
@@ -188,7 +196,25 @@ impl VarlitDecode for Samples {
         Ok(Self(values))
     }
 }
+
+impl varlit::VarlitEmpty for Samples {
+    fn empty() -> Self {
+        Self(Vec::new())
+    }
+}
 ```
+
+### Reuse an owned value's storage
+
+Reads decode into a value the caller keeps (`get(&key, &mut out)`,
+`next_into(&mut out)`, paged `blocks`). The default
+`VarlitDecode::decode_varlit_into(out, decoder)` decodes a fresh value and
+assigns it. A codec that owns heap storage can override it to refill `out` in
+place, so a reused value stops allocating once it has held its largest record.
+The override must accept exactly the bytes `decode_varlit` accepts, charge the
+same materialization budget, and leave `out` equal to what `decode_varlit`
+would return; on error `out` must stay a valid value, though its contents are
+unspecified.
 
 ### Test allocation accounting with a negative control
 

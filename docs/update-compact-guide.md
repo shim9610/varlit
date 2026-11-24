@@ -1,8 +1,17 @@
 # Update And Compact Guide
 
-Varlit is optimized for append-friendly updates. Prefer put, op, tombstone, and
-compact workflows for keyed data. Use direct replacement only when the caller
-intentionally wants to rewrite existing records.
+Varlit offers two models for keyed data. The append model below — put, op,
+tombstone, then merge or compact — appends every update and reclaims space by
+rewriting the file. A format that declares `keyed_storage: in_place` keeps one
+record per key in the file, updated in place with `put_<block>` and
+`remove_<block>`; its size follows the live data, so it needs no compaction.
+The two do not mix: in a keyed-storage format, `push_*` / `delete_*` of a keyed
+block fail with `KeyedStorageRequiresPut`, and keyed merge, compaction,
+`defragment`, `replace_block` and `replace_rewrite` refuse the format. See
+[keyed storage](api-reference.md#keyed-storage).
+
+Use direct replacement only when the caller intentionally wants to rewrite
+existing records.
 
 ## Keyed Updates
 
@@ -151,8 +160,9 @@ routes them to `replace_block` and the capability is not lost; only a direct
 call meets the refusal.
 
 A format declaring `index: header_tails` is not refused — that region has a cold
-state a digest record has not — but an in-place replacement resets it, so the
-next open scans once before the following commit warms it again.
+state a digest record has not — but an in-place replacement resets it: until the following commit warms it
+again, a strict lazy open returns `LazyOpenMetadataUnavailable`, while an
+ordinary open or `open_readonly_lazy_or_scan` scans.
 
 On a `keyed_offset_chain` format the caller must also keep the record's key
 unchanged (F-02). Records appended after the target already carry

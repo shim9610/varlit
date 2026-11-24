@@ -15,8 +15,9 @@ workload; [API reference](api-reference.md) gives the supported options.
 
 ## Matrix I/O and storage
 
-A matrix is stored as tiles inside the primary file. A tile is an internal
-append-log record written the first time any of its cells is written; cells are
+A matrix is stored as tiles inside the primary file. A tile is placed the
+first time any of its cells is written — carved from free overflow-region space
+when there is room, otherwise appended as an internal record; cells are
 then overwritten in place. Each publication goes through a write-ahead ring in
 the same file and syncs the file once (twice when it appended tiles) before it
 is visible; a publication that needs ring space also runs a checkpoint, which
@@ -81,16 +82,24 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
   first). There are no secondary indexes: an application keeps its own.
 - **Not with matrices.** A format cannot declare both keyed storage and
   matrix blocks yet: each keeps its metadata as the first record.
-- **Pages are at least half full.** The B-tree splits a full page in half
-  and merges neighbours that fit one page, so leaves hold between half and
-  all of a page; values over 1 KiB fill overflow pages but the last.
+- **Pages can run down to a quarter full.** The B-tree splits a full page
+  in half, and a leaf under a quarter full merges with a neighbour when both
+  fit one page, so a leaf may hold as little as a quarter of a page; values
+  over 1 KiB fill overflow pages but the last.
 - **Readers expire more often.** To reuse freed pages without putting the
   ring in place, the writer raises the ring's mark to its last publication
   once freed pages wait past the ratio, and at the end of every round: a
   reader older than that gets `MatrixSnapshotExpired` and must `follow`.
 - **Deletes leave pages in the file.** Freed pages wait in a free list that
   new keys take from before the file grows; the file itself does not
-  shrink. Rebuild a file that shrank for good.
+  shrink. To reclaim it, copy the keys into a new file with `range_*` and
+  `put_*`: `defragment` and the rewrite paths refuse keyed storage.
+- **Append-log maintenance refuses the format.** Stream handles
+  (`StreamingUnsupported`), keyed merge and compaction, `defragment`,
+  `replace_block` and `replace_rewrite` (`InvalidFormatSpec`) read or copy
+  only the append log, so they refuse a keyed-storage format rather than
+  lose or corrupt its keyed pages. An equal-size `replace_fixed` of an
+  ordinary block still works.
 - **Two barriers per publication with updates.** New values written straight
   to the file are made durable before the commit frame, so a `sync` that
   wrote any costs two barriers instead of one, and every few publications a
@@ -112,12 +121,12 @@ budget, with a 2 MiB in-memory batch per block. `max_keyed_tail_bytes` is per
 block, not a global sum. Stream handles avoid those construction scans.
 Explicit requests for an owned full key map can still exceed admission limits.
 
-There is no disk-backed lookup by key. The indexed primary (`.vki` sidecar,
-`key_index`) was removed; keyed lookup is resident only, and every keyed update
-or delete appends a record, so the file grows with updates until an explicit
-keyed compaction. Stream readers have no lookup by key. The replacement is
-described in [bounded keyed storage](design/bounded-keyed-storage.md) and is
-not implemented.
+Without `keyed_storage: in_place`, there is no disk-backed lookup by key. The
+indexed primary (`.vki` sidecar, `key_index`) was removed; keyed lookup is
+resident only, and every keyed update or delete appends a record, so the file
+grows with updates until an explicit keyed compaction. Declare
+[keyed storage](#keyed-storage) for an in-file index updated in place. Stream
+readers have no lookup by key either way.
 
 External merge and rewrites require scratch disk, a complete rewrite generation
 and per-record/key workspace. `VARLIT_SPILL_DIR` selects disposable spill storage;
@@ -210,6 +219,12 @@ A native handle holds fixed read buffers from open (about 144 KiB for a format
 with variable blocks and no compression). `MmapMatrix` copies a cell whose slot an anchor splits on
 its first read and keeps the copy for the mapping's lifetime: at most one slot
 per anchor, and only for split cells that are read.
+
+A variable record longer than 64 KiB in a format that keeps data checksums is
+stored in 64 KiB chunks, each with its own checksum (and, when compressed, its
+own frame). A reader verifies and decodes it a chunk at a time, so it never
+holds more than one chunk of the stored record; the decoded value it fills is
+still the whole value.
 
 Fallible buffer/owner APIs report supported allocation refusals and clean partial
 output. Existing public `Clone`, infallible constructors and convenience builders

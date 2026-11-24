@@ -910,6 +910,12 @@ mod custom_codec_guide_charging_example {
         }
     }
 
+    impl varlit::VarlitEmpty for Samples {
+        fn empty() -> Self {
+            Self(Vec::new())
+        }
+    }
+
     #[test]
     fn samples_refuse_to_materialize_past_the_budget() {
         let bytes =

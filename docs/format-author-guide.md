@@ -81,6 +81,48 @@ layout. Choose `variable` for evolvable records. Variable fields are encoded as
 field id, wire type, length, and payload, so unknown field ids with known wire
 types can be skipped.
 
+Every field type of a generated or derived block must implement
+`VarlitEmpty`: reads decode into a value you own (`Point::empty()`, then
+`read_*(.., &mut out)` or a paged `points(&mut payload, &mut out)`), so a block
+needs a value to start from. The built-in field types already do.
+
+### Per-block options
+
+Besides `id` and `key = [..]`, a block declaration accepts:
+
+| Option | Effect |
+| --- | --- |
+| `version = N` | the block's wire version, checked on read (`BlockVersionMismatch`) |
+| `key_values = [Name = (..), ..]` / `key_domain = [field = a..b, ..]` | a finite key set; generates a key enum. See [scalable I/O](scalable-io.md) |
+| `durability = immediate` / `deferred` | whether appending this block forces an Immediate publication. See [Immediate policy](immediate-policy.md) |
+| `immediate_if = path` | a predicate that decides Immediate per value |
+
+`key_index = ..` was removed; the compiler error points to its replacement,
+keyed storage.
+
+### Keyed storage
+
+```rust
+keyed_storage: in_place;                    // 5 % free space per page
+keyed_storage: in_place(free_space = 2%);   // 1 to 5 %
+```
+
+With this declaration a format stores its keyed blocks in a B-tree inside the
+file, updated in place, instead of appending every update to the log. The file
+then follows the live data rather than the number of updates, and lookup by key
+reads only the pages on the path. Generated methods are `put_<block>`,
+`remove_<block>`, `get_<block>(&key, &mut scratch, &mut out)` and
+`range_<block>(..)`; the manual form is
+`FormatSpec::with_keyed_storage(KeyedStorage::IN_PLACE)` with
+`with_free_space_percent`, `with_ring_bytes` and `with_change_budget`.
+
+It cannot be combined with `keyed_offset_chain` or with matrix blocks. In such
+a format, `push_*` / `delete_*` of a keyed block fail with
+`KeyedStorageRequiresPut`; stream handles, keyed merge and compaction,
+`defragment`, `replace_block` and `replace_rewrite` refuse the format. See
+[keyed storage](api-reference.md#keyed-storage) for the full API and how
+publication works.
+
 ## Matrix Blocks
 
 Matrix blocks are for runtime-sized grids that need direct cell access and
@@ -340,10 +382,10 @@ Compression modes:
   `spec.with_computed_schema_hash()` and pin that hash, because the static
   format spec is the compression contract.
 
-Physical APIs such as `scan()`, `RecordIndexEntry::read_payload`, and mmap
-payload windows expose stored compressed bytes. Typed reads through
-`blocks::<T>()`, migration reads, and merge/materialization return decompressed
-logical values.
+Physical APIs such as `scan()`, the generated `AppFormat::read_payload(&entry, path)`,
+and mmap payload windows expose stored compressed bytes. Typed reads through
+`blocks::<T>(&mut payload, &mut out)` / `blocks_from`, migration reads, and
+merge/materialization return decompressed logical values.
 
 ## Length Limits And Caller Policy
 
@@ -362,9 +404,9 @@ and does not override the enclosing record's limits. Callback output remains
 provisional until success; see [range streaming](chunk-streaming.md).
 
 For physical records, use
-`RecordIndexEntry::read_payload_limited(path, physical_limit)` to cap stored
+`AppFormat::read_payload_limited(&entry, path, physical_limit)` to cap stored
 bytes, or
-`read_logical_payload_limited(spec, path, physical_limit, logical_limit)` to cap
+`AppFormat::read_logical_payload_limited(&entry, path, physical_limit, logical_limit)` to cap
 both the stored compressed allocation and post-decompression logical allocation
 before either allocation. These are caller policy controls; Varlit does not guess
 a global domain ceiling.
@@ -502,7 +544,12 @@ the matrix's records start after the file header, wherever it ends
 stores a footer after each record and treats a valid footer as that record's
 commit flag. `commit: transaction_marker(on_flush);` writes an internal marker
 on `flush`, while `transaction_marker(explicit)` writes one only when
-`commit()` is called.
+`commit()` is called. Adding `single_barrier` — `transaction_marker(on_flush,
+single_barrier)` or `transaction_marker(explicit, single_barrier)` — makes
+`commit_durable()` issue one storage barrier instead of two; open then verifies
+the newest transaction's records before trusting it. It requires
+`integrity: crc32_with_header` and refuses `recovery: mark_tail`. See
+[single-barrier commit](durability-model.md#single-barrier-commit).
 
 `commit()` is a logical visibility marker, not a hidden fsync. Use
 `commit_durable()` when records covered by an explicit marker must be flushed
@@ -591,19 +638,23 @@ file that will hold a billion records.
 
 The two are not alternatives — declare both if some of your readers want the
 index cheaply and others want no index at all. A digest also composes with
-`checkpoint_on_flush`, which a segment does not.
+`checkpoint_on_flush`, which a segment does not. Both combinations are for
+read-only lazy opens: a lazy *writer* open (`open_lazy`) refuses a format with
+`segment_on_flush` or `checkpoint_on_flush` (`Error::LazyWriterIndexPolicy`).
 
-The trade is that a digest open has **no record directory**, so `blocks`,
-`scan` and `keyed_blocks` return `Error::NoResidentDirectory` rather than
-answering. They are not withdrawn: `with_directory(&map)` answers all of them
+The trade is that a digest open has **no record directory**, so `scan` and
+`keyed_blocks` return `Error::NoResidentDirectory` rather than answering (the
+paged `blocks` / `blocks_from` walk the records themselves and work). They are not withdrawn: `with_directory(&map)` answers all of them
 against whatever prefix the map has walked, and `block_chain`,
 `block_tail_offset`, `read_block_at` and every entry-taking `_into` read need no
 directory at all — which is why the digest carries the block tails.
 
-It requires `block_offset_chain` (which it turns on for you). A file it cannot
-account for falls back to the scan, and unlike the segment chain that fallback
-is reportable: `open_readonly_lazy_with_report` returns
-`LazyOpenSource::{Digest, FullScan}`. **Finish writing with `flush()`** here
+It requires `block_offset_chain` (which it turns on for you). A lazy open is
+strict: a file it cannot account for returns
+`Error::LazyOpenMetadataUnavailable` instead of scanning. A caller that wants
+the scan as a fallback asks for it with `open_readonly_lazy_or_scan`, and
+`open_readonly_lazy_or_scan_with_report` says which path answered
+(`LazyOpenSource::{Digest, FullScan}`). **Finish writing with `flush()`** here
 too, and for the same reason.
 
 ### When A Later Append Must Not Be Able To Hide The Answer
@@ -611,7 +662,8 @@ too, and for the same reason.
 The digest has one property that is a real limit rather than a cost: it is a
 *record*, and it is usable only while it is the file's last one. Anything
 appended after it — a partial write, records from a run that then crashed —
-hides it, and the open falls back to reading everything. The moment you most
+hides it, and a lazy open returns `LazyOpenMetadataUnavailable` (or, through
+`_lazy_or_scan`, reads everything). The moment you most
 need a cheap resume is the moment that is most likely.
 
 `index: header_tails` writes the same table into a fixed region of the **file
@@ -653,9 +705,10 @@ marker — with no marker there is nothing to name, and the region would stay co
 for the life of the file while still costing its bytes.
 
 **What the handle can do.** It keeps no resident directory, which is the point —
-a resume must not cost memory proportional to the file. So `blocks::<T>()` and
-`mmap_payloads` refuse with `NoResidentDirectory`, and `record_map` is how you
-walk records. Keyed lookups work: `key_tail_offsets` rebuilds from the chains at
+a resume must not cost memory proportional to the file. So `scan`,
+`keyed_blocks` and `mmap_payloads` refuse with `NoResidentDirectory`; the paged
+`blocks::<T>(&mut payload, &mut out)` walks the records itself, and
+`record_map` is how you build a directory as far as a question needs. Keyed lookups work: `key_tail_offsets` rebuilds from the chains at
 a cost bounded by the keyed records rather than by the file, which is what makes
 a keyed resume on a 600,000-record file affordable. Bounded by the keyed records
 *and by every tombstone in the file*: deletions are their own block with their
@@ -670,7 +723,8 @@ log after the header (`header_tails_and_header_slots_combine_with_a_matrix`).
 
 **What it gives up on an in-place replacement.** `replace_fixed` and
 `unsafe replace_fixed_in_place_exclusive` reset the region to cold, so the next
-open reports `LazyOpenSource::FullScan` and the commit after it warms the region
+strict lazy open returns `LazyOpenMetadataUnavailable` (`_lazy_or_scan` scans
+and reports `LazyOpenSource::FullScan`) and the commit after it warms the region
 again. Nothing moves in such a replacement, so the offsets in the table would
 still be true — but the table does not only answer offsets. The high-water mark
 an open resumes from is *derived* from the commit marker the slot names, and
@@ -690,10 +744,11 @@ always present and always "last", so unlike the digest its position proves
 nothing. It records the offset of the commit marker it was written for, and an
 open frames that record, requires it to be a commit marker, then walks forward —
 at most a segment and a digest may follow one — and requires the walk to land
-exactly on the end of the file. Anything else falls back to the scan and answers
-identically, only slower: a file appended to since that commit, a table left
-over from an earlier one, a torn slot. You do not have to do anything about any
-of those.
+exactly on the end of the file. Anything else — a file appended to since that
+commit, a table left over from an earlier one, a torn slot — makes a strict lazy
+open return `LazyOpenMetadataUnavailable`. Handle that error, or open with
+`open_readonly_lazy_or_scan`, which then scans and answers identically, only
+slower.
 
 ## Dead Records And Crash Recovery
 
@@ -846,8 +901,10 @@ occupies that offset.
 
 Refused without `liveness: footer_flags` — nothing would ever be dead, so it
 would be a whole-file copy that achieves nothing — and for custom layouts,
-matrix storage, and a handle that keeps no resident directory. Memory is two
-offset tables sized by the record count, charged to `max_index_bytes`.
+matrix storage, keyed storage, a format with a non-resident block, and a handle
+that keeps no resident directory. The directory and the offset remapping share
+the index buffer budget (`max_index_bytes`) and spill to private,
+page-compressed temporary storage that scales with the record count.
 
 ## Custom Physical Layout
 
@@ -992,12 +1049,21 @@ writer.flush()?; // writes buffered bytes and checkpoint/manifest records
 writer.sync()?;  // fsync when the caller needs durable storage
 
 let reader = AppFormat::open_reader("data.varlit")?;
-let points = reader.points()?;
-let users = reader.users()?;
+// Unkeyed blocks are read a page at a time into caller buffers.
+let mut payload = Vec::new();
+let mut page_buf: [Point; 64] = std::array::from_fn(|_| Point::empty());
+let mut page = reader.points(&mut payload, &mut page_buf)?;
+loop {
+    for point in &page_buf[..page.filled] { /* use point */ }
+    let Some(next) = page.next else { break };
+    page = reader.points_from(next, &mut payload, &mut page_buf)?;
+}
+let users = reader.users()?; // keyed: KeyedBlockVec, latest put per key
 ```
 
-Readers are snapshot-on-open. Writers are single-writer per file and use a
-sidecar lock. Default create/open/recover paths refuse an existing lock; stale
+Readers are snapshot-on-open and move forward with `follow()`. Writers are
+single-writer per file: exclusion is an OS lock on the file object itself, and
+the `.lock` marker next to it carries diagnostic and stale-lock data. Default create/open/recover paths refuse an existing lock; stale
 lock handling is explicit through `inspect_writer_lock` and
 `open_with_lock_policy`.
 
