@@ -58,6 +58,13 @@ impl VarlitFile {
                 "defragment is not supported for matrix storage",
             ));
         }
+        // Keyed-storage pages are records updated in place; a copying
+        // rewrite would move them out from under the heap's metadata.
+        if self.spec.keyed_storage.is_some() {
+            return Err(Error::InvalidFormatSpec(
+                "defragment is not supported for keyed storage",
+            ));
+        }
         self.ensure_generation_rewrite_allowed()?;
 
         let bytes_before = self.file.physical_len()?;
@@ -264,6 +271,11 @@ impl VarlitFile {
         if self.spec.has_matrix_blocks() || T::KIND == BlockKind::Matrix {
             return Err(Error::InvalidFormatSpec(
                 "replacement is not supported for matrix storage",
+            ));
+        }
+        if self.spec.keyed_storage.is_some() {
+            return Err(Error::InvalidFormatSpec(
+                "replace_block is not supported for keyed storage",
             ));
         }
         self.ensure_user_block::<T>()?;
@@ -1101,6 +1113,11 @@ impl VarlitFile {
         if self.spec.has_matrix_blocks() {
             return Err(Error::InvalidFormatSpec(
                 "native rewrite is not supported for matrix files",
+            ));
+        }
+        if self.spec.keyed_storage.is_some() {
+            return Err(Error::InvalidFormatSpec(
+                "native rewrite is not supported for keyed storage",
             ));
         }
         self.ensure_user_block::<T>()?;

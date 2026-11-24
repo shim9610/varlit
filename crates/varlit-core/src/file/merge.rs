@@ -175,6 +175,7 @@ where
 {
     let spec = spec.ordinary_read();
     spec.validate()?;
+    refuse_keyed_storage_merge(spec)?;
     let merged =
         external_merge::ExternalMerge::<T>::collect(spec, base, deltas, max_distinct_keys)?;
     write_keyed_values_atomically(spec, output.as_ref(), |out| merged.write(out))
@@ -209,9 +210,22 @@ where
 {
     let spec = spec.ordinary_read();
     spec.validate()?;
+    refuse_keyed_storage_merge(spec)?;
     let merged =
         external_merge::ExternalMerge::<T>::collect(spec, base, deltas, max_distinct_keys)?;
     write_keyed_values_atomically(spec, output.as_ref(), |out| merged.write(out))
+}
+
+/// Keyed merge and compaction read keyed blocks from the append log. A
+/// keyed-storage format keeps them in its in-place heap instead, so the
+/// walk would find none and write an empty output: refuse it.
+fn refuse_keyed_storage_merge(spec: FormatSpec) -> Result<()> {
+    if spec.keyed_storage.is_some() {
+        return Err(Error::InvalidFormatSpec(
+            "keyed merge and compaction are not supported for keyed storage",
+        ));
+    }
+    Ok(())
 }
 
 fn write_keyed_values_atomically(

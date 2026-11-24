@@ -23,6 +23,14 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   continued with `blocks_from`) instead of returning a `BlockVec<T>`. A
   `BlockVec<T>` remains at `with_directory(&dir)?.blocks::<T>()`; keyed blocks
   and stream readers keep their accessors.
+- A format declaring keyed storage is refused by the operations that do not
+  read its in-place heap: stream handles (`StreamingUnsupported`), keyed merge
+  and compaction (`merge_keyed_files`, `compact_keyed_file[s]`), `defragment`,
+  `replace_block` and `replace_rewrite` (`InvalidFormatSpec`). Before, a stream
+  writer wrote a file whose keyed storage could not be opened, merge and
+  compaction reported success with an empty output, and the rewrites failed
+  with an unrelated checksum error. Equal-size `replace_fixed` of an ordinary
+  block still works.
 - Breaking (behavior): native lazy opens (`open_readonly_lazy`, `open_lazy`,
   their report variants, `VarlitWriter`'s lazy opens and `reopen_readonly()` on
   a lazily opened handle) return `LazyOpenMetadataUnavailable` or

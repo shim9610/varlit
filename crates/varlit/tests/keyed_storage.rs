@@ -424,3 +424,155 @@ fn range_reads_visit_keys_in_order_on_writers_and_readers() -> varlit::Result<()
     assert!(matches!(refused, Err(varlit::Error::KeyedStorageBusy)));
     Ok(())
 }
+
+// Operations that do not know about the keyed-storage heap must refuse a
+// keyed-storage format instead of working around it. Before these refusals,
+// a stream writer produced a file whose keyed storage could not be opened,
+// keyed merge and compaction reported success with an empty output, and the
+// copying rewrites failed with an unrelated checksum error.
+
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 3, version = 1, kind = "fixed")]
+struct Note {
+    n: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 4, version = 1, kind = "variable")]
+struct AccountOp {
+    #[varlit(field_id = 1)]
+    fill: u8,
+}
+
+impl VarlitMerge for Account {
+    type Op = AccountOp;
+    fn apply_op(&mut self, op: AccountOp) -> varlit::Result<()> {
+        self.bytes.fill(op.fill);
+        Ok(())
+    }
+}
+
+varlit_format! { struct MaintenanceFormat {
+    magic: b"KEYMAINT"; version: 1; endian: little; integrity: crc32;
+    blocks: [Account, Note, AccountOp];
+} }
+
+fn maintenance_spec(record_footer: bool) -> FormatSpec {
+    let spec = MaintenanceFormat::spec()
+        .with_keyed_storage(KeyedStorage::IN_PLACE.with_ring_bytes(1 << 20));
+    if record_footer {
+        spec.with_commit_policy(CommitPolicy::RecordFooter)
+            .with_liveness_policy(LivenessPolicy::FooterFlags)
+    } else {
+        spec
+    }
+}
+
+fn maintenance_file(spec: FormatSpec, path: &std::path::Path) -> varlit::Result<()> {
+    let mut file = VarlitFile::create(spec, path)?;
+    for id in 0..200 {
+        file.put_keyed(&account(id, 40 + id as usize % 100, id))?;
+    }
+    for n in 0..4 {
+        file.push(&Note { n })?;
+    }
+    file.sync()
+}
+
+fn all_accounts_intact(spec: FormatSpec, path: &std::path::Path) -> varlit::Result<()> {
+    let file = VarlitFile::open_readonly(spec, path)?;
+    for id in 0..200 {
+        assert_eq!(
+            get_account(&file, id),
+            Some(account(id, 40 + id as usize % 100, id))
+        );
+    }
+    Ok(())
+}
+
+fn refused_for_keyed_storage<T: std::fmt::Debug>(result: varlit::Result<T>) {
+    match result {
+        Err(varlit::Error::InvalidFormatSpec(message)) => {
+            assert!(message.contains("keyed storage"), "{message}");
+        }
+        other => panic!("expected a keyed-storage refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn stream_handles_refuse_a_keyed_storage_format() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("stream.varlit");
+    let refused =
+        VarlitStreamWriter::create(maintenance_spec(false), &path, StreamOptions::default());
+    assert!(matches!(refused, Err(varlit::Error::StreamingUnsupported)));
+    assert!(!path.exists(), "a refused create leaves no file behind");
+
+    maintenance_file(maintenance_spec(false), &path)?;
+    let refused =
+        VarlitStreamReader::open(maintenance_spec(false), &path, StreamOptions::default());
+    assert!(matches!(refused, Err(varlit::Error::StreamingUnsupported)));
+    all_accounts_intact(maintenance_spec(false), &path)
+}
+
+#[test]
+fn keyed_merge_and_compaction_refuse_a_keyed_storage_format() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let spec = maintenance_spec(false);
+    let (base, delta) = (dir.path().join("base"), dir.path().join("delta"));
+    maintenance_file(spec, &base)?;
+    maintenance_file(spec, &delta)?;
+    let merged = dir.path().join("merged");
+    refused_for_keyed_storage(merge_keyed_files::<Account, _>(
+        spec,
+        base.as_path(),
+        &[delta.as_path()],
+        merged.as_path(),
+    ));
+    let compacted = dir.path().join("compacted");
+    refused_for_keyed_storage(compact_keyed_file::<Account, _>(
+        spec,
+        base.as_path(),
+        compacted.as_path(),
+    ));
+    refused_for_keyed_storage(compact_keyed_files::<Account, _>(
+        spec,
+        base.as_path(),
+        &[delta.as_path()],
+        compacted.as_path(),
+    ));
+    assert!(
+        !merged.exists() && !compacted.exists(),
+        "no empty output is published"
+    );
+    all_accounts_intact(spec, &base)
+}
+
+#[test]
+fn copying_rewrites_refuse_a_keyed_storage_format() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    // Record-footer formats: defragment and replace_block.
+    let spec = maintenance_spec(true);
+    let path = dir.path().join("footer.varlit");
+    maintenance_file(spec, &path)?;
+    {
+        let mut file = VarlitFile::open(spec, &path)?;
+        refused_for_keyed_storage(file.defragment());
+        refused_for_keyed_storage(file.replace_block(0, &Note { n: 9 }));
+    }
+    all_accounts_intact(spec, &path)?;
+
+    // Plain formats: the copying rewrite is refused; an equal-size in-place
+    // replacement of an ordinary block does not move keyed pages and works.
+    let spec = maintenance_spec(false);
+    let path = dir.path().join("plain.varlit");
+    maintenance_file(spec, &path)?;
+    {
+        let mut file = VarlitFile::open(spec, &path)?;
+        refused_for_keyed_storage(file.replace_rewrite(0, &Note { n: 9 }));
+        file.replace_fixed(1, &Note { n: 10 })?;
+        file.sync()?;
+    }
+    all_accounts_intact(spec, &path)
+}

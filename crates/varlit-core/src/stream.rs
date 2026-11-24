@@ -2012,11 +2012,12 @@ impl VarlitStreamWriter {
     }
 }
 
-/// A plain stream has no matrix engine: only the indexed (high-cardinality)
-/// writer and reader carry one, so the public stream entry points refuse a
-/// format declaring matrix blocks.
+/// A plain stream has no matrix engine and no keyed-storage heap, so the
+/// public stream entry points refuse a format declaring matrix blocks or
+/// keyed storage. A stream writer would otherwise append keyed blocks as
+/// ordinary records and leave a file whose keyed storage cannot be opened.
 fn refuse_matrix_stream(spec: FormatSpec) -> Result<()> {
-    if spec.has_matrix_blocks() {
+    if spec.has_matrix_blocks() || spec.keyed_storage.is_some() {
         return Err(Error::StreamingUnsupported);
     }
     Ok(())
