@@ -2,10 +2,10 @@
 
 This standalone diagnostic crate compares Varlit, SQLite and HDF5 using matched
 logical work. It is outside the Cargo workspace; native SQLite and HDF5 are not
-requirements for library users. Published cloud measurements and their generated
-reports have been removed. Performance conclusions are pending a controlled
-local rerun. This directory retains harness code, analysis tools and a report
-template, without recorded timing or resource results.
+requirements for library users. This directory retains harness code, analysis
+tools and a report template, without recorded timing or resource results. The
+current cross-format comparison, its published results and the A/B comparison
+of two Varlit revisions are in [`tools/format-bench`](../format-bench/README.md).
 
 ## Workloads and representation
 

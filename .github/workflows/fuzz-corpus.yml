@@ -41,8 +41,8 @@ env:
   CARGO_TERM_COLOR: always
   # Same pinned version as sanitizers.yml.
   CARGO_FUZZ_VERSION: 0.13.2
-  # Seconds of fuzzing per target. Thirteen targets at ten minutes is a little
-  # over two hours.
+  # Seconds of fuzzing per target. Fifteen targets at ten minutes is two and a
+  # half hours.
   FUZZ_SECONDS: ${{ inputs.seconds || 600 }}
   # Empty runs every target. A slow target such as matrix_reuse_state_machine
   # gains more from one long run than from several short ones over all of them.

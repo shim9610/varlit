@@ -168,5 +168,5 @@ conditions for a finite durability interval and manage disk space explicitly.
 appends, native-writer deletes, threshold/predicate behavior, failed-boundary prefix reporting,
 pinned readers, and subprocess exits without running writer destructors.
 `immediate_native` exercises the public native wrappers without scalable features.
-The existing crash matrix, reader-open churn, seeded histories and memory gate
-remain required by `scripts/qualify_scalable.py`.
+The existing crash matrix, reader-open churn and seeded histories remain
+required by `scripts/qualify_scalable.py`.
