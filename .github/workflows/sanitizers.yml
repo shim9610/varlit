@@ -232,8 +232,9 @@ jobs:
         run: python3 scripts/check_miri.py --target i686-unknown-linux-gnu --output target/miri-report/i686
       - name: unit tests of the unsafe modules under Miri, big-endian
         run: python3 scripts/check_miri.py --target s390x-unknown-linux-gnu --output target/miri-report/s390x
-      # Nothing executes big-endian code natively in CI, so Miri is also the
-      # only place the byte-order-sensitive safe code runs on such a target:
+      # The s390x job in ci.yml runs the tests big-endian under QEMU; Miri adds
+      # its interpreter's checks to the byte-order-sensitive safe code on such
+      # a target:
       # the wire layouts, the row packers, the snapshot codecs and keyed
       # storage's layouts and tree pages (a file's keys must order alike on
       # every platform; its model tests run natively). The matrix

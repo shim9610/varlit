@@ -14,11 +14,26 @@ oracle; a mismatch makes that benchmark process fail.
 cargo build --release --manifest-path tools/format-bench/Cargo.toml
 python3 tools/format-bench/run.py --repeats 3 --gate --out /abs/real-disk/dir
 python3 tools/format-bench/report.py /abs/real-disk/dir      # results tables
-target/release/varlit-format-bench bench <scenario> <format> <fresh-dir>
+tools/format-bench/target/release/varlit-format-bench bench <scenario> <format> <fresh-dir>
 ```
 
-`run.py` covers `grid`, `oltp` and `analytics`. `mixed` and `cells` are run by
-`sweep_mixed.py` and `sweep_cells.py`.
+The crate is its own workspace, so the binary lands under
+`tools/format-bench/target/`. `run.py` runs every scenario of its plan: `grid`,
+`oltp`, `oltp-sparse`, `analytics`, `mixed`, `mixed-live` and `cells`. Select
+with `--only <labels>` and `--formats <engines>`, and size the data with
+`--data-gb` (default 10). `sweep_mixed.py` and `sweep_cells.py` run parameter
+sweeps of `mixed` and `cells`. Build with `--no-default-features` to leave out
+HDF5, which builds its C library with CMake.
+
+### Comparing two Varlit revisions
+
+`ab.py --base BIN --head BIN [--repeats N] [--only ..]` runs the harness built
+against two library revisions alternately on one machine, Varlit engine only.
+A change is flagged only when the two run ranges do not overlap, the medians
+differ by 5 % or more and there were at least three runs. The manual
+*Performance A/B* workflow (`.github/workflows/perf.yml`) builds both revisions
+and runs it on hosted Linux and Windows runners; treat its numbers as a
+comparison on that runner, not absolute figures.
 
 Use a real disk, not tmpfs: durable publication (fsync) is part of the work.
 `--gate` runs a disk probe (1000 x 4 KiB write + `fdatasync`) before and after

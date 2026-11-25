@@ -18,7 +18,13 @@ toolchain and run:
 rustup toolchain install nightly-2026-10-12 --profile minimal --component miri
 python3 scripts/check_miri.py
 python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership
+# The same unsafe modules on a 32-bit and a big-endian target (CI runs both):
+python3 scripts/check_miri.py --target i686-unknown-linux-gnu --output target/miri-report/i686
+python3 scripts/check_miri.py --target s390x-unknown-linux-gnu --output target/miri-report/s390x
 ```
+
+CI also runs the byte-order-sensitive safe code under big-endian Miri with
+`--prefix` selections; `.github/workflows/sanitizers.yml` lists them.
 
 The three crates deny `unsafe_code`, and `scripts/miri-scope.json` names every
 file that allows it. Miri interprets the unit tests of the three modules whose
@@ -34,6 +40,26 @@ filesystem durability or cover the mmap/Windows surface; native tests and ASan
 do. Default alias and validity checks remain enabled.
 CI also runs the six `codec_array_allocation` integration tests under the same
 interpreter, covering partial drops, array framing and the custom-codec path.
+
+### Fuzzing
+
+The fuzz targets live in the separate `fuzz/` workspace. CI's smoke run does
+the following, on a nightly toolchain with `cargo-fuzz` 0.13.2:
+
+```sh
+cd fuzz
+# Optional: start from the committed seed corpus.
+for archive in seed-corpus/*.tar.zst; do zstd -dc "$archive" | tar -xf - --skip-old-files; done
+cargo run --locked --example generate_corpus
+cargo run --locked --example generate_matrix_reuse_corpus
+cargo fuzz list
+cargo fuzz run <target> -- -max_total_time=90 -rss_limit_mb=4096
+```
+
+A crash leaves its input under `fuzz/artifacts/<target>/`; replay it with
+`cargo fuzz run <target> fuzz/artifacts/<target>/<file>`. `cargo test --locked
+--lib` inside `fuzz/` runs the deterministic regressions kept from earlier
+findings.
 
 ## Static Format Diagnostics
 
@@ -332,8 +358,8 @@ python3 scripts/load_scalable.py --suite large --only raw-20g --only stream-20g 
 ```
 
 Qualification checks model histories, independent reader snapshots, stream
-writer process-kill recovery with a live reader kept across each crash, a redb
-oracle for the sidecar page store, and bounded memory. Real-file
+writer process-kill recovery with a live reader kept across each crash, and a
+redb oracle for the sidecar page store. Real-file
 runs write, verify and delete owned payload files; sparse addressability probes
 are separate and do not measure storage bandwidth. Use each runner's `--help`
 for workload sizes, timeouts and comparison options.

@@ -32,14 +32,18 @@ For a code change, start with:
 ```sh
 export CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4
 cargo fmt --all -- --check
-rustfmt --edition 2024 --check crates/varlit-core/src/file/*.rs
+cargo fmt --manifest-path tools/storage-bench/Cargo.toml -- --check
+rustfmt --edition 2024 --check crates/varlit-core/src/file/*.rs \
+  crates/varlit-core/src/format/*.rs \
+  crates/varlit-core/src/matrix_tiles/api/*.rs \
+  crates/varlit-core/src/matrix_tiles/ring_store/*.rs
 cargo run --locked -p varlit-test-runner -- test --locked --workspace
 cargo run --locked -p varlit-test-runner -- test --locked --workspace --all-features
 cargo clippy --locked --all-targets --workspace --all-features -- -D warnings
 ```
 
 Run targeted tests while iterating. See the [self-check guide](docs/self-check-guide.md)
-for fuzzing, Miri, fault injection and native I/O qualification. Documentation-only
+for [fuzzing](docs/self-check-guide.md#fuzzing), Miri, fault injection and native I/O qualification. Documentation-only
 changes need valid links, compilable API examples and agreement with the code at
 that revision. Release PRs must update the target version in workspace metadata,
 sibling dependencies, standalone lockfiles, installation examples, changelog
@@ -63,9 +67,13 @@ with unchanged resource budgets and recorded memory/I/O costs.
 CI and Sanitizers automatically run only for PRs targeting `main`. They also
 support explicit manual dispatch. Updating a PR cancels obsolete runs; merging
 does not duplicate the PR checks. All feature configurations, native Linux/
-Windows/macOS tests, packaging, dependency checks and CodeQL feed the stable
-`ci / required` gate. A failed, cancelled, missing or skipped job cannot pass it.
-Separate required checks cover ASan, portable Miri and fuzz smoke.
+Windows/macOS tests, the 32-bit x86 and s390x big-endian (QEMU) test jobs,
+Kani, Verus, Loom, coverage, packaging, dependency checks and CodeQL feed the
+stable `ci / required` gate. A failed, cancelled, missing or skipped job cannot pass it.
+Separate required checks cover ASan, portable Miri and fuzz smoke. Scheduled
+workflows run longer qualification profiles (`qualification.yml`) and grow the
+fuzz corpus (`fuzz-corpus.yml`); the manual *Performance A/B* workflow
+(`perf.yml`) compares a change against its base.
 
 Keep the PR current with `main`, address review conversations, and wait for the
 required checks before merging. CodeQL findings remain visible in the Security
@@ -96,9 +104,10 @@ tests and duplicated assertions do not add coverage. New failure tests should
 check recovery/retry and retained-reader state where relevant.
 
 Keep the root README and quickstart focused on recommended application patterns.
-Maintain current contracts in the reference guides. Performance results are
-pending a controlled local rerun; keep the benchmark harness and its execution
-instructions without publishing cloud measurements. Historical release notes,
+Maintain current contracts in the reference guides. Performance results live
+with [`tools/format-bench`](tools/format-bench/README.md), which records the
+machine and caveats of each published run; treat hosted-runner numbers as
+comparisons, not absolute figures. Historical release notes,
 audit narratives and superseded raw evidence belong in Git history.
 `scripts/check_docs.py` rejects duplicated sections and unclosed code fences and
 checks local links and anchors; with `--quickstart` it also compiles and runs the
