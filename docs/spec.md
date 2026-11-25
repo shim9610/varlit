@@ -57,10 +57,25 @@ and compile-time schema validation.
   progress, footer bounds, and region bounds.
 - File header includes user magic, Varlit container marker, format version, endian, flags byte, and schema hash.
 - Record header includes block id, block version, flags, sequence, payload length, checksum, and reserved bytes.
-- The final record header word is `uncompressed_len_hint` for compressed records and `0` otherwise. `payload length` is always the physical stored byte length.
+- The final record header word is `uncompressed_len_hint` for a compressed record of at most 64 KiB and `0` otherwise (including every chunked record, see [Chunked Records](#chunked-records)). `payload length` is always the physical stored byte length.
 - `VARVE1` is used for plain records, `VARVE2` is used for file-header extensions such as file-explicit compression, and `VARVE3` is used when `record_footer`/`transaction_marker` commit policy or block/keyed offset chains are enabled.
 - A `VARVE3` record has a fixed 32-byte footer after the stored payload: `b"VRF1"`, footer version, footer flags, `prev_same_block_offset`, `prev_same_key_offset`, reserved `footer_crc32`, and reserved bytes. Offset fields are `0` when absent.
-- User block ids are explicit `u32` values below `0xFFFF_FF00`; higher ids are reserved for internal records. `0xFFFF_FFF7` is the segment record and `0xFFFF_FFF5` is the open digest.
+- User block ids are explicit `u32` values below `0xFFFF_FF00`; higher ids are reserved for internal records, all carrying `RECORD_FLAG_INTERNAL` (`0x8000`):
+
+  | Id | Record |
+  | --- | --- |
+  | `0xFFFF_FFFE` | tombstone (keyed delete) |
+  | `0xFFFF_FFFD` | op (keyed operation for merge) |
+  | `0xFFFF_FFFC` | application metadata entry (`write_metadata(key, value)`) |
+  | `0xFFFF_FFFB` | index checkpoint |
+  | `0xFFFF_FFFA` | embedded manifest |
+  | `0xFFFF_FFF9` | commit marker (`VCMT` or `VCM2`, see [Commit markers](#commit-markers)) |
+  | `0xFFFF_FFF8` | stream creation nonce (see [Stream records](#stream-records)) |
+  | `0xFFFF_FFF7` | internal segment |
+  | `0xFFFF_FFF6` | reserved: the removed whole-chunk matrix record; refused |
+  | `0xFFFF_FFF5` | open digest |
+  | `0xFFFF_FFF4` | sync marker `VSYN` (see [Stream records](#stream-records)) |
+  | `0xFFFF_FFF3` | matrix and keyed-storage tile/ring/page records (in place) |
 - Fixed blocks use canonical field encoding, not raw Rust memory layout.
 - Variable blocks encode fields as `field_id + wire_type + length + payload`, allowing unknown fields to be skipped.
 - Variable user blocks may be compressed after canonical field encoding and before record write. A format may set one global variable-block compression policy, or opt individual variable block ids into record-explicit compression with `BlockCompressionDescriptor`. Fixed blocks and internal records are not compressed.
@@ -68,8 +83,85 @@ and compile-time schema validation.
   `compression-zstd` and `integrity`, it stores zstd-compressed chunks with
   per-chunk CRC32 validation and can be used inside variable fields or aux
   payloads.
-- `RecordIndexEntry::read_payload`, `scan()`, and mmap payload windows expose physical stored bytes. Typed reads, migrations, and merge/materialization use logical payloads and transparently decompress when needed.
+- The generated `Format::read_payload(&entry, path)`, `scan()`, and mmap payload windows expose physical stored bytes. Typed reads, migrations, and merge/materialization use logical payloads and transparently decompress when needed.
 - Endian priority is block override, then format setting, then little-endian default in macros.
+
+### File-header flags and anchors
+
+- The native file header's flags byte is zero, or an anchor policy: bit 7
+  (`0x80`) *anchored*, bit 6 (`0x40`) a 256-byte instead of a 4 KiB anchor, and
+  bits 0-5 the spacing as `2^(10 + bits)` bytes (at most `2^40`). Any other
+  non-zero value is refused (`native file-header reserved flags must be
+  zero`). A file is always read and appended to as its own header says.
+- An anchored file reserves the anchor size at every physical offset
+  `start + k * spacing` (`k >= 1`, `start` the append-log start). Records and
+  every offset a record, chain or index names are *logical*: the log flows
+  around the reserved ranges, and a record that reaches one continues after it.
+  A file shorter than `start + spacing` has no anchor and is byte-identical to
+  an unanchored one.
+- Each anchor, written when the log first reaches it and never rewritten
+  (except its summary, below), is little-endian: `"VANC" | version u16 = 1 |
+  reserved u16 | k u64 | logical offset u64 | record_start u64 | record_end u64
+  | sequence u64` (the record spanning the boundary and its sequence), then an
+  optional open summary at byte 48, zero padding, and a CRC-32 of every
+  preceding byte in the last four bytes.
+- The open summary is `flags u16 (0x1 complete, 0x2 sequence present, 0x4
+  segment present) | reserved u16 | tail count u32 | records_before u64 |
+  sequence_high_water u64 | segment next position u64 | segment covered start
+  u64`, then `tail count` entries of `block id u32 | newest offset u64`. A
+  summary that does not fit is left out; an open resumes at the newest anchor
+  that carries one. Matrix slots an anchor splits are copied on read (see
+  `MmapMatrix`).
+
+### Chunked Records
+
+- A variable record whose logical payload is longer than 64 KiB, in a format
+  whose integrity policy is not `none`, is stored chunked: record flag
+  `RECORD_FLAG_CHUNKED` (`0x0002`), with `RECORD_FLAG_COMPRESSED` too when its
+  chunks are compressed. The header's `uncompressed_len_hint` is `0`.
+- The payload is little-endian: a 24-byte header `"VRCK" | version u8 = 1 |
+  algorithm u8 (0 none, otherwise the compression algorithm byte) | reserved
+  u16 = 0 | logical length u64 | chunk count u32 | CRC-32 of bytes 0..20`; then
+  one 16-byte table entry per chunk, `stored end u64 (from the start of the
+  data) | CRC-32 of the chunk's logical bytes | reserved u32 = 0`; then the
+  chunks, each its 64 KiB of logical bytes (the last shorter) or one
+  independent compressed frame. There is no `VCMP` envelope.
+- The chunk count is `ceil(logical length / 64 KiB)`. A reader verifies and
+  decodes one chunk at a time, so it never holds more than one chunk of the
+  stored record. The record checksum still covers the whole stored payload,
+  and byte-for-byte copies (rewrites, replacement) carry the table unchanged.
+
+### Commit markers
+
+- A `transaction_marker` commit marker (`0xFFFF_FFF9`) has payload `"VCMT"`
+  (4 bytes). Under `single_barrier` it is the 28-byte `VCM2` payload instead,
+  in the format's endianness: `"VCM2" | anchor u64 | count u64 | chain u64`.
+  `anchor` is the offset of the newest marker known durable when this one was
+  written (`u64::MAX` for none); `count` and `chain` cover every record from
+  that marker's commit point to this marker. The chain starts at 0 and folds
+  each record's `(record offset, sequence, header checksum)` with an
+  order-sensitive splitmix64 finaliser
+  (`x = chain ^ rotl(offset, 17) ^ rotl(sequence, 41) ^ checksum`, then the
+  splitmix64 output mix). See the [durability model](durability-model.md#single-barrier-commit).
+
+### Stream records
+
+- A stream primary's first record is its creation nonce (`0xFFFF_FFF8`,
+  version 1, internal): the bare 16-byte nonce, unique per create (not secret), written
+  once at create. It
+  binds a state sidecar to one creation of the file (see
+  [primary generation binding](scalable-io.md#primary-generation-binding)).
+- A checkpointed stream writer appends a sync marker (`0xFFFF_FFF4`, version 1,
+  internal) after the records each sync commits. Its 32-byte payload is
+  little-endian: `"VSYN" | version u16 = 1 | reserved u16 | link start u64 |
+  link length u64 | CRC-32 u32 | CRC-32 of bytes 0..28`. The link starts where
+  the previous marker ended (or at the sidecar's confirmed end) and its CRC
+  covers every physical byte from there to the marker, headers and footers
+  included, except the payloads of in-place records (`0xFFFF_FFF3`). Recovery
+  accepts a prefix only up to the last marker whose bytes verify.
+- The state sidecar (`.vks`) uses the `VARVEIX5` paged container with
+  `VARVEVKI` metadata at record version 3 (300 bytes); see
+  [scalable I/O](scalable-io.md#durability-and-recovery).
 
 ## Preallocated Matrix Wire Contract
 
@@ -560,8 +652,10 @@ and `keyed_offset_chain`.
 
 ## Runtime Policy
 
-- Writer model is single-writer per file, enforced with a sidecar lock file.
-- Reader model is snapshot-on-open; live tailing is out of scope for 0.2.
+- Writer model is single-writer per file, enforced with an OS lock on the
+  native file object; the `.lock` marker next to it carries diagnostic and
+  stale-lock data only (see [durability model](durability-model.md#single-writer-lock-on-the-native-file-object)).
+- Reader model is snapshot-on-open, advanced explicitly by `follow()`.
 - `FormatSpec::create_layout_writer`,
   `FormatSpec::create_layout_writer_with_header`, and
   `FormatSpec::open_layout_writer`, and `FormatSpec::open_layout_reader` are
@@ -586,7 +680,7 @@ and `keyed_offset_chain`.
 - `CommitPolicy::RecordFooter` treats valid record footers as the commit flag for each record.
 - `CommitPolicy::TransactionMarker(on_flush|explicit)` appends internal `COMMIT_BLOCK_ID` marker records. Readers expose the latest marker-covered snapshot; writer open truncates uncommitted tail after the latest marker.
 - `IndexPolicy::segment_on_flush` makes every commit point append an internal segment record covering exactly the records that commit point added. See [Internal Segments](#internal-segments).
-- `IndexPolicy::CheckpointOnFlush` writes an internal checkpoint record, spaced geometrically so cumulative checkpoint bytes stay bounded. **Checkpoint-seeded open is specified but not implemented**: as of 0.5.0 every open scans the full record region (`load_index` -> `scan_records_range`), validates any checkpoint it meets, and discards the checkpoint's decoded entries. See the design target below and `docs/known-limitations.md` §2.1.
+- `IndexPolicy::CheckpointOnFlush` writes an internal checkpoint record, spaced geometrically so cumulative checkpoint bytes stay bounded. **Checkpoint-seeded open is specified but not implemented**: an open that scans walks the full record region (`scan_records_range_at_len`), validates any checkpoint it meets, and discards the checkpoint's decoded entries. See the design target below and [known limitations](known-limitations.md#native-scans-and-temporary-storage).
 - `CompressionPolicy::VariableBlocks` and block-specific compression descriptors are feature-gated by the selected backend. The first backend is optional `compression-zstd`; compressed records are rejected when the backend is not enabled.
 
 ## Update And Merge
@@ -681,7 +775,7 @@ and `keyed_offset_chain`.
 - Duplicate key fields, missing key fields, duplicate block ids, and reserved block ids fail at compile time where macro input makes that possible.
 - `varlit_format!` supports the legacy registry form `pub struct Format { blocks: [A, B]; }` and the format-first form `pub format Format { blocks { fixed A(...) { ... } } }`.
 - In format-first form, block structs, `VarlitBlock` implementations, typed reader/writer wrappers, and typed read/write traits are generated from the format declaration.
-- `varlit_format!` supports `magic`, `version`, optional `limits`, `endian`, optional `schema_hash`, optional `commit`, optional `integrity`, optional `index`, optional `recovery`, optional `manifest`, and `blocks`.
+- `varlit_format!` supports `magic`, `version`, optional `limits`, `endian`, optional `schema_hash`, optional `commit`, optional `integrity`, optional `index`, optional `recovery`, optional `manifest`, optional `liveness` (`none` or `footer_flags`), optional `keyed_storage` (`in_place` or `in_place(free_space = N%)`, N from 1 to 5), optional `header_slots { .. }`, optional `extension`, optional `compression`, optional `preset` / `layout`, optional `dims` / `aux` for matrices, and `blocks`.
 - `limits { ... }` is an optional, partial set of operational defaults. Unknown
   and duplicate keys are compile errors. Limits do not affect wire bytes,
   schema hashes, or manifests. Ordinary handles fill missing fields from
@@ -726,7 +820,7 @@ and `keyed_offset_chain`.
   indexes remain physical stream indexes.
 - `schema_hash: computed;` asks the macro to call `with_computed_schema_hash()` after policies are attached.
 - `index` accepts either a single legacy identifier or a list such as `[scan_on_open, checkpoint_on_flush, block_offset_chain, keyed_offset_chain]`. `segment_on_flush` is deliberately **not** one of them: a block is the unit a declaration names, a segment is varlit's internal lookup unit, and its granularity is varlit's decision. Enable it on the `FormatSpec` with `IndexPolicy::with_segment_on_flush`.
-- `commit` accepts `none`, `record_footer`, or `transaction_marker(on_flush|explicit)`, optionally `transaction_marker(<mode>, single_barrier)` (one storage barrier per `commit_durable`; requires `crc32_with_header`, refuses `mark_tail`; file header commit-policy bytes 5/6; commit markers carry the 28-byte `VCM2` payload: anchor offset or `u64::MAX`, record count and checksum chain).
+- `commit` accepts `none`, `record_footer`, or `transaction_marker(on_flush|explicit)`, optionally `transaction_marker(<mode>, single_barrier)` (one storage barrier per `commit_durable`; requires `crc32_with_header`, refuses `mark_tail`; manifest commit-policy codes 5/6; commit markers carry the 28-byte `VCM2` payload: anchor offset or `u64::MAX`, record count and checksum chain).
 - Generated typed writers expose both `commit()` and `commit_durable()`.
   `commit()` is a logical visibility marker and does not imply fsync.
   `commit_durable()` writes commit-covered metadata/checkpoints, flushes and
@@ -1087,6 +1181,32 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
 - Proofs: `published_end::proofs` (slot round trip, the visible length's
   bounds, torn-write fallback, blank and damaged slots).
 
+### Header-Tail Table And Liveness Block
+
+Both are header extension blocks framed `magic[4] | len u32`, rewritten in
+place, little-endian.
+
+- **`VBTT`** (`index: header_tails`). The payload is two slots, written
+  alternately. A slot is `version u16 = 1 | flags u16 (bit 0: the table did
+  not fit) | capacity u32 | count u32 | generation u64 | commit offset u64`,
+  then `capacity` entries of `block id u32 | newest record offset u64` (the
+  first `count` used, strictly ascending by block id, the rest zero), then a CRC-32 of every preceding byte of
+  the slot. `capacity` is the declared block count plus 10 (one per internal
+  block id) and is fixed at create. A write takes `generation` one past the
+  largest stored and goes to slot `generation % 2`; a reader uses the slot with
+  the largest generation whose CRC holds and whose commit offset frames as a
+  commit point at the end of the file. A slot with `count = 0` (as created,
+  after an in-place replacement, or after an overflow) claims nothing.
+- **`VLIV`** (`liveness: footer_flags`). An 8-byte payload `version u16 = 1 |
+  flags u16 (bit 0: dirty) | checksum u32`, the checksum being FNV-1a 32 over
+  the first four payload bytes. A writer sets dirty when it takes the file and
+  clears it on a clean release; a torn or unreadable block reads as dirty.
+
+The mutable header blocks are `VBTT`, `VLIV`, `VHSL` (below) and `VPUB`
+([published end](#published-end)). An open compares their lengths, not their
+contents, with what the format would write, and the stream generation witness
+blanks their payloads.
+
 ### Editable Header Region
 
 - An **editable header region** is a fixed-size run of bytes reserved in the
@@ -1253,7 +1373,7 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 
 ### Writer Safety
 
-- The sidecar lock remains the default single-writer guard.
+- The authoritative single-writer guard is an OS lock on the native file object. The `.lock` marker file is diagnostic and carries the stale-lock data below.
 - Lock files use text payload version `varve-lock-v1` and contain process id, creation timestamp in Unix milliseconds, and target path for diagnostics.
 - `FormatSpec::inspect_writer_lock(path)` returns `Ok(None)` when no lock exists, `Ok(Some(WriterLockInfo))` for a valid lock, and `WriterLockMalformed` for malformed metadata.
 - Stale-lock breaking is not automatic by default. `FormatSpec::open_with_lock_policy(path, policy)` is the explicit opt-in entry point.
