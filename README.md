@@ -4,8 +4,9 @@ Version: **0.13.0-alpha.2** (pre-release) · Rust **1.95+** · MIT OR Apache-2.0
 
 Varlit defines typed binary block formats in Rust. Declare the block layouts and
 policies, append application-sized blocks, and let independent readers follow
-published data. The library provides codecs, bounded working buffers, disk
-indexes, explicit durability, recovery and optional compression or memory mapping.
+published data. The library provides codecs, reads into caller-owned buffers,
+in-place keyed storage, tiled matrices, explicit durability, recovery and
+optional compression or memory mapping.
 
 ```toml
 [dependencies]
@@ -25,8 +26,8 @@ through the stream API. See [API changes](https://github.com/shim9610/varlit/blo
 | Workload | Start with | Layout choice |
 | --- | --- | --- |
 | Append/follow logging | Stream reader/writer | Pack related samples into a block; buffer several blocks per publication |
-| Keyed block lookup | Native reader/writer | Use a block key; lookup is resident and every update appends a record. Disk-backed keyed storage is [designed, not implemented](https://github.com/shim9610/varlit/blob/main/docs/design/bounded-keyed-storage.md) |
-| Direct grid/cell access | Matrix blocks | Choose dimensions, cell size and generation policy for the access pattern |
+| Keyed block lookup | Native reader/writer with `keyed_storage: in_place` | One record per key, updated in place, so the file follows the live data rather than the number of updates; `put_*` / `get_*` / `remove_*` / `range_*`. Without it, keyed blocks are appended and lookup is resident |
+| Direct grid/cell access | Matrix blocks | Choose dimensions, cell size and tile shape; cells are overwritten in place through a write-ahead ring |
 | Small files, direct native record access | Native reader/writer | Open may scan all records and spill directory rows |
 
 Block packing, buffered append batches and publication are separate decisions.
@@ -38,7 +39,7 @@ One writer owns mutations. Readers have independent snapshots and caches; use a
 reader per thread and explicitly follow new publications. Multiple producers
 can feed the writer through a bounded queue. Durability and visibility depend on
 the selected policy; [the durability model](https://github.com/shim9610/varlit/blob/main/docs/durability-model.md) explains
-`flush`, `sync`, transaction markers and matrix generations.
+`flush`, `sync`, transaction markers and matrix and keyed-storage publication.
 
 ## Features and contracts
 
@@ -85,16 +86,23 @@ allocation and durability depend on the actual filesystem. See
 
 ## Performance and verification
 
-Published performance results are deferred pending a controlled local rerun.
-The [benchmark harness](tools/storage-bench/README.md) retains workload definitions
-and execution instructions; cloud measurements are not used for performance claims.
+[`tools/format-bench`](tools/format-bench/README.md) compares Varlit with SQLite,
+HDF5 and Parquet on grid, OLTP, analytics, mixed-stream and cell workloads, and
+its `ab.py` compares two Varlit revisions. The manual *Performance A/B*
+workflow runs that comparison on hosted runners; a change is flagged only when
+the run ranges do not overlap and the medians differ by 5 % or more. Hosted
+runners vary, so treat those numbers as comparisons, not absolute figures.
+[`tools/storage-bench`](tools/storage-bench/README.md) keeps the older storage
+workload definitions.
 
-CI covers native Linux, Windows and Intel macOS, 32-bit x86 Linux binaries,
-feature interactions, external
-API consumers, package archives, CodeQL, Kani and deliberate-defect controls.
-The Sanitizers workflow separately runs Miri, ASan/leak checks and a 90-second
-fuzz smoke run per target. Their scopes
-and exclusions are in the [verification guide](https://github.com/shim9610/varlit/blob/main/docs/verification.md).
+CI covers native Linux, Windows and Intel macOS, 32-bit x86 Linux, s390x
+big-endian Linux under QEMU, feature interactions, external API consumers,
+package archives, CodeQL, Kani, Verus, Loom, coverage and deliberate-defect
+controls. The Sanitizers workflow separately runs Miri (including 32-bit and
+big-endian targets), ASan/leak checks and a 90-second fuzz smoke run per target,
+starting from the saved corpus and the committed seed corpus. Scheduled
+workflows grow the fuzz corpus and run longer qualification profiles. Scopes and
+exclusions are in the [verification guide](https://github.com/shim9610/varlit/blob/main/docs/verification.md).
 
 ## Contributing
 

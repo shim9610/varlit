@@ -284,12 +284,15 @@ regardless of slot bytes. A slot holds the payload followed by its CRC32;
 
 ### What a publication is
 
-Matrix changes are staged in the writer. A change inside a tile appended since
-the last publication is written in place at once, because nothing published
-points at that tile yet; any other change is held in memory, and a staged set
-larger than an eighth of the ring (at most 4 MiB) is written to the ring early
-as frames that are not yet committed. A writer handle reads its own staged
-changes; no other handle sees them.
+Matrix changes are staged in the writer and reach the file when they are
+staged. A change inside a tile appended since the last publication is written
+in place at once, because nothing published points at that tile yet; any other
+change is written into the open ring frame, which is not yet committed, or,
+once the publication outgrows the ring, into overflow space under an on-disk
+index (see [publications larger than the ring](#publications-larger-than-the-ring)).
+Bytes are copied through a fixed 64 KiB buffer, so staging holds no growing
+set in memory. A writer handle reads its own staged changes; no other handle
+sees them.
 
 `flush()` does not publish matrix changes. `sync()`, `immediate()`,
 `commit_durable()` and the durable cell API publish them as the next
@@ -477,6 +480,31 @@ There is no matrix compaction; `compact_matrix()` was removed in 0.13.0.
 Overwrites happen in place and the ring has a fixed size, so there is nothing
 to reclaim. Tiles, once appended, are never removed.
 
+## Keyed Storage Publication
+
+A format that declares `keyed_storage: in_place` keeps its keyed blocks in a
+B-tree inside the file and publishes changes to it through its own write-ahead
+ring, like a matrix. What a writer puts or removes is visible to that writer at
+once and to readers once it is published:
+
+- `sync()` (and `commit_durable()`, after its marker barrier) publishes
+  everything staged.
+- A put or remove that ends a *round* — it filled the change budget
+  (`KeyedStorage::with_change_budget`, default 64 MiB) or the ring — publishes
+  everything staged up to and including it before `sync`. A large load is
+  therefore several publications, each atomic.
+- A publication whose new values were written straight to the file makes them
+  durable before its commit frame, so it costs two barriers instead of one.
+  Once publications fill half the ring, the writer puts them all in place in
+  one pass, a checkpoint with two more barriers.
+- To reuse freed pages, the writer raises the ring's mark at the end of every
+  round and when freed pages have waited past the free-space ratio. A reader
+  whose snapshot is older than the mark gets `MatrixSnapshotExpired` and must
+  `follow()`.
+
+A crash before a publication's commit frame leaves readers and the next open
+at the previous publication.
+
 ## Append-Log Transaction Markers
 
 Append-log transaction markers follow the same explicit durability principle.
@@ -492,6 +520,9 @@ The durable append-log order is:
 2. flush and `sync_data` those bytes
 3. write the commit marker
 4. flush and `sync_all` the marker
+
+Then readers may adopt the marker, and any staged matrix or keyed-storage
+changes are published as their own generation, with their own barriers.
 
 ### Single-barrier commit
 
@@ -550,10 +581,10 @@ run (`matrix_durable_barrier_observes_data_then_commit_sync_then_hook`). A
 callback failure is returned as is, poisons the writer, and leaves readers on
 the previous generation
 (`barrier_failures_before_generation_publication_leave_readers_unchanged`).
-Before step 5 the staged slot and commit bit are usually only in the writer's
-memory (or in a tile appended since the last publication, or in uncommitted
-ring frames), so the barriers alone do not make the new value durable; the
-publication's sync does. Other staged matrix changes are published with the
+Before step 5 the staged slot and commit bit are in a tile appended since the
+last publication, in uncommitted ring frames or in overflow space, none of
+which a reader or an open adopts, so the barriers alone do not make the new
+value durable; the publication's commit frame and its sync do. Other staged matrix changes are published with the
 cell.
 
 ## Hook Contract

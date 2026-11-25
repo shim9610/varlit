@@ -39,7 +39,9 @@ assert_eq!(sample.value, 42);
 ```
 
 `reuse: false` delegates to ordinary native storage. Such readers retain their
-snapshot until `follow(&mut self)`. The option is selected at **file creation**;
+snapshot until `follow(&mut self)`, as long as the write-ahead ring still holds
+the publications since it (size it with `with_matrix_ring_bytes`); a reader
+that falls further behind gets `MatrixSnapshotExpired` and must `follow()`. The option is selected at **file creation**;
 opening with the other setting fails. Toggling it is not an in-place conversion
 and cannot restore historical snapshots after their slots have been reused.
 
@@ -119,7 +121,7 @@ primary slot/retirement writes remain per page.
 Small overwrites benefit most. Full-matrix replacement still writes all changed
 pages and adds per-page metadata/syscalls. Sequential reads may transfer both
 slots and checksum many small pages. Page reuse is not a promise that every
-workload is faster than the whole-chunk or ordinary native paths.
+workload is faster than ordinary tiled native storage.
 
 ## Working-set controls and supported schemas
 

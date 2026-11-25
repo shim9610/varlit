@@ -11,11 +11,12 @@ number of declared blocks still affect publication work.
 > **Keyed lookup.** Stream readers have no lookup by key. The indexed primary
 > (`VarlitIndexedWriter`, `VarlitIndexedReader`, the `.vki` sidecar and the
 > `key_index` block attribute) was removed: updating keyed records grew its
-> files without bound and it could never reclaim superseded versions. Keyed
-> lookup is now resident only. The replacement design is
-> [bounded keyed storage](design/bounded-keyed-storage.md); it is not
-> implemented. See the [migration guide](migration-guide.md) for existing
-> indexed files.
+> files without bound and it could never reclaim superseded versions. Lookup
+> by key is available on the native handles, opt-in, through
+> `keyed_storage: in_place` ([keyed storage](api-reference.md#keyed-storage)):
+> one record per key in an in-file B-tree updated in place. Every stream
+> constructor refuses a keyed-storage format with `StreamingUnsupported`. See
+> the [migration guide](migration-guide.md) for existing indexed files.
 
 The resident `create_writer`, `open_reader`, `blocks`, and `keyed_blocks`
 APIs can still scan the complete file at open. Their ordinary 13-byte private rows use
@@ -461,14 +462,16 @@ path, same OS object, same header bytes, same schema hash — a refusal rather
 than an accepted stale generation. The recovery is to remove the `.vks` and run
 `bootstrap_stream_checkpoint`, never "trust the sidecar".
 
-One byte range of the primary is excluded from that window, and it is the only
-part of a file that may change without being a new generation: a format that
-declares `index: header_tails` reserves a region inside the file header which a
-commit rewrites in place, and the witness blanks that region's *payload* before
-checksumming. Its magic and its declared length stay covered, so a region that
-changed size — the change that moves the end of the header and every record
-offset after it — is still a refusal. For a format that does not declare the
-region, the window is exactly what it was.
+The mutable header blocks are excluded from that window, and they are the only
+part of a file that may change without being a new generation: the header-tail
+table (`index: header_tails`), the liveness block (`liveness: footer_flags`),
+the editable header slots (`header_slots`) and the published end that every
+transaction-marker file carries. A commit or publication rewrites them in place,
+so the witness blanks each one's *payload* before checksumming (and, for matrix
+storage, the payloads of in-place records inside the window). Their magics and
+declared lengths stay covered, so a block that changed size — the change that
+moves the end of the header and every record offset after it — is still a
+refusal.
 
 The nonce costs one record at create and nothing per append. Reading it is one
 bounded point read of the leading record, performed only at create and open. A
@@ -586,8 +589,10 @@ independent. There is no implicit reader clone or shared-reader mutex.
 
 A matrix reader also owns its matrix state: a fixed-size table of resolved
 tile positions, sized at open from the declared extents, and an overlay of the
-ranges published since the last checkpoint, which grows with the publications
-the write-ahead ring holds. It keeps no commit-bitmap cache. Memory adds
+ranges published since the last checkpoint. The overlay is a fixed-capacity
+table allocated at open (one range per 256 ring bytes, at least 256 ranges); a
+writer whose publication would need more moves the rest into an index, so every
+snapshot fits. It keeps no commit-bitmap cache. Memory adds
 across readers; see
 [concurrency limitations](known-limitations.md#42-where-a-reader-gets-a-snapshot-rather-than-live-state).
 
