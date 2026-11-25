@@ -136,8 +136,10 @@ version passes. This neither replaces the lockfile audits nor certifies local
 patches: vendored redb 4.4.0 remains a development-only oracle, and its local
 snapshot extension still needs source review and tests.
 
-PR checks include native platform tests, dependency/license policy, Rust/Python/
-Actions CodeQL analysis, Miri, ASan and a bounded fuzz smoke run. CodeQL's
+PR checks include native platform tests, 32-bit x86 and s390x big-endian (QEMU)
+test runs, dependency/license policy, Rust/Python/Actions CodeQL analysis, Kani,
+Verus and Loom, Miri (including 32-bit and big-endian targets), ASan and a
+bounded fuzz smoke run. CodeQL's
 build-free scan examines checked-in source; generated APIs also require the
 compiler and behavioral tests. These checks do not establish exhaustive testing,
 power-loss guarantees or suitability for every filesystem.

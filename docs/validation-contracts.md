@@ -111,8 +111,6 @@ by running zero tests. The contracts cover:
 
 - Real Linux partial writes and `EFBIG`, followed by rollback, retry and reopen;
   process resource limits are confined to a child process.
-- Failure/recovery histories with overwrite, delete, reinsert, pinned readers,
-  follow, index compaction and writer reopen, checked against an independent map.
 - CRC-valid inconsistent checkpoint frontiers and record-chain links.
 - Torn publication-head prefixes and missing durable checkpoint bytes. These
   are explicit storage images, not a claim of physical power-loss qualification.
@@ -120,8 +118,6 @@ by running zero tests. The contracts cover:
   peak/retained Rust heap checks. The required Linux release run also checks
   process peak RSS, including native codec allocations, against a fixed 96 MiB
   ceiling for this workload (32 MiB input, 32 MiB output, 32 MiB overhead).
-- The existing 10k/100k/1m-key allocator growth test, now required in release mode
-  with the same fixed cache and batch budgets at each size.
 
 CI also executes the load example with actual file bytes and eight readers, to
 catch broken benchmark fixtures. Its small smoke run verifies the harness;
