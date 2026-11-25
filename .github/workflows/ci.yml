@@ -114,7 +114,7 @@ jobs:
           config-file: .github/codeql/config.yml
           tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.2/codeql-bundle-linux64.tar.gz
       - id: codeql-analysis
-        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           category: /language:${{ matrix.language }}
       - name: Require clean security results, not only successful analysis upload
