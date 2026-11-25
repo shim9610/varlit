@@ -363,7 +363,7 @@
   },
   "schema": 1,
   "sources": {
-    "Cargo.lock": "08c0de1dd7cc2cc0",
+    "Cargo.lock": "aa7ba9db6dce99a2",
     "Cargo.toml": "1773a3f078cd1c81",
     "crates/varlit-core/Cargo.toml": "c356bb13d056741e",
     "crates/varlit-core/src/adapter.rs": "65ab8f87ed2d760e",
