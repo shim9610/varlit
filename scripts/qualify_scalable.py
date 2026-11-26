@@ -120,7 +120,7 @@ def campaign(profile, seeds, epochs, kill_cycles, require_pib):
     add("reader-management", test_command("scalable_reader_management"), expected=4)
     add("schema-key-kinds", test_command("schema_key_kinds"), expected=4)
     add("finite-key-limit", test_command("finite_key_limit"), expected=1)
-    add("index-redb-oracle", test_command(None, "disk_index::oracle::randomized_pages_match_redb_across_splits_and_old_roots", core=True), marker="INDEX_ORACLE seed=42")
+    add("index-redb-oracle", test_command(None, "scratch_index::oracle::randomized_pages_match_redb_across_splits_and_old_roots", core=True), marker="INDEX_ORACLE seed=42")
     add("reader-follow", test_command("scalable_reader_follow"), expected=6, marker="FOLLOW_CONCURRENT readers=8 generations=100")
     add("reader-open-churn", test_command(
         "scalable_qualification", "opening_readers_does_not_interrupt_the_single_writer"))
@@ -184,7 +184,7 @@ def main():
             "CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG", "CARGO_INCREMENTAL", "VARLIT_PIB_TEST_DIR")},
         "seeds": seeds, "epochs": epochs, "kill_cycles": cycles, "stage_timeout_seconds": args.timeout,
         "not_covered": ["cross-platform results from other hosts", "power loss / torn storage writes",
-                        "long sanitizer and fuzz campaigns", "released sidecar fixture compatibility",
+                        "long sanitizer and fuzz campaigns", "released stream fixture compatibility",
                         "production workload soak and resource exhaustion"],
         "stages": campaign(args.profile, seeds, epochs, cycles, args.require_pib),
     }

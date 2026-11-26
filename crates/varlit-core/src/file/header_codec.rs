@@ -1207,6 +1207,21 @@ fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
     Ok(())
 }
 
+/// The extension region a stream writer creates: the spec's own, plus the
+/// `VPUB` published-end block when the spec does not already carry it. A
+/// stream writer moves it after each durable sync; it is the boundary stream
+/// recovery verifies the sync-marker chain onward from. Files created by a
+/// native handle of the same format are unchanged, byte for byte.
+pub(crate) fn stream_file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
+    let mut payload = file_header_extensions(spec)?;
+    if !crate::published_end::applies_to(spec) {
+        payload.extend_from_slice(PUBLISHED_END_MAGIC);
+        payload.extend_from_slice(&crate::width::small32(PUBLISHED_END_PAYLOAD_LEN).to_le_bytes());
+        payload.extend_from_slice(&crate::published_end::empty_payload());
+    }
+    Ok(payload)
+}
+
 pub(crate) fn file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
     let mut payload = Vec::new();
     if let Some(compression) = variable_compression(spec)
@@ -1803,66 +1818,17 @@ pub(super) fn parse_file_header_extension_blocks(
     Ok(blocks)
 }
 
-/// Blank out the header bytes a file is allowed to change after create.
-///
-/// `prefix` is the file's leading bytes from offset 0 — any length, so a caller
-/// holding a fixed window shorter than the header can pass what it has.
-/// `header_len` and `extensions` are what `read_file_header_parts` returned for
-/// the same file.
-///
-/// This exists for the two places that bind a *derived* artefact to the primary
-/// file by hashing its leading bytes. Both were written when the header was
-/// written exactly once, and both say so out loud; an updatable region falsifies
-/// that, and without this every in-place update would permanently invalidate
-/// every published sidecar for the file.
-///
-/// **Only the mutable block's payload is blanked.** Its magic and its declared
-/// length stay in the hash, so a region that changed size, changed identity or
-/// disappeared is still caught — which is the property that matters, because
-/// those are the changes that move `append_log_start` and with it every record
-/// offset. What stops being detected is a change to the table's *contents*,
-/// which is exactly what the option exists to make legal.
-///
-/// Returns the number of bytes it blanked, so a caller can assert it did
-/// something.
-pub(crate) fn blank_mutable_header_bytes(
-    prefix: &mut [u8],
-    header_len: u64,
-    extensions: &[u8],
-) -> Result<u64> {
-    // Every mutable block, not the first. With two of them, blanking one left
-    // the other's bytes in the identity hash, and a single flip there would
-    // permanently invalidate every published sidecar for the file — the exact
-    // defect this function exists to prevent, reintroduced by a second block.
-    let mut blanked = 0u64;
-    for (_, extent) in mutable_header_block_extents(header_len, extensions)? {
-        let Ok(start) = usize::try_from(extent.payload_offset) else {
-            continue;
-        };
-        // A caller's window may end inside the region, or before it starts.
-        let Some(window) = prefix.get_mut(start..) else {
-            continue;
-        };
-        let take = extent.payload_len.min(window.len());
-        window[..take].fill(0);
-        blanked = blanked.saturating_add(take as u64);
-    }
-    Ok(blanked)
-}
-
 /// Where the mutable extension block's payload lives, as a file offset.
 ///
-/// **One derivation, two callers**: the blanking above, which has to skip these
-/// bytes, and the commit-time writer, which has to hit exactly them. Computing
-/// it twice is the shape of defect that put a wrong extension length in the
-/// published layout plan, and it would be worse here — a writer and a hasher
-/// that disagree by a few bytes fail silently in opposite directions.
+/// One derivation for every caller that has to hit exactly these bytes, such
+/// as the commit-time writer. Computing it twice is the shape of defect that
+/// put a wrong extension length in the published layout plan.
 ///
 /// `None` when the file carries no mutable block, which is every file whose
 /// format does not declare `header_tails`.
 pub(super) struct MutableHeaderExtent {
-    /// Where the payload starts as a *file* offset, framing excluded — what the
-    /// writer seeks to and what the hasher skips.
+    /// Where the payload starts as a *file* offset, framing excluded: what the
+    /// writer seeks to.
     pub(super) payload_offset: u64,
     /// The same payload's start *within the extension region*, for a caller
     /// holding the region rather than the file.
@@ -1872,11 +1838,9 @@ pub(super) struct MutableHeaderExtent {
 
 /// Every mutable block's extent, in the order they sit in the region.
 ///
-/// There is more than one now — the header-tail table and the liveness dirty
-/// bit — and the difference matters most to the *hasher*: the sidecar identity
-/// windows have to skip **all** of them, because a single unskipped mutable
-/// byte means one flip permanently invalidates every published sidecar for the
-/// file, which is the defect task #39 fixed when there was only one block.
+/// There is more than one: the header-tail table and the liveness dirty bit.
+/// A caller that excludes mutable bytes from an identity has to skip all of
+/// them.
 pub(super) fn mutable_header_block_extents(
     header_len: u64,
     extensions: &[u8],
@@ -1931,7 +1895,7 @@ pub(super) fn mutable_header_block_extents(
 /// One named mutable block's extent, for a writer that needs to hit exactly it.
 /// Header offset of the `VPUB` slots, when the file has a published end
 /// block of this build's geometry.
-pub(super) fn published_end_slots_at(header_len: u64, extensions: &[u8]) -> Result<Option<u64>> {
+pub(crate) fn published_end_slots_at(header_len: u64, extensions: &[u8]) -> Result<Option<u64>> {
     let Some(extent) = mutable_header_block_extent(header_len, extensions, PUBLISHED_END_MAGIC)?
     else {
         return Ok(None);
@@ -2037,6 +2001,15 @@ pub(super) fn validate_file_header_extensions(spec: FormatSpec, extensions: &[u8
     }
     for block in &present {
         if !is_known_header_extension_magic(&block.magic) {
+            continue;
+        }
+        // A stream writer adds the published end to formats that do not
+        // declare one (see `stream_file_header_extensions`); every handle of
+        // the format accepts it, at its one length.
+        if &block.magic == PUBLISHED_END_MAGIC
+            && !crate::published_end::applies_to(spec)
+            && block.encoded.len() as u64 == crate::published_end::region_len()
+        {
             continue;
         }
         if !expected_blocks

@@ -27,6 +27,6 @@ class ProtocolGateTests(unittest.TestCase):
             self.assertFalse(gate.detected(log, code, "broken invariant"))
 
     def test_each_required_family_has_a_negative_control(self):
-        self.assertEqual(len(gate.MUTATIONS), 11)
-        self.assertEqual(len({m[0] for m in gate.MUTATIONS}), 11)
-        self.assertEqual(len(gate.check_bindings()), 5)
+        self.assertEqual(len(gate.MUTATIONS), 8)
+        self.assertEqual(len({m[0] for m in gate.MUTATIONS}), 8)
+        self.assertEqual(len(gate.check_bindings()), 4)

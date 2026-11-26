@@ -51,13 +51,7 @@ fn spec(native: bool) -> FormatSpec {
     }
 }
 fn sopts() -> StreamOptions {
-    StreamOptions {
-        state: DiskIndexOptions {
-            cache_bytes: 8 << 20,
-            ..Default::default()
-        },
-        ..Default::default()
-    }
+    StreamOptions::default()
 }
 #[inline]
 fn bits(id: usize, col: usize) -> u64 {

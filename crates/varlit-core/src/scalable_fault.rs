@@ -19,27 +19,16 @@ pub const FAULT_ENV: &str = "VARLIT_SCALABLE_FAULT";
 pub const TRACE_ENV: &str = "VARLIT_SCALABLE_FAULT_TRACE";
 
 pub const REQUIRED_POINTS: &[&str] = &[
-    "checkpoint.record_prefix",
-    "checkpoint.record_write",
-    "checkpoint.head_copy",
-    "checkpoint.head_prefix",
-    "checkpoint.head_write",
-    "checkpoint.head_sync",
-    "checkpoint.body_sync",
-    "generation.commit",
     "append.native_chunk_write",
-    "append.sidecar_batch_commit",
     "sync.native_sync",
-    "publish.clean_commit",
-    "restore.stage",
     "restore.native_truncate",
     "restore.native_sync",
-    "restore.commit",
     "create.native_sync",
-    "create.sidecar_complete",
-    "replace.atomic",
     "replace.parent_sync",
 ];
+
+/// Points the native rewrite path reaches; no stream scenario does.
+pub const REPLACE_POINTS: &[&str] = &["replace.atomic"];
 
 /// Additional points exercised by the opt-in matrix reuse crash tests.
 pub const MATRIX_REUSE_POINTS: &[&str] = &[
@@ -57,7 +46,9 @@ pub const MATRIX_REUSE_POINTS: &[&str] = &[
     "matrix_reuse.page_copied",
 ];
 fn known_point(point: &str) -> bool {
-    REQUIRED_POINTS.contains(&point) || MATRIX_REUSE_POINTS.contains(&point)
+    REQUIRED_POINTS.contains(&point)
+        || REPLACE_POINTS.contains(&point)
+        || MATRIX_REUSE_POINTS.contains(&point)
 }
 
 static ARMED: AtomicBool = AtomicBool::new(false);
@@ -168,11 +159,6 @@ pub fn arm_from_env() -> Result<ArmGuard, ArmError> {
     });
     ARMED.store(true, Ordering::Release);
     Ok(ArmGuard { _private: () })
-}
-
-/// Whether fault-only torn-write interposition is currently active.
-pub(crate) fn is_armed() -> bool {
-    ARMED.load(Ordering::Acquire)
 }
 
 /// Records one named boundary and aborts when the armed selection matches it.

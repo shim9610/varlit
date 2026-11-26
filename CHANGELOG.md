@@ -58,8 +58,7 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   [migration guide](docs/migration-guide.md#upgrading-from-0121-to-0130).
 - Variable records longer than 64 KiB in formats with data checksums are stored
   chunked (record flag `0x0002`) with a CRC per 64 KiB chunk. 0.12.x rejects
-  such records as having an unknown flag. Stream state sidecars written by
-  0.13.0 are also not readable by earlier versions.
+  such records as having an unknown flag.
 - Breaking: remove the indexed primary. Updating a keyed record appended a new
   version and an indexed primary could never reclaim the old ones, so a file
   grew with the number of updates rather than with its data; the replacement is
@@ -70,10 +69,29 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `VarlitDiskKey`, `disk_index_sidecar_path`, the `.vki` sidecar, the
   generated `*_indexed_*` constructors and `*Indexed*` handle types,
   `DiskIndexError::PageReclaimed` and `DiskIndexOptions::max_tail_records`.
-  The `key_index` block attribute is now a compile error. Stream handles, the
-  `.vks` state sidecar, native keyed files and matrices are unchanged; read
-  indexed data with 0.12.1 and rewrite it (see the
-  [migration guide](docs/migration-guide.md)).
+  The `key_index` block attribute is now a compile error. Stream handles,
+  native keyed files and matrices are unchanged; read indexed data with 0.12.1
+  and rewrite it (see the [migration guide](docs/migration-guide.md)).
+- Breaking: remove the stream `.vks` state sidecar. A stream file carries its
+  durable boundary itself: each `sync()` writes its end into the file's `VPUB`
+  header block (two 24-byte slots, written after the barrier), readers expose
+  that end plus every later sync whose marker verifies, and a writer resumes
+  from the stream summary of the newest anchor before it, so opening a writer
+  frames at most one anchor spacing and a clean reader open frames nothing.
+  `open_stream_writer` recovers automatically. Stream files written before the
+  block existed open as they are, framed from the header; an existing `.vks`
+  is ignored and can be deleted. Removed: `DiskIndexOptions`,
+  `DiskIndexBatchOptions`, `DiskIndexConfirmPolicy`, `DiskIndexDigest`,
+  `DiskIndexError`, `DiskIndexMode`, `IndexCompaction`, `StreamOptions::state`,
+  `StreamBootstrapReport`, `bootstrap_stream_checkpoint[_with_progress]`,
+  `VarlitStreamWriter::restore_checkpoint_and_open`, `compact_index`,
+  `VarlitStreamReader::release_snapshot`, the generated
+  `restore_stream_writer` and `bootstrap_stream_checkpoint[_with_progress]`,
+  and the error variants `DiskIndex`, `IndexBusy` and `PublishedButIndexStale`.
+  `SnapshotStatus` now reports how far a reader trails
+  (`committed_len`, `records_behind`, `bytes_behind`). Stream create syncs
+  the parent directory and reports `PublishedButParentSyncPending` naming the
+  file when that fails.
 - Add `Endian::NATIVE`, the byte order of the compilation target: a raw
   zero-copy type of plain integer fields declares it, so its views are refused
   on a host whose order is not the file's instead of reading swapped values.

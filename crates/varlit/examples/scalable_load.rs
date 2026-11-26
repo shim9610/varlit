@@ -3,14 +3,14 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use varlit::{
-    BatchOptions, BlockDescriptor, BlockKind, DiskIndexBatchOptions, DiskIndexOptions, Endian,
-    FormatSpec, IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy,
-    StreamOptions, VarlitBlock, VarlitEmpty, VarlitStreamReader, VarlitStreamWriter,
+    BatchOptions, BlockDescriptor, BlockKind, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
+    ManifestPolicy, ReadLimits, RecoveryPolicy, StreamOptions, VarlitBlock, VarlitEmpty,
+    VarlitStreamReader, VarlitStreamWriter,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -48,8 +48,6 @@ struct Config {
     payload: usize,
     epoch_bytes: u64,
     batch_bytes: usize,
-    index_batch: usize,
-    cache: usize,
     readers: usize,
     crc: bool,
 }
@@ -74,8 +72,6 @@ impl Config {
             payload: get("--record-bytes", "65536").parse()?,
             epoch_bytes: get("--epoch-bytes", "268435456").parse()?,
             batch_bytes: get("--batch-bytes", "4194304").parse()?,
-            index_batch: get("--index-batch-records", "16384").parse()?,
-            cache: get("--cache-bytes", "8388608").parse()?,
             readers: get("--readers", "0").parse()?,
             crc: get("--crc", "true").parse()?,
         };
@@ -137,23 +133,10 @@ impl Config {
             BLOCKS,
         )
         .with_block_identities(&[StreamRecord::IDENTITY])
-        .with_read_limits(ReadLimits::STANDARD.with_max_sidecar_len(4 * 1024 * 1024 * 1024))
-    }
-    fn options(&self) -> DiskIndexOptions {
-        DiskIndexOptions {
-            cache_bytes: self.cache,
-            batch: DiskIndexBatchOptions {
-                max_records: self.index_batch,
-                max_bytes: 4 * 1024 * 1024,
-            },
-            ..DiskIndexOptions::default()
-        }
+        .with_read_limits(ReadLimits::STANDARD)
     }
     fn stream_options(&self) -> StreamOptions {
-        StreamOptions {
-            state: self.options(),
-            ..StreamOptions::default()
-        }
+        StreamOptions::default()
     }
     fn batch(&self) -> BatchOptions {
         BatchOptions {
@@ -437,9 +420,8 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
                 }
             }
             let native = fs::metadata(config.path())?.len();
-            let sidecar = fs::metadata(companion(&config.path(), ".vks")).map_or(0, |m| m.len());
             println!(
-                "{{\"event\":\"epoch\",\"epoch\":{epoch},\"elapsed_seconds\":{},\"payload_bytes\":{},\"native_bytes\":{native},\"sidecar_bytes\":{sidecar},\"append_ns\":{},\"mutation_ns\":{},\"sync_ns\":{},\"handoff_ns\":{},\"write_calls\":{calls}}}",
+                "{{\"event\":\"epoch\",\"epoch\":{epoch},\"elapsed_seconds\":{},\"payload_bytes\":{},\"native_bytes\":{native},\"append_ns\":{},\"mutation_ns\":{},\"sync_ns\":{},\"handoff_ns\":{},\"write_calls\":{calls}}}",
                 started.elapsed().as_secs_f64(),
                 config.epoch_bytes,
                 append_time.as_nanos(),
@@ -461,12 +443,6 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
         );
         Ok(())
     })
-}
-
-fn companion(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(suffix);
-    name.into()
 }
 
 fn verify(config: &Config, bank: &Payloads) -> Result<()> {

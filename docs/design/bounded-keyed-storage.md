@@ -11,8 +11,8 @@ Updating a keyed record appends a new version and leaves the old one in the
 file. The file therefore grows with the number of updates, not with the
 information it holds, and nothing bounds that growth:
 
-- an indexed primary (`key_index = disk`) has no way to reclaim superseded
-  versions; `compact_index()` compacts only the key index;
+- an indexed primary (`key_index = disk`, now removed) had no way to reclaim
+  superseded versions; its `compact_index()` compacted only the key index;
 - a native file grows the same way through `push_keyed`, `delete` tombstones
   and `replace_block`, and reclaims space only when the application calls
   `defragment()`, which rewrites the whole file and needs room for two copies.
@@ -46,8 +46,8 @@ spreadsheet to grow its file without limit, and varlit should not either.
 - **The indexed primary** (`VarlitIndexedWriter`, `VarlitIndexedReader`, the
   `.vki` sidecar and `key_index = disk`), whose job (key lookup without
   memory per key, constant-cost open) the structures below take over inside
-  the primary file. What happens to the stream handles (`.vks`) is an open
-  question below.
+  the primary file. The stream handles' `.vks` state sidecar is removed as
+  well (open question 3 below).
 - **Dependence on `defragment()`** for keyed data. It may stay as an explicit
   whole-file rewrite, but bounded size never needs it.
 
@@ -434,9 +434,12 @@ target.
 1. Settled: slot buckets instead of section filters (filters need a newest-
    first search over many versions, and in-place records keep one).
 2. Settled: the free-space ratio is declared per format, 5 % by default.
-3. Whether the stream handles (`.vks`, constant-cost open of unkeyed logs)
-   stay: anchors may already give what they give. They stay for now: stream
-   `sync` and `follow` run through the verified publication drivers.
+3. Settled: the stream handles stay and their `.vks` state sidecar is gone.
+   A stream file publishes its durable end in its `VPUB` header block, and a
+   writer resumes from the stream summary of the newest anchor before it, so
+   writer open is bounded by the anchor spacing and a clean reader open frames
+   nothing. Stream `sync` and `follow` run through the verified publication
+   drivers.
 4. Whether the native record directory (13 bytes per record in memory) can be
    replaced by anchor-based lookups, which the memory principle asks for.
 5. Settled: no filler record; holes stay inside region payloads.

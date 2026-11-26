@@ -12,7 +12,11 @@ supported version. This release has breaking changes:
   schema hash now includes its tile shape, so matrix files written by 0.12.x
   are refused (with `SchemaHashMismatch` when the format declares a schema
   hash); recreate them.
-- Stream sidecars written by 0.13.0 are not readable by earlier versions.
+- The stream `.vks` state sidecar is removed (see
+  [stream state sidecar removal](#stream-state-sidecar-removal)). A stream file
+  carries its durable boundary in a `VPUB` header block; stream files written
+  by earlier versions open as they are. Earlier versions are not tested
+  against stream files written by 0.13.0.
 - The indexed primary is removed (see
   [indexed primary removal](#indexed-primary-removal)). Indexed files are not
   converted: read their data with the release that wrote them and rewrite it
@@ -83,7 +87,7 @@ unspecified contents.
 | Change | Effect |
 | --- | --- |
 | `transaction_marker(<mode>, single_barrier)` (`TransactionMarkerMode::{OnFlushSingleBarrier, ExplicitSingleBarrier}`, `CommitPolicy::single_barrier`) | `commit_durable` with one storage barrier instead of two; open verifies the newest transaction before committing it. Opt-in; requires `crc32_with_header`. See [durability model](durability-model.md#single-barrier-commit) |
-| Stream `sync()` | One storage barrier on the primary per sync, closed by a sync marker. The sidecar is written and synced only when the primary has grown past `DiskIndexConfirmPolicy` (default 64 MiB or 65,536 records) and at compaction; readers and recovery replay the rest from the primary. A clean sidecar with a longer native file now means "restore", not `NativeLengthMismatch`. Sidecars written by this version are not readable by earlier versions |
+| Stream `sync()` | One storage barrier per sync: a sync marker closes the records since the last sync, `sync_all` makes them durable, and the end is then written into the file's `VPUB` block (one 24-byte write, made durable by the next barrier). Readers open at that end and verify the markers after it; a writer open recovers automatically. See [stream state sidecar removal](#stream-state-sidecar-removal) |
 | `MmapPayloads::decode_block_into(&entry, &mut scratch, &mut out)` | Decode straight from a read-only mapping, with the same id/version, checksum, length and materialization checks as the copying read |
 | Tiled matrix storage | Cells live in tiles of the spec's `tile = [rows, cols]` shape and are overwritten in place through a write-ahead ring inside the file; overwrites do not grow the file (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`). A reader that falls behind the ring gets `MatrixSnapshotExpired`. The `VMAT` layout and its generation log are removed; 0.12.x matrix files are refused (with `SchemaHashMismatch` when the format declares a schema hash). `FormatSpec::with_matrix_ring_bytes` sets the ring size. See [durability model](durability-model.md#matrix-storage-and-publication) |
 | Matrix settings and errors left from `VMAT` | Removed: `MatrixMetadataResidency`, `MatrixMetadataVerification` and the `ReadLimits` matrix residency, verification, generation-cache and directory-cache fields, setters and accessors; `FormatSpec::matrix_fatal_forensics` and `with_matrix_fatal_forensics()`; `compact_matrix()`; `matrix_recovery_report()`; `matrix_storage_diagnostics()` and `MatrixStorageDiagnostics`; the zero-range and sparse-zeroing accessors of `MatrixRecoveryReport`; and the error variants `MatrixCommitQuarantined`, `MatrixFatalCorruption`, `MatrixChunkNotReopenable`, `MatrixChunkClosed`, `InvalidMatrixChunk` and `MatrixDimensionMismatch`. Open runs no matrix verification; `verify_matrix_metadata()` checks tiles on request and returns a `MatrixRecoveryReport`. `matrix_generation_path()` returns the primary path. See [migration guide](migration-guide.md#upgrading-from-0121-to-0130) and [recovery model](recovery-model.md) |
@@ -128,23 +132,52 @@ it is not implemented.
 
 | Removed | Use instead |
 | --- | --- |
-| `VarlitIndexedWriter`, `VarlitIndexedReader`; generated `create_indexed_writer`, `open_indexed_writer`, `restore_indexed_writer`, `open_indexed_reader` and the `<Format>IndexedWriter` / `<Format>IndexedReader` types | Stream handles (`create_stream_writer`, `open_stream_writer`, `restore_stream_writer`, `open_stream_reader`) for append and follow; resident handles (`create_writer`, `open_reader`, `keyed_blocks`) for lookup by key |
-| `rebuild_disk_index`, `rebuild_disk_index_with_progress`, `DiskIndexRebuildReport` and the generated `rebuild_disk_index` | `bootstrap_stream_checkpoint` for a stream file's `.vks` |
+| `VarlitIndexedWriter`, `VarlitIndexedReader`; generated `create_indexed_writer`, `open_indexed_writer`, `restore_indexed_writer`, `open_indexed_reader` and the `<Format>IndexedWriter` / `<Format>IndexedReader` types | Stream handles (`create_stream_writer`, `open_stream_writer`, `open_stream_reader`) for append and follow; resident handles (`create_writer`, `open_reader`, `keyed_blocks`) for lookup by key |
+| `rebuild_disk_index`, `rebuild_disk_index_with_progress`, `DiskIndexRebuildReport` and the generated `rebuild_disk_index` | None: stream files need no rebuild |
 | Lookup by key on a sidecar: generated `get_<block>`, `lookup_entry`, `historical_distinct_keys`, indexed `compact_index` | Resident `keyed_blocks::<T>()?.get(&key, &mut out)` or the generated `<blocks>()?.get(&key, &mut out)` |
 | `DiskIndexPlan`, `DiskIndexedBlock`, `DiskIndexEntry`, `DiskIndexKeyTag`, `VarlitDiskKey` | None |
-| `DiskIndexError::PageReclaimed`, `DiskIndexOptions::max_tail_records` | None |
+| `DiskIndexError::PageReclaimed`, `DiskIndexOptions::max_tail_records` | None (the whole stream sidecar API is removed too, see below) |
 | Block attribute `key_index = disk` / `key_index = memory` | Delete it; it is now a compile error. Keyed blocks without it keep working |
 | `.vki` sidecar files | Delete them after rewriting the data |
 
-Stream handles, `StreamOptions`, `DiskIndexOptions`, `DiskIndexBatchOptions`,
-`DiskIndexConfirmPolicy`, `DiskIndexError` (without `PageReclaimed`),
-`DiskIndexMode`, `IndexCompaction`, `SnapshotStatus` and
-`bootstrap_stream_checkpoint` are unchanged. Stream `sync()` and stream reader
-`follow()` now run through the Kani-verified `commit` and `follow` drivers in
+Stream `sync()` and stream reader `follow()` now run through the
+Kani-verified `commit` and `follow` drivers in
 `crates/varlit-core/src/publication_protocol.rs`. A stream writer's Immediate
 policy counters start at the first caller write; the creation nonce and
 embedded manifest records no longer count. Native and matrix files are
 unchanged. See the [migration guide](migration-guide.md#indexed-primary-removed).
+
+### Stream state sidecar removal
+
+**Breaking.** A stream file no longer has a `<file>.vks` companion. Its durable
+boundary is in the file: `create` publishes the start of the sync-marker chain
+in a `VPUB` header block, and each `sync()` writes its end there after its one
+storage barrier. A reader opens at the published end and exposes every later
+sync whose marker verifies; on a clean file it frames nothing. A writer open
+recovers automatically: it takes its state from the stream summary of the
+newest intact anchor before the published end (anchors are written every
+4 MiB by default), keeps every later sync whose marker verifies, cuts the rest,
+syncs and publishes the kept end. Stream files written by earlier versions open
+as they are, framed from the header; an existing `.vks` is ignored.
+
+| Removed | Use instead |
+| --- | --- |
+| `StreamOptions::state`; `DiskIndexOptions`, `DiskIndexBatchOptions`, `DiskIndexConfirmPolicy`, `DiskIndexDigest`, `DiskIndexMode` | `StreamOptions { limits }`, its only field |
+| `DiskIndexError`; `Error::DiskIndex`, `Error::IndexBusy`, `Error::PublishedButIndexStale` | None. A stream open reports a lost published end as `CorruptTail` and a damaged earlier sync as `ChecksumMismatch` |
+| `VarlitStreamWriter::restore_checkpoint_and_open`; generated `restore_stream_writer` | `VarlitStreamWriter::open` / generated `open_stream_writer`, which recovers |
+| `bootstrap_stream_checkpoint`, `bootstrap_stream_checkpoint_with_progress`, `StreamBootstrapReport` and their generated counterparts | None: there is nothing to build |
+| `VarlitStreamWriter::compact_index`, `IndexCompaction` and the generated writer `compact_index` | None: there is nothing to compact |
+| `VarlitStreamReader::release_snapshot` and the generated reader `release_snapshot` | None: a reader pins nothing |
+| `.vks` files | Delete them at any time |
+
+`SnapshotStatus` is now `{ committed_len, records_behind, bytes_behind }`: the
+end of the prefix the reader holds and the confirmed records and bytes past it,
+which is what `follow()` would adopt now. It has no generation or pin fields.
+`VarlitStreamWriter::create` syncs the parent directory and returns
+`PublishedButParentSyncPending`, naming the stream file, when that fails; a
+plain `open` resumes the file. See the
+[migration guide](migration-guide.md#stream-state-sidecar-removed) and
+[scalable I/O](scalable-io.md#durability-and-recovery).
 
 ### Composing custom decoders
 

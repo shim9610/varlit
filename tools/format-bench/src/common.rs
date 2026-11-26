@@ -112,13 +112,8 @@ pub fn vl_limits() -> varlit::ReadLimits {
 pub fn vl_spec(spec: varlit::FormatSpec) -> varlit::FormatSpec {
     spec.with_resource_limits(vl_limits())
 }
-pub fn vl_dio(mut o: varlit::DiskIndexOptions) -> varlit::DiskIndexOptions {
-    o.limits = o.limits.overlay(vl_limits());
-    o
-}
 pub fn vl_stream(mut o: varlit::StreamOptions) -> varlit::StreamOptions {
     o.limits = o.limits.overlay(vl_limits());
-    o.state = vl_dio(o.state);
     o
 }
 

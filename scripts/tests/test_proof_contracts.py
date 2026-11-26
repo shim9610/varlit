@@ -47,7 +47,7 @@ class ProofContractTests(unittest.TestCase):
         import json
         manifest = json.loads(gate.MANIFEST.read_text())
         contracts = manifest['contracts']
-        self.assertTrue({'record-extent', 'observed-prefix', 'publication-metadata',
+        self.assertTrue({'record-extent', 'observed-prefix',
                          'publication-protocol', 'compression-steps', 'limited-spill',
                          'chunk-parser', 'materialization', 'index-visits', 'fallible-ownership'} <= {c['id'] for c in contracts})
         harnesses = [h for c in contracts for h in c['harnesses']]

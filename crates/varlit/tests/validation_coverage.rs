@@ -702,73 +702,6 @@ fn stream_fixture(
     Ok((directory, reader))
 }
 
-/// Stream options with these state-sidecar options.
-fn stream_options(state: varlit::DiskIndexOptions) -> varlit::StreamOptions {
-    varlit::StreamOptions {
-        state,
-        ..varlit::StreamOptions::default()
-    }
-}
-
-/// Syncs one `StreamEntry` per round under `options` and returns how many
-/// sidecar confirmations a reader observed, checking that every synced entry
-/// is readable whether or not it was confirmed.
-fn confirmations(
-    options: varlit::DiskIndexOptions,
-    rounds: u64,
-) -> Result<u64, Box<dyn std::error::Error>> {
-    let directory = private_tempdir::private_tempdir()?;
-    let path = directory.path().join("confirm.varlit");
-    let mut writer = IntoStream::create_stream_writer(&path, stream_options(options))?;
-    let reader = IntoStream::open_stream_reader(&path, stream_options(options))?;
-    let before = reader.snapshot_status()?.confirmed_generation;
-    for round in 0..rounds {
-        writer.push_stream_entry(&StreamEntry {
-            id: round,
-            value: round,
-        })?;
-        writer.sync()?;
-    }
-    let after = reader.snapshot_status()?.confirmed_generation;
-    let fresh = IntoStream::open_stream_reader(&path, stream_options(options))?.into_inner();
-    let mut blocks = fresh.blocks::<StreamEntry>()?;
-    let mut out = <StreamEntry as varlit::VarlitEmpty>::empty();
-    let mut seen = 0;
-    while blocks.next_into(&mut out)? {
-        seen += 1;
-    }
-    assert_eq!(seen, rounds);
-    assert_eq!(out.value, rounds - 1);
-    drop(writer);
-    Ok(after - before)
-}
-
-/// The state sidecar's size after `rounds` confirmed syncs under
-/// `reclaim_after`: freed pages are reused once that many further
-/// generations are confirmed, so the delay sets how far the sidecar grows.
-fn sidecar_after_syncs(reclaim_after: u64, rounds: u64) -> Result<u64, Box<dyn std::error::Error>> {
-    let directory = private_tempdir::private_tempdir()?;
-    let path = directory.path().join("reclaim.varlit");
-    let options = varlit::DiskIndexOptions {
-        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
-        reclaim_after,
-        ..varlit::DiskIndexOptions::default()
-    };
-    let mut writer = IntoStream::create_stream_writer(&path, stream_options(options))?;
-    for round in 0..rounds {
-        writer.push_stream_entry(&StreamEntry {
-            id: round,
-            value: round,
-        })?;
-        writer.push_other_entry(&OtherEntry { id: round })?;
-        writer.sync()?;
-    }
-    drop(writer);
-    let mut sidecar = path.into_os_string();
-    sidecar.push(".vks");
-    Ok(std::fs::metadata(sidecar)?.len())
-}
-
 varlit::varlit_format! {
     struct ResumeProbe {
         magic: b"VRESUMEP"; version: 1; endian: little; integrity: crc32_with_header;
@@ -1018,6 +951,27 @@ fn walk_with(path: &std::path::Path, walk: WalkFn) -> varlit::Result<WalkRow> {
     let mut out = WalkProbe(<WalkRow as varlit::VarlitEmpty>::empty());
     reader.decode_block_into(&entries[0], &mut Vec::new(), &mut out)?;
     Ok(out.0)
+}
+
+/// How far a reader opened after one synced entry trails once `synced` more
+/// entries are synced and one more is appended without a sync, and the end
+/// of the prefix it holds.
+fn stream_lag(synced: u64) -> Result<(varlit::SnapshotStatus, u64), Box<dyn std::error::Error>> {
+    let directory = private_tempdir::private_tempdir()?;
+    let path = directory.path().join("lag.varlit");
+    let mut writer = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?;
+    writer.push_stream_entry(&StreamEntry { id: 0, value: 0 })?;
+    writer.sync()?;
+    let reader = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?;
+    for id in 1..=synced {
+        writer.push_stream_entry(&StreamEntry { id, value: id })?;
+        writer.sync()?;
+    }
+    writer.push_stream_entry(&StreamEntry { id: 99, value: 99 })?;
+    let status = reader.snapshot_status()?;
+    let held = reader.committed_len();
+    drop(writer);
+    Ok((status, held))
 }
 
 const CONTRACTS: &[Contract] = &[
@@ -1584,7 +1538,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let declared = KeyedStore::spec().keyed_storage; assert_eq!(declared.map(|storage| storage.free_space_permille), Some(20)); Ok(()) },
         invalid { assert!(ProbeFormat::spec().keyed_storage.is_none()); assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(9)).validate().is_err()); Ok(()) }
     ),
-    contract!("macros/modules/format_emit.rs::format_emit::generator:high_cardinality_api_tokens@a9b8fbc451734f72", generated "push_stream_entry",
+    contract!("macros/modules/format_emit.rs::format_emit::generator:high_cardinality_api_tokens@51ea4769bc21e54c", generated "push_stream_entry",
         valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("generated.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; let info = w.push_stream_entry(&StreamEntry { id: 7, value: 70 })?; w.sync()?; drop(w); assert!(info.payload_len > 0); let reader = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?.into_inner(); let mut blocks = reader.blocks::<StreamEntry>()?; let mut out = <StreamEntry as varlit::VarlitEmpty>::empty(); assert!(blocks.next_into(&mut out)?); assert_eq!(out, StreamEntry { id: 7, value: 70 }); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("generated.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; let info = w.push_stream_entry(&StreamEntry { id: 7, value: 70 })?; w.sync()?; drop(w); let reader = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?.into_inner(); flip_byte(&path, info.payload_offset)?; let mut blocks = reader.blocks::<StreamEntry>()?; let mut out = <StreamEntry as varlit::VarlitEmpty>::empty(); assert!(matches!(blocks.next_into(&mut out), Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
     ),
@@ -2865,13 +2819,13 @@ const CONTRACTS: &[Contract] = &[
         valid { let spec = BarrierProbe::spec(); assert!(spec.commit_policy.single_barrier()); assert!(!spec.commit_policy.marker_on_flush()); assert_eq!(single_barrier_probe(spec, false)?, [1, 2]); Ok(()) },
         invalid { let weak = WeakBarrierProbe::spec(); assert!(weak.commit_policy.single_barrier()); assert!(weak.commit_policy.marker_on_flush()); assert!(matches!(single_barrier_probe(weak, false).unwrap_err().downcast::<varlit::Error>().map(|e| *e), Ok(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),
-    contract!("core/scalable_fault.rs::scalable_fault::const:REQUIRED_POINTS@4f413771e59774b2",
+    contract!("core/scalable_fault.rs::scalable_fault::const:REQUIRED_POINTS@7f40c93c289b4842",
         valid {
             // The module exists only under this feature; the gate runs with --all-features.
             #[cfg(feature = "scalable-fault-injection")]
             {
                 let points = varlit::__core::scalable_fault::REQUIRED_POINTS;
-                assert!(points.contains(&"checkpoint.head_copy"));
+                assert!(points.contains(&"sync.native_sync"));
                 assert_eq!(points.iter().collect::<BTreeSet<_>>().len(), points.len());
             }
             Ok(())
@@ -2879,41 +2833,14 @@ const CONTRACTS: &[Contract] = &[
         invalid {
             #[cfg(feature = "scalable-fault-injection")]
             {
-                // The withdrawn data-sync point is no longer a registered persistence boundary.
+                // The sidecar's checkpoint points left with the sidecar.
                 let points = varlit::__core::scalable_fault::REQUIRED_POINTS;
+                assert!(!points.contains(&"checkpoint.head_copy"));
                 assert!(!points.contains(&"checkpoint.data_sync"));
                 assert!(!varlit::__core::scalable_fault::MATRIX_REUSE_POINTS.contains(&"checkpoint.data_sync"));
             }
             Ok(())
         }
-    ),
-    contract!("core/disk_index.rs::disk_index::struct:DiskIndexConfirmPolicy@cbf29ce484222325",
-        valid { let policy: varlit::DiskIndexConfirmPolicy = varlit::DiskIndexConfirmPolicy::EVERY_SYNC; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm: policy, ..varlit::DiskIndexOptions::default() }, 3)?, 3); Ok(()) },
-        invalid { let policy: varlit::DiskIndexConfirmPolicy = varlit::DiskIndexConfirmPolicy { max_bytes: u64::MAX, max_records: u64::MAX }; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm: policy, ..varlit::DiskIndexOptions::default() }, 3)?, 0); Ok(()) }
-    ),
-    contract!("core/disk_index.rs::disk_index::DiskIndexConfirmPolicy::const:EVERY_SYNC@c48f72f43b915edb",
-        valid { assert_eq!(confirmations(varlit::DiskIndexOptions { confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC, ..varlit::DiskIndexOptions::default() }, 4)?, 4); Ok(()) },
-        invalid { assert_ne!(varlit::DiskIndexConfirmPolicy::default(), varlit::DiskIndexConfirmPolicy::EVERY_SYNC); assert_eq!(confirmations(varlit::DiskIndexOptions::default(), 4)?, 0); Ok(()) }
-    ),
-    contract!("core/disk_index.rs::disk_index::DiskIndexConfirmPolicy::field:max_bytes@4d35d3193e8d66f2",
-        valid { let confirm = varlit::DiskIndexConfirmPolicy { max_bytes: 1, max_records: u64::MAX }; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm, ..varlit::DiskIndexOptions::default() }, 2)?, 2); Ok(()) },
-        invalid { let confirm = varlit::DiskIndexConfirmPolicy { max_bytes: u64::MAX, max_records: u64::MAX }; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm, ..varlit::DiskIndexOptions::default() }, 2)?, 0); Ok(()) }
-    ),
-    contract!("core/disk_index.rs::disk_index::DiskIndexConfirmPolicy::field:max_records@4d35d3193e8d66f2",
-        valid { let confirm = varlit::DiskIndexConfirmPolicy { max_bytes: u64::MAX, max_records: 1 }; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm, ..varlit::DiskIndexOptions::default() }, 2)?, 2); Ok(()) },
-        invalid { let confirm = varlit::DiskIndexConfirmPolicy { max_bytes: u64::MAX, max_records: 5 }; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm, ..varlit::DiskIndexOptions::default() }, 2)?, 0); Ok(()) }
-    ),
-    contract!("core/disk_index.rs::disk_index::DiskIndexOptions::field:confirm@9972f89bd550d59a",
-        valid { let options = varlit::DiskIndexOptions { confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC, ..varlit::DiskIndexOptions::default() }; assert_eq!(confirmations(options, 2)?, 2); Ok(()) },
-        invalid { let options = varlit::DiskIndexOptions { confirm: varlit::DiskIndexConfirmPolicy { max_bytes: u64::MAX, max_records: u64::MAX }, ..varlit::DiskIndexOptions::default() }; assert_eq!(confirmations(options, 2)?, 0); Ok(()) }
-    ),
-    contract!("core/lib.rs::::export:DiskIndexConfirmPolicy@252f0bb080294882",
-        valid { let policy = varlit::DiskIndexConfirmPolicy::EVERY_SYNC; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm: policy, ..varlit::DiskIndexOptions::default() }, 1)?, 1); Ok(()) },
-        invalid { let policy = varlit::DiskIndexConfirmPolicy::default(); assert!(policy.max_bytes > 0 && policy.max_records > 0); assert_eq!(confirmations(varlit::DiskIndexOptions { confirm: policy, ..varlit::DiskIndexOptions::default() }, 1)?, 0); Ok(()) }
-    ),
-    contract!("core/disk_index.rs::disk_index::DiskIndexOptions::field:reclaim_after@4d35d3193e8d66f2",
-        valid { let options = varlit::DiskIndexOptions { reclaim_after: 2, ..varlit::DiskIndexOptions::default() }; let small = sidecar_after_syncs(options.reclaim_after, 200)?; assert!(small < 256 * 1024, "{small}"); Ok(()) },
-        invalid { let options = varlit::DiskIndexOptions { reclaim_after: 1_000, ..varlit::DiskIndexOptions::default() }; let delayed = sidecar_after_syncs(options.reclaim_after, 200)?; let small = sidecar_after_syncs(2, 200)?; assert!(delayed > 8 * small, "{delayed} vs {small}"); Ok(()) }
     ),
     contract!("core/sync_marker.rs::sync_marker::const:SYNC_BLOCK_ID@b743b3c893debb89",
         valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("marker.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 1 })?; w.sync()?; let r = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?; let ids: Vec<u32> = r.events()?.map(|e| e.map(|e| e.block_id)).collect::<varlit::Result<_>>()?; assert_eq!(ids.last(), Some(&varlit::SYNC_BLOCK_ID)); drop(w); Ok(()) },
@@ -3111,18 +3038,6 @@ const CONTRACTS: &[Contract] = &[
         valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let _ = varlit::VarlitFile::take_header_region_writes(); { let mut w = TailProbe::create(d.path().join("t"))?; w.push(&Probe { value: 1 })?; w.flush()?; } assert!(varlit::VarlitFile::take_header_region_writes() >= 1); } Ok(()) },
         invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let _ = varlit::VarlitFile::take_header_region_writes(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.flush()?; } assert_eq!(varlit::VarlitFile::take_header_region_writes(), 0); } Ok(()) }
     ),
-    contract!("core/disk_index.rs::disk_index::scaling_counters::macro:thread_local@88a095f09966ce6f", generated "primary_generation_scans",
-        valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 10 })?; w.sync()?; } assert!(varlit::VarlitStreamWriter::primary_generation_scans() > 0); varlit::VarlitStreamWriter::reset_scaling_counters(); assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) },
-        invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.sync()?; } assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) }
-    ),
-    contract!("core/stream.rs::stream::VarlitStreamWriter::fn:primary_generation_scans@5d7a23efb398c940",
-        valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 10 })?; w.sync()?; } assert!(varlit::VarlitStreamWriter::primary_generation_scans() > 0); varlit::VarlitStreamWriter::reset_scaling_counters(); assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) },
-        invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.sync()?; } assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) }
-    ),
-    contract!("core/stream.rs::stream::VarlitStreamWriter::fn:reset_scaling_counters@315210fef3121107",
-        valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 10 })?; w.sync()?; } assert!(varlit::VarlitStreamWriter::primary_generation_scans() > 0); varlit::VarlitStreamWriter::reset_scaling_counters(); assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) },
-        invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.sync()?; } assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) }
-    ),
     contract!("core/file.rs::file::VarlitFile::fn:index_entries@ae1f38692dde64d3",
         valid { let (_d, path) = paged_probe(20)?; let file = ProbeFormat::spec().open_readonly(&path)?; let mut buf = vec![varlit::RecordIndexEntry::default(); 7]; let page = file.index_entries(&mut buf)?; assert_eq!(page.filled, 7); assert!(page.next.is_some()); Ok(()) },
         invalid { let (_d, path) = paged_probe(20)?; let file = ProbeFormat::spec().open_readonly(&path)?; assert!(matches!(file.index_entries(&mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
@@ -3194,6 +3109,50 @@ const CONTRACTS: &[Contract] = &[
     contract!("macros/modules/format_emit.rs::format_emit::generator:reader_block_methods@88a30e018712ca37", generated "tallies",
         valid { let (_d, path) = paged_dsl(20)?; let reader = PagedDsl::open_reader(&path)?; let mut out: Vec<Tally> = (0..7).map(|_| <Tally as varlit::VarlitEmpty>::empty()).collect(); let mut payload = Vec::new(); let page = reader.tallies(&mut payload, &mut out)?; assert_eq!(page.filled, 7); let page = reader.tallies_from(page.next.unwrap(), &mut payload, &mut out)?; assert_eq!(out[0], Tally { value: 7 }); assert!(page.filled > 0); Ok(()) },
         invalid { let (_d, path) = paged_dsl(20)?; let reader = PagedDsl::open_reader(&path)?; let mut empty: [Tally; 0] = []; assert!(matches!(reader.tallies(&mut Vec::new(), &mut empty), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:SnapshotStatus@9d1303c28496b2c1",
+        valid { let (status, _): (varlit::SnapshotStatus, u64) = stream_lag(2)?; assert_eq!(status.records_behind, 4); Ok(()) },
+        invalid { let (status, _): (varlit::SnapshotStatus, u64) = stream_lag(0)?; assert_eq!(status, varlit::SnapshotStatus { committed_len: status.committed_len, ..varlit::SnapshotStatus::default() }); Ok(()) }
+    ),
+    contract!("core/stream.rs::stream::struct:SnapshotStatus@cbf29ce484222325",
+        valid { let (status, held) = stream_lag(1)?; let expected: varlit::SnapshotStatus = varlit::SnapshotStatus { committed_len: held, records_behind: 2, bytes_behind: status.bytes_behind }; assert_eq!(status, expected); assert!(status.bytes_behind > 0); Ok(()) },
+        invalid { let (status, held) = stream_lag(0)?; let caught_up: varlit::SnapshotStatus = varlit::SnapshotStatus { committed_len: held, records_behind: 0, bytes_behind: 0 }; assert_eq!(status, caught_up); Ok(()) }
+    ),
+    contract!("core/stream.rs::stream::SnapshotStatus::field:committed_len@4d35d3193e8d66f2",
+        valid { let (status, held) = stream_lag(3)?; assert_eq!(status.committed_len, held); Ok(()) },
+        invalid { let (lagging, _) = stream_lag(3)?; let (current, _) = stream_lag(0)?; assert_eq!(lagging.committed_len, current.committed_len, "lag is reported beside the held end, never folded into it"); Ok(()) }
+    ),
+    contract!("core/stream.rs::stream::SnapshotStatus::field:records_behind@4d35d3193e8d66f2",
+        valid { let (status, _) = stream_lag(3)?; assert_eq!(status.records_behind, 6, "each sync adds its entry and its marker"); Ok(()) },
+        invalid { let (status, _) = stream_lag(0)?; assert_eq!(status.records_behind, 0, "an unsynced entry is not behind"); Ok(()) }
+    ),
+    contract!("core/stream.rs::stream::SnapshotStatus::field:bytes_behind@4d35d3193e8d66f2",
+        valid { let (one, _) = stream_lag(1)?; let (two, _) = stream_lag(2)?; assert!(one.bytes_behind > 0 && two.bytes_behind == 2 * one.bytes_behind); Ok(()) },
+        invalid { let (status, _) = stream_lag(0)?; assert_eq!(status.bytes_behind, 0); Ok(()) }
+    ),
+    contract!("core/scalable_fault.rs::scalable_fault::const:REPLACE_POINTS@23647c06ed4bd3ef",
+        valid {
+            #[cfg(feature = "scalable-fault-injection")]
+            {
+                let points = varlit::__core::scalable_fault::REPLACE_POINTS;
+                assert_eq!(points, ["replace.atomic"]);
+            }
+            Ok(())
+        },
+        invalid {
+            #[cfg(feature = "scalable-fault-injection")]
+            {
+                // No stream scenario reaches it, so the stream crash matrix
+                // must not require it.
+                let points = varlit::__core::scalable_fault::REPLACE_POINTS;
+                assert!(points.iter().all(|point| !varlit::__core::scalable_fault::REQUIRED_POINTS.contains(point)));
+            }
+            Ok(())
+        }
+    ),
+    contract!("core/stream.rs::stream::macro:thread_local@d0bd4d1f626ec35c", generated "inject_append_rollback_failures",
+        valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; varlit::VarlitStreamWriter::inject_append_rollback_failures(1); let failed = w.push_stream_entry(&StreamEntry { id: 1, value: 1 }); varlit::VarlitStreamWriter::inject_append_rollback_failures(0); assert!(matches!(failed, Err(varlit::Error::WriteRollbackFailed { .. }))); assert!(matches!(w.push_stream_entry(&StreamEntry { id: 2, value: 2 }), Err(varlit::Error::WriterPoisoned(_)))); } Ok(()) },
+        invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; varlit::VarlitStreamWriter::inject_append_rollback_failures(0); assert!(w.push_stream_entry(&StreamEntry { id: 1, value: 1 }).is_ok()); w.sync()?; } Ok(()) }
     ),
 ];
 

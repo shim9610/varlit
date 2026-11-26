@@ -123,6 +123,7 @@ pub(crate) fn decode_slot(bytes: &[u8; SLOT_LEN]) -> Option<Slot> {
 }
 
 /// The slot sequence number `seq` is written to, as an index (0 or 1).
+#[cfg(kani)]
 pub(crate) const fn slot_of_seq(seq: u64) -> usize {
     (seq % 2) as usize
 }

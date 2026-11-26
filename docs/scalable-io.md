@@ -2,11 +2,14 @@
 
 This guide covers the stream handles of the default public API. They are the
 Varlit path intended for very large append logs. Their normal open, append and
-follow paths do not rescan the complete native prefix. A stream file has a
-`<file>.vks` state sidecar that holds bounded resume state: the confirmed EOF,
-record count, next sequence and one tail per declared block. It holds no keys.
-Resident buffers are bounded; sidecar size, publication frequency and the
-number of declared blocks still affect publication work.
+follow paths do not rescan the complete native prefix. A stream file carries
+its durable boundary itself: each `sync()` writes the end of what it made
+durable into the file's `VPUB` header block, and the writer's resume state
+(record count, next sequence and one tail per declared block) is carried in
+the stream summary of the file's anchors. There is no companion file; a
+`<file>.vks` left by an earlier release is ignored. Resident buffers are
+bounded; publication frequency and the number of declared blocks still affect
+publication work.
 
 > **Keyed lookup.** Stream readers have no lookup by key. The indexed primary
 > (`VarlitIndexedWriter`, `VarlitIndexedReader`, the `.vki` sidecar and the
@@ -46,8 +49,8 @@ immediate cost to reduce.
 > `high-cardinality-dev` from Cargo manifests.
 > Repository release and long-duration load qualification are tracked separately.
 > A release tag does not establish a completed endurance test.
-> Explicit `compact_index()` reclaims obsolete sidecar pages; whole-native-log
-> keyed merge/compact uses bounded buffers and private spill files.
+> Whole-native-log keyed merge/compact uses bounded buffers and private spill
+> files.
 > See [Known Limitations §3](known-limitations.md#3-stream-api-status)
 > and [§6](known-limitations.md#6-not-verified) for the remaining scope.
 
@@ -231,14 +234,12 @@ let verified = reader.verify_all()?; // explicit eager full validation
 # Ok::<(), varlit::Error>(())
 ```
 
-Opening the reader does not *scan* the native record region, but it does read
-a bounded part of it: the primary-generation witness digests the leading window
-of the file — at most 4 KiB from offset 0 — and takes one point read of the
-leading record for the creation nonce. It then walks the records synced after
-the sidecar's confirmed EOF, which `DiskIndexConfirmPolicy` bounds (see
-[Durability And Recovery](#durability-and-recovery)). Calling `runs`, `frames`,
-`events`, or `verify_all` explicitly creates a native scanner; their cost is
-linear in the selected snapshot.
+Opening the reader does not *scan* the native record region. It reads the
+published end from the file header, then walks forward from there over any
+syncs whose end was not yet published (normally none, so a clean open frames
+nothing; see [Durability And Recovery](#durability-and-recovery)). Calling
+`runs`, `frames`, `events`, or `verify_all` explicitly creates a native
+scanner; their cost is linear in the selected snapshot.
 
 ## Batch Cost And Memory
 
@@ -334,173 +335,110 @@ in `BatchAppendInfo` counts those calls, not guaranteed kernel syscalls. A
 single valid record larger than `max_bytes` is written alone; per-record stored
 and logical payload limits still apply before allocation or I/O.
 
-`StreamOptions::state` is a `DiskIndexOptions`. Its `batch` field independently
-bounds one sidecar update batch; native chunk boundaries do not force a sidecar
-commit. `confirm` (a `DiskIndexConfirmPolicy`, default 64 MiB or 65,536
-records) decides how far the confirmed sidecar may trail the synced primary.
-`cache_bytes` bounds each reader's private sidecar page cache. Blocks can
-require Immediate, and callers can declare automatic conditions; see
-[Immediate policy](immediate-policy.md).
+`StreamOptions` has one field, `limits`, the runtime `ResourceLimits` the
+handle enforces. Blocks can require Immediate, and callers can declare
+automatic conditions; see [Immediate policy](immediate-policy.md).
 None of these values is a total file-size, total record-count, or lifetime
 append limit.
-
-The paged `.vks` backing file is deliberately not rejected by
-`ResourceLimits::max_sidecar_len`: opening it does not materialize its full
-length. That limit still applies to Varlit sidecar formats that are read into
-memory, such as matrix/adapter envelopes. Stream sidecar safety instead
-comes from bounded pages and private caches, fixed metadata rows, a fixed
-number of block-tail rows, and checked native extents.
 
 The runtime retains declared block tails and bounded buffers, not one RAM entry
 per record.
 
-## Scalar Append And The Bounded Sidecar Transaction
+## Scalar Append
 
-Single-record scalar `push_*` calls do not commit a sidecar transaction per
-record. A stream writer keeps one open sidecar transaction and commits it only
-at a chunk boundary — the configured transaction bound (`StreamOptions::state`
-`.batch`, derived from `max_records` and `max_bytes`) — or on an explicit
-`flush()`/`sync()`. Several scalar appends therefore share one sidecar commit.
-
-The sidecar intentionally lags the native file: the native records are the
-authority, and the sidecar carries only bounded resume state. Block-tail
-maintenance for `keyed_offset_chain` formats uses binary search over the sorted
-tail vector and collapses each chunk to one final tail per block, so tail
-upkeep is `O(log blocks)` per record rather than linear.
-
-## Explicit sidecar compaction
-
-`writer.compact_index()` refuses while records appended since the last `sync()`
-are pending (`DiskIndexError::CleanStateRequired`); call `sync()` or
-`immediate()` first. When synced records are not yet covered by a confirmed
-sidecar checkpoint, compaction confirms them first. It then copies the current
-state into a bounded-memory temporary file, syncs it, atomically replaces the
-sidecar, and syncs the parent directory. `IndexCompaction` reports the logical
-sidecar size before and after. Old reader file descriptors remain valid;
-`follow()` can adopt the replacement and subsequent writer generations.
-
-This reclaims obsolete sidecar pages and checkpoints, not native log records.
-Outside compaction, the writer reuses a sidecar page once it has been
-unreferenced for `DiskIndexOptions::reclaim_after` confirmed generations
-(default 2). A reader that follows at least that often never meets a reused
-page; one that falls further behind gets a damaged-sidecar error and must
-reopen. Crash safety does not depend on this setting.
-
-A filesystem may retain the old file's allocated space until the final old
-handle follows or closes; compaction requires enough free space for both files
-while it runs. A `PublishedButParentSyncPending` error means the replacement is
-visible but its name is not yet durably acknowledged. Compaction errors
-conservatively poison the writer; close and reopen before more writes.
+A single-record scalar `push_*` call encodes its record into the writer's
+reusable record buffer and writes it to the native file. It is not visible to
+readers until the next `sync()` (see below). Block-tail maintenance for
+`keyed_offset_chain` formats uses binary search over the sorted tail vector
+and collapses each chunk to one final tail per block, so tail upkeep is
+`O(log blocks)` per record rather than linear.
 
 ## Durability And Recovery
 
-`flush()` commits the open sidecar chunk and flushes the native file handle;
-it makes nothing durable and nothing visible to readers. `sync()` is the
-durability and visibility boundary. It runs through the Kani-verified `commit`
-driver in `crates/varlit-core/src/publication_protocol.rs`:
+`flush()` flushes the native file handle; it makes nothing durable and nothing
+visible to readers. `sync()` is the durability and visibility boundary. It runs
+through the Kani-verified `commit` driver in
+`crates/varlit-core/src/publication_protocol.rs`:
 
-1. append a sync marker that closes the records since the previous sync;
-2. `sync_all` the authoritative native file — the one storage barrier of an
-   ordinary sync;
-3. when the primary has grown past `StreamOptions::state.confirm` since the
-   last confirmed checkpoint, write and confirm a sidecar checkpoint. If that
-   publication fails after it may have become visible, the writer is poisoned.
+1. append a sync marker that closes the records since the previous sync (a
+   sync with nothing new appends none);
+2. `sync_all` the native file — the one storage barrier of a sync;
+3. write the new end into the `VPUB` slot after the newest one: one 24-byte
+   positional write, not synced on its own. The next barrier makes it durable.
 
-A sync that does not confirm the sidecar is still durable and visible: readers
-and recovery take the confirmed checkpoint and then walk the verified chain of
-sync markers after it in the primary. `immediate()` is the same operation.
+The third step is best-effort. A failed or lost slot write leaves the earlier
+end, which only lengthens the next open's marker walk: the records are already
+durable and their marker verifies. `immediate()` is `sync()`.
+
+`create` writes the creation nonce record and, for an embedded manifest, the
+manifest record, publishes their end as the start of the marker chain, syncs
+the file and then syncs its parent directory. A failure of that last step is
+`Error::PublishedButParentSyncPending` naming the stream file: the file is
+complete and a plain `open` resumes it, but its directory entry is not yet
+proved durable.
 
 After any append, dropping the writer without a successful `sync()` leaves an
-unsynced suffix. Reader open serves the confirmed checkpoint plus the synced
-records after it, and never reads the unsynced suffix.
+unsynced suffix. Readers never read it.
 
-Both mirrored confirmed sidecar heads being unreadable is a corruption
-error, including during explicit restore. Working/dirty heads cannot replace
-the confirmed anchor: they may describe an older rollback point. Open/restore
-refuse without truncating the primary or rewriting the damaged sidecar.
-One valid confirmed copy still serves its snapshot, and already opened readers
-keep their pinned confirmed generation. Preserve damaged files for inspection;
-ordinary dirty-tail recovery does not repair lost confirmed anchors.
+### What readers and writers open
 
-| Situation | Operation | Native scan |
-| --- | --- | --- |
-| `.vks` trails the primary (unconfirmed tail, interrupted generation) | `open_stream_writer` (recovers automatically) or `restore_stream_writer` | no prefix scan; walks the synced records after the checkpoint, cuts the unsynced suffix |
-| native file has no `.vks` | `bootstrap_stream_checkpoint` | yes |
-| `.vks` is stale or belongs to another primary generation | remove the `.vks`, then `bootstrap_stream_checkpoint` | yes |
-| eager integrity check | reader `verify_all` | yes |
+The `VPUB` block holds two 24-byte checksummed slots, written alternately (see
+the [specification](spec.md#published-end)). A torn slot write fails its
+checksum and leaves the other slot, which names an earlier end.
 
-Recovery keeps every acknowledged sync and nothing after the last one. It
-replays the kept records into the sidecar and confirms it.
+A reader open reads the published end first and measures the file after it, so
+an end published between the two reads is never mistaken for lost records. It
+then walks the sync-marker chain forward from that end and exposes exactly the
+prefix through the last marker that verifies. A published end beyond the file,
+or before the end of its header, is `Error::CorruptTail`: acknowledged records
+were lost.
 
-Bootstrap uses the runtime `ResourceLimits` carried by its options and returns
-scanned record/byte counts. `bootstrap_stream_checkpoint_with_progress` exposes
-synchronous progress and cooperative cancellation. Bootstrap refuses to
-overwrite any existing `.vks`, so an unsynced physical tail cannot be promoted
-to clean merely by invoking a scan operation; remove a `.vks` only after
-establishing that it is stale.
+A writer open recovers automatically; there is no separate restore operation.
+It takes the state at the published end (next sequence, record count, block
+tails) from the stream summary carried by the newest intact anchor before that
+end, trying at most four anchors, newest first, and frames the records from
+that anchor's spanning record to the end. With no usable anchor it frames from
+the header. Anchors are written at `AnchorPolicy` spacing, 4 MiB by default, so
+this framing is bounded by the spacing, not by the file size. A record before
+the published end that does not frame is `Error::CorruptTail`. The writer then
+keeps every later sync whose marker verifies, cuts everything after the last
+verified marker, syncs, publishes the kept end and starts a new marker chain
+there. The cut, sync and publish run in that order through the Kani-verified
+`restore` driver.
 
-Sidecar protocol failures retain their public `DiskIndexError` source inside
-`Error::DiskIndex`; sidecar lock contention is `Error::IndexBusy`. Callers can
-distinguish dirty, stale, identity, metadata, and I/O failures without parsing
-error text.
+Recovery keeps every acknowledged sync and nothing after the last one. Only
+the sync in flight at a crash can be torn, so a marker that does not verify
+followed by a later marker is corruption, `Error::ChecksumMismatch`, and is not
+cut away as a torn tail.
 
-### Primary Generation Binding
+| Situation | What open does |
+| --- | --- |
+| clean file, end published by the last sync | reader frames nothing; writer frames from the newest anchor before the end |
+| crash after a barrier, before its end was published or made durable | reader and writer walk the markers after the published end and keep each sync that verifies |
+| unsynced suffix after the last verified marker | reader ignores it; writer cuts it, syncs and publishes |
+| no published end (file written before `VPUB`, or both slots unreadable) | framed from the header, see below |
+| eager integrity check | reader `verify_all` (full scan) |
 
-A sidecar is bound to one logical *generation* of its primary, not merely to one
-pathname or one OS file object. Every `VarlitStreamWriter::create` stamps a
-128-bit random nonce as the primary's first record, under the reserved internal
-block id `CREATION_NONCE_BLOCK_ID`. The sidecar records a primary-generation
-witness that folds that nonce together with the primary's length and a checksum
-over its bounded leading window (4 KiB; frozen once the primary has grown past
-it, so appends do no witness work).
+A file with no published end is framed from its header. In a file written
+before the `VPUB` block existed, the marker chain is taken to begin at the
+link start of the first sync marker (where the former state sidecar's chain
+began); a file with no marker, or whose first link does not start on a record
+boundary, keeps every record that frames. Such a file has no `VPUB` block, so
+every open frames it from the header; rewrite a large old stream with this
+release if open time matters. A `.vks` file beside it is ignored and can be
+deleted.
 
-Every stream writer open, reader snapshot open, follow and checkpoint restore
-recomputes the witness and refuses a mismatch with
-`DiskIndexError::PrimaryGenerationMismatch`. This is what makes an in-place
-rewrite of a primary by another equal-length primary of the same format — same
-path, same OS object, same header bytes, same schema hash — a refusal rather
-than an accepted stale generation. The recovery is to remove the `.vks` and run
-`bootstrap_stream_checkpoint`, never "trust the sidecar".
-
-The mutable header blocks are excluded from that window, and they are the only
-part of a file that may change without being a new generation: the header-tail
-table (`index: header_tails`), the liveness block (`liveness: footer_flags`),
-the editable header slots (`header_slots`) and the published end that every
-transaction-marker file carries. A commit or publication rewrites them in place,
-so the witness blanks each one's *payload* before checksumming (and, for matrix
-storage, the payloads of in-place records inside the window). Their magics and
-declared lengths stay covered, so a block that changed size — the change that
-moves the end of the header and every record offset after it — is still a
-refusal.
-
-The nonce costs one record at create and nothing per append. Reading it is one
-bounded point read of the leading record, performed only at create and open. A
-primary that carries no nonce — a legacy file, or one bootstrapped from a
-resident `VarlitFile` — is reported as "no nonce" rather than as an error, which
-is fail-closed: a primary that *was* created with one recorded a witness that
-folds it in, so answering "none" can only produce a different witness and refuse
-the sidecar.
-
-Sidecar metadata is at record version 3. A version 2 sidecar is 260 bytes where
-the v3 record is 300, so it is refused with the typed
-`DiskIndexError::MetadataLength` before the version field is read. Under the
-pre-1.0 wire policy it is not migrated in place: remove it and run
-`bootstrap_stream_checkpoint`. The `.vks` file uses the `VARVEIX5` paged
-container; old redb-based sidecars likewise require bootstrap, and there is no
-compatibility decoder.
-
-Atomic sidecar publication syncs the parent directory after the
-`ReplaceFileW`/rename (the Windows directory handle is opened with the write
-access `FlushFileBuffers` requires). A parent-sync failure is never silently
-promoted to full durability: sidecar create, stream bootstrap and sidecar
-compaction surface `Error::PublishedButParentSyncPending` while keeping the
-completed atomic replacement in place, so the published sidecar remains usable
-and the pending state is a durability warning, not a rollback.
+A native `VarlitFile` writer of a format without transaction markers bounds no
+reader: when it takes over a stream file it writes an inactive slot,
+withdrawing the published end. The next open then keeps every record that
+frames, and a stream writer open publishes the end again. The native records
+carry no sync marker, so a stream reader that was already open does not adopt
+them with `follow()` until a stream writer has reopened the file and published
+their end.
 
 ### Long Scan Progress And Cancellation
 
-`verify_all_with_progress` and `bootstrap_stream_checkpoint_with_progress` use
-the same scan-control types:
+`verify_all_with_progress` uses the scan-control types:
 
 ```rust
 # fn scan(reader: &varlit::VarlitStreamReader) -> varlit::Result<()> {
@@ -545,9 +483,8 @@ cloning remain available; all clones share the same cancellation flag.
 
 Cancellation is checked before scanning, after every completed record, after
 every callback, and after the final `Complete` callback. It returns
-`Error::ScanCancelled { progress }`. A cancellation observed before that final
-check publishes no `.vks`; a request arriving afterward may race with a
-successful publication.
+`Error::ScanCancelled { progress }`. A verification scan writes nothing, so a
+cancelled one leaves the file and the reader as they were.
 
 ### Clearing A Stale Writer Lock
 
@@ -597,7 +534,7 @@ across readers; see
 [concurrency limitations](known-limitations.md#42-where-a-reader-gets-a-snapshot-rather-than-live-state).
 
 Ordinary queries (`get`, `lookup`, `blocks`, `events`, `verify_all`) take `&self`.
-`follow(&mut self)` updates only that handle's confirmed generation, and iterator
+`follow(&mut self)` updates only that handle's confirmed prefix, and iterator
 `next(&mut self)` advances only its cursor. Neither requires a writable primary
 file or a writer transaction.
 
@@ -608,25 +545,22 @@ ring still holds. Ranges already in place after a checkpoint leave the overlay.
 Follow does not write and does not checkpoint. See
 [durability](durability-model.md#what-readers-see).
 
-Each stream reader opens the sidecar read-only and each snapshot owns its
-bounded page cache. A sole writer appends sidecar pages and checkpoint records.
-Two alternating confirmed heads are separate from the working heads and durable
-Dirty marker. Readers validate CRC-protected confirmed heads, then read only the
-state and native EOF they name, plus the verified sync-marker chain after that
-EOF. Unconfirmed sidecar pages never replace a reader's state.
+Each stream reader opens the native file read-only. A sole writer appends
+records and sync markers and rewrites only the `VPUB` slots in place. Readers
+read the published end, then only the verified sync-marker chain after it;
+records past the last verified marker never enter a reader's view.
 Reader open performs no write, transaction creation, OS lock or writer admission.
 The same contract works across threads and processes on a coherent local filesystem.
 
-`follow(&mut self)` adopts the latest confirmed sidecar generation and the
-synced records after it, and returns the number of additional native records
-(including internal records and tombstones). It runs through the Kani-verified
-`follow` driver in `crates/varlit-core/src/publication_protocol.rs`: every
-fallible step — capturing the sidecar state, validating EOF and the generation
-witness on the retained native file object, walking the new sync markers —
-reads the handle without changing it, and only an infallible step installs the
-result. A failed follow therefore leaves the reader unchanged. A sidecar-only
-`compact_index()` replacement is followed after identity and frontier
-validation. Replacement of the native file itself is not followed.
+`follow(&mut self)` re-reads the published end, continues the marker walk from
+where the reader stopped, and frames only the newly confirmed records to count
+them. It returns the number of additional native records (including internal
+records and tombstones). It runs through the Kani-verified `follow` driver in
+`crates/varlit-core/src/publication_protocol.rs`: every fallible step —
+reading the published end, measuring the file, walking the new sync markers,
+framing the new records — reads the handle without changing it, and only an
+infallible step installs the result. A failed follow therefore leaves the
+reader unchanged. Replacement of the native file itself is not followed.
 
 Existing iterators keep their captured view. `follow_events(&mut events)` and
 `follow_blocks(&mut blocks)` extend a cursor created by the same reader and
@@ -647,14 +581,14 @@ loop {
 }
 ```
 
-The single writer holds nonblocking native/sidecar OS writer guards. These
-exclude a second writer; readers never acquire them. The store owns its pending
-write batch and caches. Publication and restore require exclusive mutable
-access; no atomic admission gate or cache-transfer queue is involved. No reader is required to exit, release or acknowledge a
-checkpoint before the writer can append or publish.
+The single writer holds nonblocking native OS writer guards. These exclude a
+second writer; readers never acquire them. Publication and recovery require
+exclusive mutable access; no atomic admission gate or cache-transfer queue is
+involved. No reader is required to exit, release or acknowledge anything before
+the writer can append or publish.
 
-Native data is synced before any sync marker or confirmed checkpoint that
-covers it is relied on. Readers never read the writer's unsynced tail.
+A published end names only data that a completed barrier made durable. Readers
+never read the writer's unsynced tail.
 
 ## Independent optional read checks
 
@@ -704,49 +638,46 @@ native mutation is authorized. Full record metadata remains nonresident.
 
 ## Checked I/O Boundary
 
-Sidecar offsets and lengths are untrusted. They become private-field
+Offsets and lengths read from a file — published ends, sync-marker links,
+anchor summaries, record headers — are untrusted. They become private-field
 `FileOffset`, `ByteLength`, `SnapshotBounds`, and validated record-pointer
 types before positional I/O or allocation. Validation uses checked `u64`
 arithmetic and always rejects overflow and extents beyond the pinned EOF.
 Required parsing, traversal budgets and publication checks remain in every
 read mode. Additional framing/identity comparisons and data CRC verification
-follow the selected read policy described above. Sidecar writers, recovery and
-bootstrap keep strict metadata admission.
+follow the selected read policy described above. Writers and recovery keep
+strict metadata admission.
 
 This prevents a malicious file from turning a claimed extent into an unchecked
 slice or claim-sized allocation. It does not authenticate a file. CRC is an
 integrity/error-detection policy, not a cryptographic authenticity mechanism.
 
-## Snapshot retention management
+## Reader lag
 
-Stream readers expose `snapshot_status()` with the adopted and latest
-confirmed generations, record/byte lag, and whether their backend snapshot is
-pinned. Each reader owns its file snapshot; there is no process-global reader
-registry or `snapshot_retention()` API. Applications that need a reader count or
-oldest active generation track their own reader lifetimes and reported status.
-Old open files remain readable after compaction until their handles are dropped.
-`IndexCompaction` reports the old and new logical sidecar sizes.
+Stream readers expose `snapshot_status()`, which returns a `SnapshotStatus`:
 
-Call `release_snapshot(&mut self)` on an idle reader to drop its backend page
-reference immediately. It returns true once and false if already released.
-Native scans and existing cursors retain their EOF and remain usable;
-they do not pin sidecar pages. `follow()` reacquires the latest confirmed snapshot,
-even if its generation is unchanged. On failure, the reader remains released
-and its previous native frontier is unchanged.
+| Field | Meaning |
+| --- | --- |
+| `committed_len` | end of the prefix this reader holds |
+| `records_behind` | confirmed records past it |
+| `bytes_behind` | confirmed bytes past it |
 
-A typical policy is to report lag, ask the owning reader thread to `follow()`
-when it may advance, or release its snapshot while idle. The writer cannot
-forcibly advance or invalidate another thread's snapshot.
-Dropping or following a reader releases its old snapshot pin. Open reader
-handles can retain an old file descriptor even after releasing a snapshot. Follow or close
-the old handle to release its file descriptor after file-generation compaction.
-None of these APIs commits, fsyncs, changes Immediate conditions, or waits for
-readers to catch up.
+It reports what `follow()` would adopt now: it reads the published end, walks
+the markers after the reader's end and frames only the records past it. It
+changes nothing. Each reader owns its file snapshot; there is no process-global
+reader registry or `snapshot_retention()` API. Applications that need a reader
+count track their own reader lifetimes and reported status.
+
+A typical policy is to report lag and ask the owning reader thread to
+`follow()` when it may advance. The writer cannot forcibly advance or
+invalidate another thread's snapshot, and a reader that falls behind holds
+nothing the writer needs. None of these APIs commits, fsyncs, changes
+Immediate conditions, or waits for readers to catch up.
 
 ### Independent reader startup
 
-Native reader opens do not compete for writer admission or return `IndexBusy`
-for a live writer. If an external replacement or unsupported filesystem reports
+Stream and native reader opens do not compete for writer admission and do not
+fail because a writer is live. If an external replacement or unsupported filesystem reports
 a transient sharing/open error, retry with a bounded backoff/deadline on the
 reader thread. Never gate writer progress on reader startup or retries.
 

@@ -7,14 +7,14 @@
 
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use varlit::{
-    BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, StreamOptions, VarlitEmpty,
-    WriterLockBreakPolicy, bootstrap_stream_checkpoint, clear_stale_writer_lock, varlit_format,
+    BatchOptions, StreamOptions, VarlitEmpty, WriterLockBreakPolicy, clear_stale_writer_lock,
+    varlit_format,
 };
 
 varlit_format! {
@@ -48,20 +48,7 @@ struct Model {
 }
 
 fn options() -> StreamOptions {
-    StreamOptions {
-        state: DiskIndexOptions {
-            cache_bytes: 1024 * 1024,
-            max_key_bytes: 1024,
-            // Cross sidecar transaction boundaries much more often than native
-            // chunks; neither boundary is a durable application checkpoint.
-            batch: DiskIndexBatchOptions {
-                max_records: 7,
-                max_bytes: 2048,
-            },
-            ..DiskIndexOptions::default()
-        },
-        ..StreamOptions::default()
-    }
+    StreamOptions::default()
 }
 
 fn item(number: u64, value: u64) -> Item {
@@ -77,10 +64,18 @@ fn item(number: u64, value: u64) -> Item {
     }
 }
 
-fn state_sidecar(path: &Path) -> PathBuf {
-    let mut sidecar = path.as_os_str().to_os_string();
-    sidecar.push(".vks");
-    PathBuf::from(sidecar)
+/// Blanks the file's published-end slots: what a file written before the
+/// block existed says, so the next open frames from the header.
+fn blank_published_end(path: &Path) -> varlit::Result<()> {
+    let mut bytes = fs::read(path)?;
+    let block = bytes[..4096.min(bytes.len())]
+        .windows(4)
+        .position(|window| window == b"VPUB")
+        .expect("a stream file carries the published end");
+    // Magic and length, then the version word before the two slots.
+    bytes[block + 16..block + 16 + 48].fill(0);
+    fs::write(path, bytes)?;
+    Ok(())
 }
 
 /// Reads everything `reader` sees through fresh walks.
@@ -203,7 +198,7 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
             writer.flush()?;
             drop(writer);
             check_dirty_reader(&path, &committed);
-            writer = Qualification::restore_stream_writer(&path, options())?;
+            writer = Qualification::open_stream_writer(&path, options())?;
             assert_eq!(
                 fs::metadata(&path)?.len(),
                 old_eof,
@@ -212,9 +207,6 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
         } else {
             writer.sync()?;
             committed = pending;
-            if epoch % 5 == 4 {
-                writer.compact_index()?;
-            }
             drop(writer);
             writer = Qualification::open_stream_writer(&path, options())?;
         }
@@ -223,10 +215,9 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
         reader.verify_all()?;
         drop(reader);
         if epoch % 4 == 3 {
-            // A lost state sidecar is rebuilt from the primary alone.
+            // A file whose published end is gone recovers from its markers.
             drop(writer);
-            fs::remove_file(state_sidecar(&path))?;
-            bootstrap_stream_checkpoint(Qualification::spec(), &path, options())?;
+            blank_published_end(&path)?;
             check(
                 &Qualification::open_stream_reader(&path, options())?,
                 &committed,
@@ -411,7 +402,7 @@ fn kill_cycles(cycles: u64) -> varlit::Result<()> {
             expected.markers.push(epoch);
         } else {
             check_dirty_reader(&path, &expected);
-            drop(Qualification::restore_stream_writer(&path, options())?);
+            drop(Qualification::open_stream_writer(&path, options())?);
             assert_eq!(fs::metadata(&path)?.len(), old_eof);
         }
         // The live reader still holds the generation it opened, and following
