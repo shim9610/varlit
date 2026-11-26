@@ -1210,9 +1210,8 @@ fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
 /// The extension region a stream writer creates: the spec's own, plus the
 /// `VPUB` published-end block when the spec does not already carry it. A
 /// stream writer moves it after each durable sync; it is the boundary stream
-/// recovery verifies the sync-marker chain onward from, so a stream file
-/// needs no state sidecar. Files created by a native handle of the same
-/// format are unchanged, byte for byte.
+/// recovery verifies the sync-marker chain onward from. Files created by a
+/// native handle of the same format are unchanged, byte for byte.
 pub(crate) fn stream_file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
     let mut payload = file_header_extensions(spec)?;
     if !crate::published_end::applies_to(spec) {
@@ -1821,17 +1820,15 @@ pub(super) fn parse_file_header_extension_blocks(
 
 /// Where the mutable extension block's payload lives, as a file offset.
 ///
-/// **One derivation, two callers**: the blanking above, which has to skip these
-/// bytes, and the commit-time writer, which has to hit exactly them. Computing
-/// it twice is the shape of defect that put a wrong extension length in the
-/// published layout plan, and it would be worse here — a writer and a hasher
-/// that disagree by a few bytes fail silently in opposite directions.
+/// One derivation for every caller that has to hit exactly these bytes, such
+/// as the commit-time writer. Computing it twice is the shape of defect that
+/// put a wrong extension length in the published layout plan.
 ///
 /// `None` when the file carries no mutable block, which is every file whose
 /// format does not declare `header_tails`.
 pub(super) struct MutableHeaderExtent {
-    /// Where the payload starts as a *file* offset, framing excluded — what the
-    /// writer seeks to and what the hasher skips.
+    /// Where the payload starts as a *file* offset, framing excluded: what the
+    /// writer seeks to.
     pub(super) payload_offset: u64,
     /// The same payload's start *within the extension region*, for a caller
     /// holding the region rather than the file.
@@ -1841,11 +1838,9 @@ pub(super) struct MutableHeaderExtent {
 
 /// Every mutable block's extent, in the order they sit in the region.
 ///
-/// There is more than one now — the header-tail table and the liveness dirty
-/// bit — and the difference matters most to the *hasher*: the sidecar identity
-/// windows have to skip **all** of them, because a single unskipped mutable
-/// byte means one flip permanently invalidates every published sidecar for the
-/// file, which is the defect task #39 fixed when there was only one block.
+/// There is more than one: the header-tail table and the liveness dirty bit.
+/// A caller that excludes mutable bytes from an identity has to skip all of
+/// them.
 pub(super) fn mutable_header_block_extents(
     header_len: u64,
     extensions: &[u8],

@@ -401,7 +401,7 @@ pub(super) struct Reader {
 }
 
 impl Reader {
-    pub fn new(file: Arc<File>, end: u64, max_key: usize, budget: usize) -> Self {
+    pub(super) fn new(file: Arc<File>, end: u64, max_key: usize, budget: usize) -> Self {
         Self {
             file,
             format: PageFormat::Append,
@@ -852,7 +852,11 @@ impl Reader {
         }
         Ok(Some(Err(low)))
     }
-    pub fn get(&self, mut root: Root, key: &[u8]) -> ScratchResult<Option<[u8; LATEST_LEN]>> {
+    pub(super) fn get(
+        &self,
+        mut root: Root,
+        key: &[u8],
+    ) -> ScratchResult<Option<[u8; LATEST_LEN]>> {
         if root.offset == 0 {
             if root.count != 0 {
                 return Err(corrupt("invalid empty index"));
@@ -939,7 +943,7 @@ impl Reader {
             }
         }
     }
-    pub fn visit(
+    pub(super) fn visit(
         &self,
         root: Root,
         visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> ScratchResult<()>,

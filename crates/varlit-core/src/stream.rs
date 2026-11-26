@@ -6,11 +6,10 @@ use std::path::{Path, PathBuf};
 
 use crate::collections::{MaterializationBudget, ensure_registered_block};
 use crate::file::{
-    NativeStreamScanner, PreparedStreamRecord, WriterLock,
-    fresh_stream_creation_nonce, prepare_stream_creation_nonce_record,
-    prepare_stream_manifest_record, prepare_stream_tombstone_record,
-    prepare_stream_user_record_into, read_file_header,
-    read_primary_header,     write_stream_file_header,
+    NativeStreamScanner, PreparedStreamRecord, WriterLock, fresh_stream_creation_nonce,
+    prepare_stream_creation_nonce_record, prepare_stream_manifest_record,
+    prepare_stream_tombstone_record, prepare_stream_user_record_into, read_file_header,
+    read_primary_header, write_stream_file_header,
 };
 use crate::primary_file::PrimaryFile;
 use crate::scan_control::{ScanCancelled, ScanProgressDriver};
@@ -225,12 +224,10 @@ impl VarlitStreamReader {
             header_len,
             slots_at: crate::file::published_end_slots_at(header_len, &extensions)?,
         };
-        let captured_len = file.len()?;
-        if captured_len < header_len {
-            return Err(Error::CorruptTail { offset: header_len });
-        }
-        let physical = SnapshotFile::from_file_with_len(file, captured_len)?;
-        let start = match root.read(&physical)? {
+        let header = SnapshotFile::from_file_with_len(file, header_len)?;
+        let (published, captured_len) = root.read(&header, || Ok(header.physical()?.len()))?;
+        let physical = header.with_len(captured_len)?;
+        let start = match published {
             StreamRoot::Published(end) => end,
             StreamRoot::Scan { takeover } => {
                 scan_root(spec, &physical, header_len, takeover, &mut NoPosition)?
@@ -267,11 +264,14 @@ impl VarlitStreamReader {
     }
 
     fn prepare_follow(&self) -> Result<Option<FollowedGeneration>> {
-        let physical = self.snapshot.physical()?;
+        let (published, len) = self
+            .root
+            .read(&self.snapshot, || Ok(self.snapshot.physical()?.len()))?;
+        let physical = self.snapshot.with_len(len)?;
         let mut tail = self.tail;
         // A newer published end lets the walk start there; otherwise the
         // walk continues from the last verified marker.
-        if let StreamRoot::Published(end) = self.root.read(&physical)?
+        if let StreamRoot::Published(end) = published
             && end > tail.committed()
         {
             tail = crate::sync_marker::MarkedTail::new(end);
@@ -675,11 +675,25 @@ impl VarlitStreamWriter {
         // The nonce and manifest open the sync chain: they are published and
         // made durable with the file itself, so the first sync's marker
         // verifies from here and a reader never sees a record before it.
-        writer.file.write_published_end(Some(writer.snapshot.len()))?;
+        writer
+            .file
+            .write_published_end(Some(writer.snapshot.len()))?;
         crate::scalable_fault_point("create.native_sync");
         let sync = writer.file.sync_all();
         crate::scalable_fault_point("create.native_sync");
         sync?;
+        // The file is durable; its name is once the directory holding it is.
+        // A failure here leaves a complete file a plain open resumes.
+        crate::file::sync_parent_directory(&path).map_err(|error| {
+            crate::fallible::boxed_path_error(
+                error,
+                &path,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            )
+        })?;
         writer.begin_sync_chain();
         Ok(writer)
     }
@@ -805,13 +819,11 @@ impl VarlitStreamWriter {
             file.adopt_writer_published(slots_at)?;
         }
         // Logical: an anchored file's anchors are not part of the log.
-        let len = file.len()?;
-        if len < header_len {
-            return Err(Error::CorruptTail { offset: header_len });
-        }
-        let physical = SnapshotFile::from_file_with_len(file.try_clone()?, len)?;
+        let header = SnapshotFile::from_file_with_len(file.try_clone()?, header_len)?;
+        let (published, len) = root.read(&header, || Ok(file.len()?))?;
+        let physical = header.with_len(len)?;
         let mut position = StreamPosition::initial(spec);
-        let start = match root.read(&physical)? {
+        let start = match published {
             StreamRoot::Published(end) => {
                 let from = position.resume_from_anchor(&file, header_len, end)?;
                 // Durable: a record before it that does not frame is damage,
@@ -1227,7 +1239,6 @@ impl VarlitStreamWriter {
         self.sync_chain = Some(crate::sync_marker::SyncChain::new(self.snapshot.len()));
     }
 
-
     /// Closes the open chain link with a sync marker, if the link is not
     /// empty. The marker is an ordinary append.
     pub(crate) fn append_sync_marker(&mut self) -> Result<Option<AppendInfo>> {
@@ -1356,9 +1367,9 @@ fn initial_block_tails(spec: FormatSpec) -> Vec<(u32, Option<StreamTail>)> {
     if !spec.index_policy.block_offset_chain {
         return Vec::new();
     }
-    // Uncharged by the same exception as `disk_index::compute_plan_digest`:
-    // both terms are compile-time shape -- the declared block count and a fixed
-    // array of internal ids -- so no file content can size this.
+    // Allocated once at open and uncharged: both terms are compile-time shape
+    // -- the declared block count and a fixed array of internal ids -- so no
+    // file content can size this.
     let mut tails = Vec::with_capacity(spec.blocks.len() + INTERNAL_BLOCK_IDS.len());
     tails.extend(spec.blocks.iter().map(|block| (block.id, None)));
     tails.extend(INTERNAL_BLOCK_IDS.map(|block_id| (block_id, None)));
@@ -1425,36 +1436,50 @@ enum StreamRoot {
 }
 
 impl RootSource {
-    /// Reads both slots once. A slot a writer is rewriting fails its
+    /// Reads both slots once, through any snapshot of the file (the header
+    /// precedes every record). A slot a writer is rewriting fails its
     /// checksum and the other one holds, so a concurrent read sees the
     /// previous end at worst.
-    fn read(&self, physical: &SnapshotFile) -> Result<StreamRoot> {
+    ///
+    /// `len` is the file's length measured *after* this read: the writer
+    /// publishes an end only once the file reaches it, so a later
+    /// measurement reaches it too, and one that does not means records were
+    /// lost.
+    fn read(
+        &self,
+        snapshot: &SnapshotFile,
+        len: impl FnOnce() -> Result<u64>,
+    ) -> Result<(StreamRoot, u64)> {
         use crate::published_end::{ACTIVE, SLOT_LEN, decode_slot};
         let Some(slots_at) = self.slots_at else {
-            return Ok(StreamRoot::Scan { takeover: false });
+            return Ok((StreamRoot::Scan { takeover: false }, len()?));
         };
         let mut slots = [0u8; 2 * SLOT_LEN];
-        physical.read_exact_at(slots_at, &mut slots)?;
-        let newest = slots
-            .as_chunks::<SLOT_LEN>()
-            .0
-            .iter()
-            .filter_map(decode_slot)
-            .max_by_key(|slot| slot.seq);
-        Ok(match newest {
+        snapshot.read_exact_at(slots_at, &mut slots)?;
+        let len = len()?;
+        let mut newest: Option<crate::published_end::Slot> = None;
+        for bytes in slots.as_chunks::<SLOT_LEN>().0 {
+            if let Some(slot) = decode_slot(bytes)
+                && newest.is_none_or(|held| slot.seq > held.seq)
+            {
+                newest = Some(slot);
+            }
+        }
+        let root = match newest {
             Some(slot) if slot.flags & ACTIVE != 0 => {
                 // A published end is durable: a file that no longer reaches
                 // it lost acknowledged records.
-                if slot.end < self.header_len || slot.end > physical.len() {
+                if slot.end < self.header_len || slot.end > len {
                     return Err(Error::CorruptTail {
-                        offset: slot.end.min(physical.len()),
+                        offset: slot.end.min(len),
                     });
                 }
                 StreamRoot::Published(slot.end)
             }
             Some(_) => StreamRoot::Scan { takeover: true },
             None => StreamRoot::Scan { takeover: false },
-        })
+        };
+        Ok((root, len))
     }
 }
 
@@ -1463,7 +1488,7 @@ impl RootSource {
 trait Track {
     fn see(&mut self, entry: &crate::RecordIndexEntry) -> Result<()>;
     /// Forgets everything seen, for a walk that starts over from the header.
-    fn reset(&mut self);
+    fn forget(&mut self);
 }
 
 /// A reader's walk: only where it ends matters.
@@ -1473,7 +1498,7 @@ impl Track for NoPosition {
     fn see(&mut self, _entry: &crate::RecordIndexEntry) -> Result<()> {
         Ok(())
     }
-    fn reset(&mut self) {}
+    fn forget(&mut self) {}
 }
 
 /// A follow's walk: how many records it adopts.
@@ -1484,7 +1509,7 @@ impl Track for CountPosition {
         self.0 += 1;
         Ok(())
     }
-    fn reset(&mut self) {
+    fn forget(&mut self) {
         self.0 = 0;
     }
 }
@@ -1509,7 +1534,12 @@ impl StreamPosition {
     /// and returns where framing resumes: that anchor's spanning record, or
     /// the header when no anchor before `root` carries one. Looks at a few
     /// anchors at most; the framing after the one it takes covers the rest.
-    fn resume_from_anchor(&mut self, file: &PrimaryFile, header_len: u64, root: u64) -> Result<u64> {
+    fn resume_from_anchor(
+        &mut self,
+        file: &PrimaryFile,
+        header_len: u64,
+        root: u64,
+    ) -> Result<u64> {
         const TRIES: u32 = 4;
         let Some(layout) = file.layout() else {
             return Ok(header_len);
@@ -1524,7 +1554,7 @@ impl StreamPosition {
                 && anchor.record_start >= header_len
                 && anchor.record_end <= root
             {
-                self.reset();
+                self.forget();
                 let mut fits = true;
                 let tails = &mut self.block_tails;
                 let summary = crate::anchor::StreamSummary::decode(
@@ -1555,7 +1585,7 @@ impl StreamPosition {
             }
             k -= 1;
         }
-        self.reset();
+        self.forget();
         Ok(header_len)
     }
 }
@@ -1585,7 +1615,7 @@ impl Track for StreamPosition {
         Ok(())
     }
 
-    fn reset(&mut self) {
+    fn forget(&mut self) {
         self.record_count = 0;
         self.sequence = Some(0);
         for (_, tail) in &mut self.block_tails {
@@ -1644,7 +1674,7 @@ fn scan_root(
         if frame_until(spec, physical, header_len, start, track)? == start {
             return Ok(start);
         }
-        track.reset();
+        track.forget();
     }
     frame_until(spec, physical, header_len, physical.len(), track)
 }
@@ -2251,7 +2281,11 @@ mod tests {
     type WriterState = (u64, Option<u64>, Vec<(u32, Option<StreamTail>)>);
 
     fn writer_state(writer: &VarlitStreamWriter) -> WriterState {
-        (writer.record_count, writer.sequence, writer.block_tails.clone())
+        (
+            writer.record_count,
+            writer.sequence,
+            writer.block_tails.clone(),
+        )
     }
 
     /// The state a walk framing every record from the header reaches at `end`.
@@ -2261,15 +2295,24 @@ mod tests {
         let len = file.len()?;
         let physical = SnapshotFile::from_file_with_len(file, len)?;
         let mut position = StreamPosition::initial(spec);
-        assert_eq!(frame_until(spec, &physical, header_len, end, &mut position)?, end);
-        Ok((position.record_count, position.sequence, position.block_tails))
+        assert_eq!(
+            frame_until(spec, &physical, header_len, end, &mut position)?,
+            end
+        );
+        Ok((
+            position.record_count,
+            position.sequence,
+            position.block_tails,
+        ))
     }
 
     fn published_slots_at(spec: FormatSpec, path: &Path) -> Result<u64> {
         let mut file = PrimaryFile::new(fs::File::open(path)?, None);
         let (header_len, extensions) = read_primary_header(spec, &mut file)?;
-        Ok(crate::file::published_end_slots_at(header_len, &extensions)?
-            .expect("a stream file carries the published end"))
+        Ok(
+            crate::file::published_end_slots_at(header_len, &extensions)?
+                .expect("a stream file carries the published end"),
+        )
     }
 
     /// Rewrites `bytes` at `offset`, extending the file when it ends there.
@@ -2451,7 +2494,10 @@ mod tests {
         writer.sync()?;
         let end = writer.snapshot.len();
         drop(writer);
-        fs::OpenOptions::new().write(true).open(&path)?.set_len(end - 1)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)?
+            .set_len(end - 1)?;
         assert!(matches!(
             VarlitStreamReader::open(spec, &path, StreamOptions::default()),
             Err(Error::CorruptTail { .. })

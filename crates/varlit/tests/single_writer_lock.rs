@@ -222,14 +222,6 @@ fn stream_spec() -> FormatSpec {
     .with_read_limits(ReadLimits::STANDARD)
 }
 
-/// Path of the stream writer's state sidecar (`.vks`), so the alias can be a
-/// faithful second name for both the native file and its sidecar.
-fn stream_sidecar(path: &std::path::Path) -> std::path::PathBuf {
-    let mut value = path.as_os_str().to_owned();
-    value.push(".vks");
-    std::path::PathBuf::from(value)
-}
-
 ///  on the scalable path the review specifically called out: a freshly
 /// created stream writer must bind the object lock onto the file it just
 /// created, or a hard-link alias opened afterwards wins a second writer role.
@@ -244,12 +236,11 @@ fn stream_create_binds_object_lock_against_hard_link_alias() -> Result<()> {
     writer.push_info(&LockRecord(1))?;
     writer.sync()?;
 
-    // Alias both the native file and its state sidecar so the only thing that
-    // can refuse a second writer is the object lock itself, not a missing
-    // sidecar. Without the create-path native bind, this alias open would
-    // succeed and admit a second live writer on the same file object.
+    // The alias is a second name for the same file object, so the only thing
+    // that can refuse a second writer is the object lock itself. Without the
+    // create-path native bind, this alias open would succeed and admit a
+    // second live writer on the same file object.
     fs::hard_link(&original, &alias)?;
-    fs::hard_link(stream_sidecar(&original), stream_sidecar(&alias))?;
     match VarlitStreamWriter::open(stream_spec(), &alias, StreamOptions::default()) {
         Err(Error::WriterLockHeld(_)) => {}
         Ok(_) => panic!("stream alias writer was admitted as a second live writer"),

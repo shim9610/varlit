@@ -260,7 +260,6 @@ fn no_writer_keeps_its_own_poison_boolean() {
         "keyed_heap/heap/pages.rs",
         "keyed_heap/heap/rebalance.rs",
         "matrix.rs",
-        "disk_index.rs",
     ] {
         let source = crate_source(module);
         assert!(

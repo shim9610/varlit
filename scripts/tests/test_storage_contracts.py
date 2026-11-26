@@ -13,12 +13,12 @@ class StorageSelectionTests(unittest.TestCase):
     def test_failure_and_resource_categories_are_required(self):
         self.assertEqual({row[0] for row in gate.CASES}, {
             "keyed-spill-refusal", "strict-lazy-choice", "strict-lazy-corruption", "strict-lazy-header",
-            "compound-read", "failed-swmr", "snapshot-owner-release", "portable-head-parser",
+            "compound-read", "failed-swmr",
             "ownership-deferred-box", "ownership-box-order", "ownership-inplace-box", "ownership-deferred-arc", "ownership-clone", "ownership-box", "ownership-arc", "ownership-arc-threads",
             "ownership-token", "ownership-preflight", "ownership-published", "ownership-mmap",
-            "ownership-generated", "ownership-path-error", "ownership-disk-error",
+            "ownership-generated", "ownership-path-error",
             "chunk-stream-window", "chunk-stream-refusal", "chunk-stream-integrity", "chunk-stream-fallback",
-            "decoder-refusal", "chunk-refusal", "hashmap-rehash-budget", "hostile-codec", "hostile-index", "spill-policy", "spill-byte-policy", "zstd-header-allocation", "chunk-header-allocation", "publication-resume", "publication-clean-resume", "publication-head-pairs", "publication-live-crashes", "index-traversal", "kernel-short-write", "torn-publication", "consistent-frontiers",
+            "decoder-refusal", "chunk-refusal", "hashmap-rehash-budget", "hostile-codec", "hostile-index", "spill-policy", "spill-byte-policy", "zstd-header-allocation", "chunk-header-allocation", "published-slot-torn", "published-end-absent", "published-end-cut", "anchor-summary-fallback", "publication-live-crashes", "index-traversal", "kernel-short-write",
             "native-boundary-proof", "rewrite-source-integrity", "matrix-mmap-window",
             "nonresident-record-budget", "nonresident-follow-sequence", "mutation-amortized-work", "recovery-linear-work", "mutation-uniform-proof", "mutation-rewritten-boundaries",
             "checked-chain-links", "decode-memory", "oom-recovery", "zstd-context-oom"})

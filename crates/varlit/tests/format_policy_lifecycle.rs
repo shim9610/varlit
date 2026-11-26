@@ -64,7 +64,6 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     assert!(cursor.next_into(&mut next)?);
     assert_eq!(next, item(2, 42));
     assert!(!cursor.next_into(&mut next)?);
-    writer.compact_index()?;
     reader.follow_blocks(&mut cursor)?;
     drop(writer);
     let mut writer = VarlitStreamWriter::open(spec, &path, options)?;
@@ -77,16 +76,9 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     assert!(!cursor.next_into(&mut next)?);
     drop(cursor);
     drop(reader);
-    let mut state = path.as_os_str().to_owned();
-    state.push(".vks");
-    std::fs::remove_file(state)?;
     // The creation nonce, three items and the three sync markers that closed
     // them, plus an embedded manifest.
     let expected = 7 + u64::from(spec.manifest_policy == ManifestPolicy::Embedded);
-    assert_eq!(
-        bootstrap_stream_checkpoint(spec, &path, options)?.records,
-        expected
-    );
     let reader = VarlitStreamReader::open(spec, &path, options)?;
     assert_eq!(
         collect_rest(&mut reader.blocks::<Item>()?)?,

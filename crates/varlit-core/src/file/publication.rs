@@ -4,10 +4,9 @@ use super::*;
 /// Folds the native matrix file's OS-object identity and schema hash into a
 /// 32-byte fingerprint.
 ///
-/// Mirrors the scalable sidecar identity machinery
-/// (`stream::primary_identity` / `opened_file_identity`). Matrix companions
-/// retain their own fingerprint encoding. Uses the CRC helper so it honors the same
-/// `integrity` gate the rest of the sidecar envelope requires.
+/// Matrix companions use this fingerprint encoding. Uses the CRC helper so it
+/// honors the same `integrity` gate the rest of the companion envelope
+/// requires.
 pub(super) fn native_object_fingerprint(spec: FormatSpec, file: &File) -> Result<[u8; 32]> {
     let object_identity = opened_file_identity(file)?;
     let schema_hash = if spec.schema_hash == 0 {

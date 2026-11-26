@@ -24,13 +24,13 @@ mod decode_state;
 mod diagnostics;
 mod primary_file;
 
-mod scratch_index;
 mod error;
 mod fallible;
 mod file;
 mod format;
 mod immediate;
 mod keyed_heap;
+mod scratch_index;
 
 #[cfg(feature = "experimental-matrix-reuse")]
 pub mod experimental_matrix;

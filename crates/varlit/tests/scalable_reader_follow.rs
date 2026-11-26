@@ -93,7 +93,7 @@ fn dirty_reopen_and_restore_do_not_invalidate_existing_readers() -> varlit::Resu
     assert!(cursor.next_into(&mut sample)?);
     assert_eq!(sample.value, 1);
     assert!(!cursor.next_into(&mut sample)?);
-    let mut writer = Feed::restore_stream_writer(&path, options())?;
+    let mut writer = Feed::open_stream_writer(&path, options())?;
     assert!(std::fs::metadata(&path)?.len() < dirty_length);
     assert_eq!(reader.follow()?, 0);
     writer.push_sample(&Sample { value: 3 })?;

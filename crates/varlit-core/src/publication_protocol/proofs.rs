@@ -86,7 +86,10 @@ impl Medium {
         // effect, in memory and on storage.
         let newest = self.newest_slot();
         for slots in [self.slots, self.persisted] {
-            assert!(slots[newest] == Slot::Old, "newest published end was destroyed");
+            assert!(
+                slots[newest] == Slot::Old,
+                "newest published end was destroyed"
+            );
         }
         if self.published_new() {
             assert!(

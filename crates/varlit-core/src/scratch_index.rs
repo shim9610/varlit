@@ -5,6 +5,8 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+mod oracle;
 mod tree;
 
 /// Bytes of the value stored under each key.

@@ -1,10 +1,10 @@
-//! Thread ownership, explicit snapshot retention, and cold-open writer admission.
+//! Thread ownership, snapshot lag, and cold-open writer admission.
 
 use std::sync::{
     Barrier,
     atomic::{AtomicBool, Ordering},
 };
-use varlit::{BatchOptions, DiskIndexOptions, Error, StreamOptions, VarlitEmpty, varlit_format};
+use varlit::{BatchOptions, StreamOptions, VarlitEmpty, varlit_format};
 
 varlit_format! {
     pub format Feed {
@@ -74,38 +74,33 @@ fn moving_reader_with_live_local_cursors_keeps_positions_independent() -> varlit
 }
 
 #[test]
-fn stream_release_preserves_cursor_and_follow_releases_old_generation() -> varlit::Result<()> {
+fn stream_status_reports_lag_and_follow_preserves_the_cursor() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("stream.varlit");
-    // Lag is counted in confirmed sidecar generations, so confirm each sync.
-    let options = StreamOptions {
-        state: DiskIndexOptions {
-            confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
-            ..DiskIndexOptions::default()
-        },
-        ..StreamOptions::default()
-    };
+    let options = StreamOptions::default();
     let mut writer = Feed::create_stream_writer(&path, options)?;
     writer.push_sample(&Sample { value: 1 })?;
     writer.immediate()?;
     let mut reader = Feed::open_stream_reader(&path, options)?;
     let mut cursor = reader.samples()?;
-    assert!(reader.release_snapshot());
     let mut sample = Sample::empty();
     assert!(cursor.next_into(&mut sample)?);
     assert_eq!(sample, Sample { value: 1 });
     writer.push_sample(&Sample { value: 2 })?;
     writer.immediate()?;
     writer.push_sample(&Sample { value: 3 })?;
-    // The sample and its sync marker.
-    assert_eq!(reader.snapshot_status()?.records_behind, 2);
+    // The synced sample and its sync marker; the unsynced one is not counted.
+    let status = reader.snapshot_status()?;
+    assert_eq!(status.records_behind, 2);
+    assert!(status.bytes_behind > 0);
+    assert_eq!(status.committed_len, reader.committed_len());
     assert_eq!(reader.follow_blocks(&mut cursor)?, 2);
     assert!(cursor.next_into(&mut sample)?);
     assert_eq!(sample, Sample { value: 2 });
     assert!(!cursor.next_into(&mut sample)?);
-    assert!(reader.release_snapshot());
     assert_eq!(reader.follow()?, 0);
-    assert!(reader.snapshot_status()?.pinned);
+    let status = reader.snapshot_status()?;
+    assert_eq!((status.records_behind, status.bytes_behind), (0, 0));
     Ok(())
 }
 
@@ -126,8 +121,6 @@ fn cold_reader_retries_never_reject_or_interrupt_the_single_writer() -> varlit::
                 .map(|_| {
                     scope.spawn(|| -> varlit::Result<()> {
                         start.wait();
-                        let deadline =
-                            std::time::Instant::now() + std::time::Duration::from_secs(10);
                         loop {
                             match Feed::open_stream_reader(&path, options) {
                                 Ok(mut reader) => {
@@ -135,10 +128,6 @@ fn cold_reader_retries_never_reject_or_interrupt_the_single_writer() -> varlit::
                                     let values = samples(&reader)?;
                                     assert!(!values.is_empty() && values.len() <= 17);
                                     assert!(values.iter().enumerate().all(|(i, v)| *v == i as u64));
-                                }
-                                Err(Error::IndexBusy) if std::time::Instant::now() < deadline => {
-                                    std::thread::yield_now();
-                                    continue;
                                 }
                                 Err(error) => return Err(error),
                             }
@@ -173,7 +162,7 @@ fn cold_reader_retries_never_reject_or_interrupt_the_single_writer() -> varlit::
 /// boundary, so a reader that ever sees an odd count or an unequal pair has
 /// observed a torn generation.
 #[test]
-#[ignore = "subprocess entry point for independent_process_reads_dirty_writer_and_follows_compaction"]
+#[ignore = "subprocess entry point for independent_process_reads_a_dirty_writer_and_follows_it"]
 fn independent_process_reader_child() -> varlit::Result<()> {
     let path = std::path::PathBuf::from(std::env::var_os("VARLIT_STREAM_READER_CHILD").unwrap());
     let options = StreamOptions::default();
@@ -217,7 +206,7 @@ fn independent_process_reader_child() -> varlit::Result<()> {
 }
 
 #[test]
-fn independent_process_reads_dirty_writer_and_follows_compaction() -> varlit::Result<()> {
+fn independent_process_reads_a_dirty_writer_and_follows_it() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("process.varlit");
     let options = StreamOptions::default();
@@ -256,9 +245,6 @@ fn independent_process_reads_dirty_writer_and_follows_compaction() -> varlit::Re
             writer.push_sample(&Sample { value })?;
         }
         writer.immediate()?;
-        if value % 64 == 0 {
-            writer.compact_index()?;
-        }
     }
     std::fs::write(path.with_extension("done"), b"done")?;
     // Startup, active publication, and final acknowledgement are distinct phases.

@@ -16,7 +16,7 @@ fn main() -> varlit::Result<()> {
     generate_codec(&corpus)?;
     generate_layout(&corpus, &scratch)?;
     generate_matrix(&corpus, &scratch)?;
-    generate_sidecars(&corpus)?;
+    generate_streams(&corpus)?;
     generate_damage(&corpus)?;
     fs::remove_dir_all(&scratch)?;
     Ok(())
@@ -145,27 +145,26 @@ fn generate_matrix(corpus: &Path, scratch: &Path) -> varlit::Result<()> {
     Ok(())
 }
 
-fn generate_sidecars(corpus: &Path) -> varlit::Result<()> {
-    let arbitrary = corpus.join("sidecar_arbitrary");
-    fs::create_dir_all(&arbitrary)?;
-    fs::write(arbitrary.join("empty"), [])?;
-    fs::write(arbitrary.join("redb-like-header"), b"redb\0\0\0\0")?;
+fn generate_streams(corpus: &Path) -> varlit::Result<()> {
+    let damage = corpus.join("stream_damage");
+    fs::create_dir_all(&damage)?;
+    // Undamaged, populated and synced several times.
+    fs::write(damage.join("undamaged-populated"), [0x80, 9])?;
+    // One published-end slot torn; both slots gone with markers to verify.
+    fs::write(damage.join("one-slot-torn"), [0x01, 9, 0, 3, 0x20])?;
     fs::write(
-        arbitrary.join("bounded-page-pattern"),
-        (0..=255).cycle().take(16 * 1024).collect::<Vec<_>>(),
+        damage.join("both-slots-gone"),
+        [0x41, 9, 0, 0, 0xFF, 0, 24, 0xFF],
+    )?;
+    // The unsynced tail damaged before recovery cuts it.
+    fs::write(damage.join("unsynced-tail"), [0x02, 5, 0, 1, 0x55])?;
+    // Anywhere in the file.
+    fs::write(
+        damage.join("anywhere"),
+        [0x00, 13, 0, 0x40, 0xA5, 1, 0, 0xFF],
     )?;
 
-    let mutation = corpus.join("sidecar_mutation");
-    fs::create_dir_all(&mutation)?;
-    fs::write(mutation.join("empty-synced-valid"), [0x80, 0])?;
-    fs::write(mutation.join("populated-unique-synced-valid"), [0x80, 1])?;
-    fs::write(mutation.join("repeated-delete-unsynced-valid"), [0x81, 7])?;
-    fs::write(
-        mutation.join("populated-multi-byte-mutation"),
-        [0x00, 13, 0, 0, 1, 0, 64, 0xA5, 1, 0, 0xFF],
-    )?;
-
-    let machine = corpus.join("sidecar_state_machine");
+    let machine = corpus.join("stream_state_machine");
     fs::create_dir_all(&machine)?;
     fs::write(machine.join("empty"), [])?;
     write_operations(

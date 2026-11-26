@@ -155,7 +155,7 @@ mod proofs;
 #[cfg(all(test, not(miri)))]
 mod tests {
     use super::*;
-    use crate::{scratch_index::ScratchIndex, packed_rows::PackedRows, spill_rows::SpillRows};
+    use crate::{packed_rows::PackedRows, scratch_index::ScratchIndex, spill_rows::SpillRows};
     use std::{collections::BTreeMap, process::Command};
 
     #[test]

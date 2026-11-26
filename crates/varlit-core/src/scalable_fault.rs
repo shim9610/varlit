@@ -24,9 +24,11 @@ pub const REQUIRED_POINTS: &[&str] = &[
     "restore.native_truncate",
     "restore.native_sync",
     "create.native_sync",
-    "replace.atomic",
     "replace.parent_sync",
 ];
+
+/// Points the native rewrite path reaches; no stream scenario does.
+pub const REPLACE_POINTS: &[&str] = &["replace.atomic"];
 
 /// Additional points exercised by the opt-in matrix reuse crash tests.
 pub const MATRIX_REUSE_POINTS: &[&str] = &[
@@ -44,7 +46,9 @@ pub const MATRIX_REUSE_POINTS: &[&str] = &[
     "matrix_reuse.page_copied",
 ];
 fn known_point(point: &str) -> bool {
-    REQUIRED_POINTS.contains(&point) || MATRIX_REUSE_POINTS.contains(&point)
+    REQUIRED_POINTS.contains(&point)
+        || REPLACE_POINTS.contains(&point)
+        || MATRIX_REUSE_POINTS.contains(&point)
 }
 
 static ARMED: AtomicBool = AtomicBool::new(false);

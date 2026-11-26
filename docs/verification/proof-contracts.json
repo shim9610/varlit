@@ -47,53 +47,27 @@
       }
     },
     {
-      "id": "publication-metadata",
-      "harnesses": [
-        "disk_index::publication_proofs::accepted_metadata_has_consistent_publication_frontiers",
-        "disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected",
-        "disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier",
-        "disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected",
-        "disk_index::publication_proofs::wire_frontier_decode_enforces_sequence_exhaustion"
-      ],
-      "sources": [
-        "crates/varlit-core/src/disk_index/publication_proofs.rs",
-        "crates/varlit-core/src/disk_index.rs"
-      ],
-      "scope": "full-width typed metadata; actual 24-byte frontier wire decoder and exhaustion flag",
-      "limits": "Complete metadata byte parsing and OS ordering excluded; the 24-byte frontier decoder is included",
-      "specification": {
-        "requires": "Typed metadata values; the frontier wire input has exactly 24 bytes.",
-        "ensures": "Accepted metadata obeys confirmed/published/checkpoint frontier relations; exhausted wire sequence must be zero.",
-        "on_error": "Invalid frontiers are rejected before checkpoint/publication.",
-        "frame": "Validation and wire decoding do not mutate published state.",
-        "progress": "Finite field checks, independent of declared record count."
-      }
-    },
-    {
       "id": "publication-protocol",
       "harnesses": [
         "publication_protocol::proofs::commit_survives_every_io_failure_effect",
         "publication_protocol::proofs::successful_commit_is_reachable_and_durable",
-        "publication_protocol::proofs::every_publication_writes_one_head_and_only_confirmed_syncs_once",
-        "publication_protocol::proofs::every_two_barrier_publication_syncs_its_body_before_its_head",
         "publication_protocol::proofs::recovery_never_publishes_before_truncate_and_sync",
         "publication_protocol::proofs::follow_error_preserves_the_entire_reader",
         "publication_protocol::proofs::frontier_invariant_is_preserved_by_an_arbitrary_transition",
         "publication_protocol::proofs::initial_frontier_satisfies_the_inductive_invariant",
-        "publication_protocol::proofs::poisoned_writer_never_reaches_publication",
-        "publication_protocol::proofs::resumed_writer_cannot_acknowledge_a_volatile_head"
+        "publication_protocol::proofs::poisoned_writer_never_reaches_publication"
       ],
       "sources": [
         "crates/varlit-core/src/publication_protocol/proofs.rs",
         "crates/varlit-core/src/publication_protocol.rs"
       ],
-      "scope": "abstract I/O effects and inductive frontiers",
+      "scope": "abstract I/O effects, published-end slots and inductive frontiers",
       "limits": "Callbacks, fsync durability and stable snapshots assumed; creation/replacement not modeled",
       "specification": {
-        "requires": "Returning I/O callbacks obey the stated effect model; confirmed snapshots are stable.",
-        "ensures": "Acknowledgment follows primary (sync marker) durability; a confirmation, single- or two-barrier, leaves its generation durable before acknowledgment.",
+        "requires": "Returning I/O callbacks obey the stated effect model; a slot write is torn or complete, never forged.",
+        "ensures": "Acknowledgment follows primary (sync marker) durability; a published end names only durable data, and the newest published end survives every slot write.",
         "on_error": "A failed transition preserves reader state or poisons the writer as specified.",
-        "frame": "Confirmed frontiers are not changed by failed publications.",
+        "frame": "A failed publication leaves the newest published end in place.",
         "progress": "Finite protocol transitions; OS liveness/durability is assumed."
       }
     },
@@ -190,14 +164,14 @@
     {
       "id": "index-visits",
       "harnesses": [
-        "disk_index::tree::resource_proofs::every_node_visit_consumes_finite_fuel",
-        "disk_index::tree::resource_proofs::accepted_child_height_strictly_decreases",
-        "disk_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
-        "disk_index::tree::contract_proofs::height_contract_is_total_and_exact"
+        "scratch_index::tree::resource_proofs::every_node_visit_consumes_finite_fuel",
+        "scratch_index::tree::resource_proofs::accepted_child_height_strictly_decreases",
+        "scratch_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
+        "scratch_index::tree::contract_proofs::height_contract_is_total_and_exact"
       ],
       "sources": [
         "crates/varlit-core/src/verification/traversal.rs",
-        "crates/varlit-core/src/disk_index/tree.rs",
+        "crates/varlit-core/src/scratch_index/tree.rs",
         "crates/varlit-core/src/verification/traversal_contracts.rs"
       ],
       "scope": "full-width decreasing fuel",
@@ -531,18 +505,18 @@
       ]
     },
     {
-      "target": "disk_index::tree::take_visit",
+      "target": "scratch_index::tree::take_visit",
       "reference": "take_visit",
-      "proof": "disk_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
+      "proof": "scratch_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
       "annotations": [
         "ensures",
         "modifies"
       ]
     },
     {
-      "target": "disk_index::tree::height_matches",
+      "target": "scratch_index::tree::height_matches",
       "reference": "height_matches",
-      "proof": "disk_index::tree::contract_proofs::height_contract_is_total_and_exact",
+      "proof": "scratch_index::tree::contract_proofs::height_contract_is_total_and_exact",
       "annotations": [
         "ensures"
       ]

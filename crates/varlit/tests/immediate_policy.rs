@@ -115,7 +115,7 @@ fn value_conditions_cut_batches_at_the_record_and_recovery_keeps_the_boundary() 
         assert_eq!(info.records, 8);
         assert_eq!(visible_samples(&path)?, 6);
         drop(writer);
-        let mut writer = StreamBoundaries::restore_stream_writer(&path, stream_options())?;
+        let mut writer = StreamBoundaries::open_stream_writer(&path, stream_options())?;
         assert!(visible_samples(&path)? >= 6);
         writer.push_sample(&Sample { value: 9 })?;
         writer.immediate()?;
@@ -224,7 +224,7 @@ fn process_exit_after_immediate_preserves_acknowledged_records() -> varlit::Resu
             &path,
             varlit::WriterLockBreakPolicy::BreakIfProcessAbsent,
         )?;
-        let _writer = StreamBoundaries::restore_stream_writer(&path, stream_options())?;
+        let _writer = StreamBoundaries::open_stream_writer(&path, stream_options())?;
         let expected = if mode == "value" { 4 } else { 3 };
         assert_eq!(visible_samples(&path)?, expected, "mode {mode}");
         assert_eq!(
