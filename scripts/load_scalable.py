@@ -164,8 +164,7 @@ def execute(command, output, name, environment, timeout, required, data_root):
 def case_command(binary, case, directory, phase, total, epoch):
     values = {"phase": phase, "mode": case["mode"], "root": str(directory), "total-bytes": total,
               "epoch-bytes": epoch, "record-bytes": case.get("record", 65536),
-              "batch-bytes": case.get("batch", 4 * 1024**2), "index-batch-records": case.get("index_batch", 16384),
-              "cache-bytes": case.get("cache", 8 * 1024**2), "readers": case.get("readers", 0),
+              "batch-bytes": case.get("batch", 4 * 1024**2), "readers": case.get("readers", 0),
               "crc": str(case.get("crc", True)).lower()}
     return [str(binary)] + [arg for key, value in values.items() for arg in ("--" + key, str(value))]
 
@@ -254,7 +253,7 @@ def main():
                 if hashlib.sha256(binary.read_bytes()).hexdigest() != binary_hash:
                     raise RuntimeError("benchmark binary changed during run")
                 if shutil.disk_usage(data_root).free < total * 1.025 + GIB:
-                    raise RuntimeError("insufficient free disk for payload, sidecars and 1 GiB reserve")
+                    raise RuntimeError("insufficient free disk for payload and 1 GiB reserve")
                 name = f"{repeat + 1:02d}-{case['name']}"
                 directory = data_root / name; directory.mkdir()
                 logs = output / name; logs.mkdir()

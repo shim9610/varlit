@@ -16,7 +16,7 @@ spec.loader.exec_module(load)
 class CaseCommandTests(unittest.TestCase):
     def test_commands_name_only_options_the_workload_accepts(self):
         accepted = {"--phase", "--mode", "--root", "--total-bytes", "--epoch-bytes", "--record-bytes",
-                    "--batch-bytes", "--index-batch-records", "--cache-bytes", "--readers", "--crc"}
+                    "--batch-bytes", "--readers", "--crc"}
         for suite in ["smoke", "sweep", "large", "tuned"]:
             for case in load.cases(suite):
                 self.assertIn(case["mode"], {"raw", "stream"})

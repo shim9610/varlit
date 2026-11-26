@@ -9,7 +9,7 @@ pub mod header_tails;
 pub mod keyed;
 pub mod published;
 pub mod published_end;
-pub mod sidecar;
+pub mod stream;
 
 varlit_format! {
     pub format FuzzNativeFormat {
@@ -65,7 +65,7 @@ varlit_format! {
 }
 
 varlit_format! {
-    pub format FuzzSidecarFormat {
+    pub format FuzzStreamFormat {
         magic: b"FZSC";
         version: 1;
         limits {
@@ -92,7 +92,7 @@ varlit_format! {
         recovery: truncate_tail;
 
         blocks {
-            fixed SidecarEvent(id = 20) {
+            fixed StreamEvent(id = 20) {
                 value: u64,
             }
 

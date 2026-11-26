@@ -425,7 +425,7 @@ struct KeyedTails {
 struct KeyedTailMap {
     offsets: HashMap<Vec<u8>, u64>,
     key_payload_bytes: u64,
-    spilled: Option<crate::disk_index::ScratchIndex>,
+    spilled: Option<crate::scratch_index::ScratchIndex>,
 }
 
 impl KeyedTailMap {
@@ -445,7 +445,7 @@ impl KeyedTailMap {
             return Ok(());
         }
         if self.spilled.is_none() {
-            self.spilled = Some(crate::disk_index::ScratchIndex::new(0)?);
+            self.spilled = Some(crate::scratch_index::ScratchIndex::new(0)?);
         }
         let requested =
             allocation_bytes::<(Vec<u8>, [u8; 52])>(self.offsets.len(), "keyed tail spill batch")?;

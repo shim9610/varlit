@@ -97,18 +97,17 @@ fn the_declaration_itself_is_valid() {
     );
 }
 
-/// Side two: the stream path, whose state sidecar is the disk index this file
-/// is about, refuses a primary that carries commit markers.
+/// Side two: the stream path refuses a primary that carries commit markers.
 #[test]
-fn a_disk_index_cannot_handle_a_primary_that_carries_commit_markers() {
+fn a_stream_writer_refuses_a_primary_that_carries_commit_markers() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join("tailed.varlit");
     let outcome =
         VarlitStreamWriter::create(TailedIndexFormat::spec(), &path, StreamOptions::default());
     assert!(
         matches!(outcome, Err(Error::StreamingUnsupported)),
-        "the state sidecar reads its primary through the stream scanner, which refuses a \
-         commit marker: {:?}",
+        "a stream reads its primary through the stream scanner, which refuses a commit \
+         marker: {:?}",
         outcome.err(),
     );
 }

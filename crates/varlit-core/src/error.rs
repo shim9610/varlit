@@ -346,19 +346,6 @@ pub enum Error {
     )]
     ScanCancelled { progress: crate::ScanProgress },
 
-    #[error("the derived disk index is busy")]
-    IndexBusy,
-
-    #[error("disk index error: {0}")]
-    DiskIndex(#[source] Box<crate::disk_index::DiskIndexError>),
-
-    #[error("record sequence {sequence} was published, but the disk index is stale: {source}")]
-    PublishedButIndexStale {
-        sequence: u64,
-        #[source]
-        source: Box<Error>,
-    },
-
     #[error("failed to roll back {operation}: {source}")]
     WriteRollbackFailed {
         operation: &'static str,
@@ -780,10 +767,4 @@ pub enum AllocationFailureContext {
     ReusePublished { generation: u64 },
     /// The experimental generation may have been published; inspect before retry.
     ReusePublicationUncertain { generation: u64 },
-}
-
-impl From<crate::DiskIndexError> for Error {
-    fn from(error: crate::DiskIndexError) -> Self {
-        crate::disk_index::index_error(error)
-    }
 }

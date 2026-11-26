@@ -1678,10 +1678,9 @@ pub use record_view::{
 };
 
 pub(crate) use header_codec::file_header_extensions;
+pub(crate) use header_codec::published_end_slots_at;
 
 pub(crate) use header_codec::header_tails_region_len;
-
-pub(crate) use header_codec::blank_mutable_header_bytes;
 
 #[path = "file/matrix_sidecar.rs"]
 mod matrix_sidecar;
@@ -1725,8 +1724,6 @@ pub(crate) use scan::fresh_stream_creation_nonce;
 pub(crate) use scan::prepare_stream_creation_nonce_record;
 pub(crate) use scan::prepare_stream_sync_record;
 
-pub(crate) use scan::read_stream_creation_nonce;
-
 #[path = "file/publication.rs"]
 mod publication;
 #[cfg(unix)]
@@ -1745,9 +1742,6 @@ pub use publication::classify_replace_publication_error;
 
 pub(crate) use publication::ReplaceDurability;
 
-pub(crate) use publication::publish_temp_path_atomically;
-
-pub(crate) use publication::publish_open_temp_path_atomically;
 #[cfg(not(windows))]
 pub(crate) use publication::replace_path_atomically;
 #[cfg(windows)]
@@ -1772,15 +1766,8 @@ use locks::*;
 
 pub(crate) use locks::WriterLock;
 
-pub(crate) use locks::WriterGuardLockError;
-#[cfg(not(windows))]
-pub(crate) use locks::try_lock_native_guard;
-#[cfg(windows)]
-pub(crate) use locks::try_lock_native_guard;
-#[cfg(not(windows))]
-pub(crate) use locks::unlock_native_guard;
-#[cfg(windows)]
-pub(crate) use locks::unlock_native_guard;
+#[cfg(feature = "experimental-matrix-reuse")]
+pub(crate) use locks::{WriterGuardLockError, try_lock_native_guard, unlock_native_guard};
 
 pub use locks::clear_stale_writer_lock;
 

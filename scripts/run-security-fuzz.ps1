@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("all", "native_arbitrary", "codec_arbitrary", "layout_arbitrary", "matrix_arbitrary", "sidecar_arbitrary", "sidecar_mutation", "sidecar_state_machine")]
+    [ValidateSet("all", "native_arbitrary", "codec_arbitrary", "layout_arbitrary", "matrix_arbitrary", "stream_damage", "stream_state_machine")]
     [string]$Target = "all",
     [ValidateRange(1, 86400)]
     [int]$Seconds = 60,
@@ -86,13 +86,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $targets = if ($Target -eq "all") {
-    @("native_arbitrary", "codec_arbitrary", "layout_arbitrary", "matrix_arbitrary", "sidecar_arbitrary", "sidecar_mutation", "sidecar_state_machine")
+    @("native_arbitrary", "codec_arbitrary", "layout_arbitrary", "matrix_arbitrary", "stream_damage", "stream_state_machine")
 } else {
     @($Target)
 }
 
 foreach ($name in $targets) {
-    $targetSeconds = if ($name -like "sidecar_*") { [Math]::Max($Seconds, 120) } else { $Seconds }
+    $targetSeconds = if ($name -like "stream_*") { [Math]::Max($Seconds, 120) } else { $Seconds }
     $fuzzerArgs = @(
         "-max_total_time=$targetSeconds",
         "-timeout=10",

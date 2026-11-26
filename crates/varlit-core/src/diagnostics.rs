@@ -958,8 +958,6 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
             DiagnosticDomain::CallerUsage
         }
 
-        Error::IndexBusy => DiagnosticDomain::Environment,
-
         Error::IntegrityFeatureDisabled | Error::CompressionFeatureDisabled => {
             DiagnosticDomain::FeatureGate
         }
@@ -984,8 +982,6 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::MatrixPublicationUncertain { .. }
         | Error::MatrixCommittedButDurabilityUnproven { .. }
         | Error::ReplacePublicationIndeterminate { .. } => DiagnosticDomain::Environment,
-
-        Error::PublishedButIndexStale { .. } => DiagnosticDomain::Environment,
 
         Error::InvalidMagic
         | Error::UnsupportedContainer
@@ -1034,7 +1030,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::AdapterUnsupportedType { .. }
         | Error::AdapterInvalidLength { .. } => DiagnosticDomain::FileData,
 
-        Error::DiskIndex(_) | Error::LazyOpenMetadataUnavailable { .. } => DiagnosticDomain::FileData,
+        Error::LazyOpenMetadataUnavailable { .. } => DiagnosticDomain::FileData,
 
         Error::WriterLockBreakRefused(_)
         | Error::BufferTooSmall { .. }
@@ -1055,19 +1051,6 @@ pub fn error_hint(error: &Error) -> &'static str {
         Error::LazyOpenMetadataUnavailable { .. } | Error::LazyOpenVerificationRequiresScan
     ) {
         return "no full scan was attempted; explicitly choose a scanning open or lazy_or_scan if appropriate";
-    }
-    // A stale or foreign sidecar has one documented recovery, so it earns a
-    // variant-specific hint instead of the generic file-data one.
-
-    if let Error::DiskIndex(disk_index) = error
-        && matches!(
-            **disk_index,
-            crate::disk_index::DiskIndexError::PrimaryGenerationMismatch
-                | crate::disk_index::DiskIndexError::IdentityMismatch
-        )
-    {
-        return "the sidecar does not describe this generation of the primary file; \
-                rebuild it with bootstrap_stream_checkpoint (never trust it)";
     }
     match classify_error(error) {
         DiagnosticDomain::FormatDefinition => "inspect the format declaration and generated schema",

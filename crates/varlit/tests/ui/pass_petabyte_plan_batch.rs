@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use varlit::{
-    BatchAppendError, BatchAppendInfo, BatchOptions, Result as VarlitResult, ScanOptions,
-    StreamBootstrapReport, StreamOptions, WriterLockBreakPolicy, varlit_format,
+    BatchAppendError, BatchAppendInfo, BatchOptions, Result as VarlitResult, StreamOptions,
+    WriterLockBreakPolicy, varlit_format,
 };
 
 varlit_format! {
@@ -41,23 +41,10 @@ fn stream_borrowed_batch(
     writer.push_samples(samples, BatchOptions::default())
 }
 
-fn bootstrap_stream(path: &Path) -> VarlitResult<StreamBootstrapReport> {
-    PetabytePlanBatchFormat::bootstrap_stream_checkpoint(path, StreamOptions::default())
-}
-
-fn bootstrap_stream_with_progress(path: &Path) -> VarlitResult<StreamBootstrapReport> {
-    PetabytePlanBatchFormat::bootstrap_stream_checkpoint_with_progress(
-        path,
-        StreamOptions::default(),
-        ScanOptions::default(),
-        |_| {},
-    )
-}
-
-fn restore_stream(
+fn open_stream(
     path: &Path,
 ) -> VarlitResult<PetabytePlanBatchFormatStreamWriter> {
-    PetabytePlanBatchFormat::restore_stream_writer(path, StreamOptions::default())
+    PetabytePlanBatchFormat::open_stream_writer(path, StreamOptions::default())
 }
 
 fn clear_stale_lock(path: &Path) -> VarlitResult<()> {
@@ -70,9 +57,7 @@ fn clear_stale_lock(path: &Path) -> VarlitResult<()> {
 fn main() {
     let _ = (
         stream_borrowed_batch,
-        bootstrap_stream,
-        bootstrap_stream_with_progress,
-        restore_stream,
+        open_stream,
         clear_stale_lock,
     );
 }

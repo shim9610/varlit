@@ -57,8 +57,8 @@ CASES = [
      "unpublished_and_torn_publications_never_reach_a_reopen"),
     ("indexed-follow", "scalable_reader_follow",
      "eight_followers_observe_atomic_generations_during_single_writer_updates"),
-    ("process-compaction", "scalable_reader_management",
-     "independent_process_reads_dirty_writer_and_follows_compaction"),
+    ("process-follow", "scalable_reader_management",
+     "independent_process_reads_a_dirty_writer_and_follows_it"),
 ]
 
 

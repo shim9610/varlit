@@ -803,40 +803,6 @@ pub(crate) fn prepare_stream_creation_nonce_record(
     )
 }
 
-/// Recovers the creation nonce of a stream primary, or `None` when the
-/// primary carries none (a legacy primary, or one bootstrapped from a resident
-/// `VarlitFile`).
-///
-/// Cost is one bounded point read of the first record, performed only at open
-/// and at create ??never on an append or lookup path.
-///
-/// Any failure to read or decode the leading record is reported as "no nonce"
-/// rather than as an error. That is fail-closed, not permissive: a primary that
-/// *was* created with a nonce recorded a fingerprint that folds it in, so
-/// answering `None` can only ever produce a *different* fingerprint and refuse
-/// the sidecar. It must never turn a damaged leading record into an open-time
-/// error on a path whose job is to compute an identity.
-pub(crate) fn read_stream_creation_nonce(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-    header_len: u64,
-) -> Option<[u8; MATRIX_CREATION_NONCE_LEN]> {
-    if header_len >= snapshot.len() {
-        return None;
-    }
-    let mut file = snapshot.reader();
-    let entry = read_stream_entry_at_file(spec, &mut file, snapshot, header_len).ok()?;
-    if entry.block_id != CREATION_NONCE_BLOCK_ID
-        || entry.flags & RECORD_FLAG_INTERNAL == 0
-        || entry.block_version != 1
-        || entry.payload_len != MATRIX_CREATION_NONCE_LEN as u64
-    {
-        return None;
-    }
-    let payload = entry.read_payload_snapshot(spec, snapshot).ok()?;
-    <[u8; MATRIX_CREATION_NONCE_LEN]>::try_from(payload.as_slice()).ok()
-}
-
 /// Appends one encoded record to `out` and returns what the writer needs to
 /// know about it.
 ///

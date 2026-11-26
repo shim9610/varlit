@@ -16,11 +16,11 @@ mod enabled {
         ArmGuard, FAULT_ENV, REQUIRED_POINTS, TRACE_ENV, arm_from_env, fault_point,
     };
     use varlit::{
-        BatchOptions, BlockDescriptor, BlockKind, Decoder, DiskIndexBatchOptions, DiskIndexOptions,
-        Encoder, Endian, FormatSpec, IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits,
-        RecoveryPolicy, Result as VarlitResult, StreamOptions, VarlitBlock, VarlitDecode,
-        VarlitEmpty, VarlitEncode, VarlitStreamReader, VarlitStreamWriter, WireType,
-        WriterLockBreakPolicy, bootstrap_stream_checkpoint, clear_stale_writer_lock,
+        BatchOptions, BlockDescriptor, BlockKind, Decoder, Encoder, Endian, FormatSpec,
+        IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy,
+        Result as VarlitResult, StreamOptions, VarlitBlock, VarlitDecode, VarlitEmpty,
+        VarlitEncode, VarlitStreamReader, VarlitStreamWriter, WireType, WriterLockBreakPolicy,
+        clear_stale_writer_lock,
     };
 
     const CHILD_ENV: &str = "VARLIT_SCALABLE_FAULT_CHILD";
@@ -29,19 +29,13 @@ mod enabled {
     const READY_FILE: &str = "ready";
     const BASE_EOF_FILE: &str = "base-eof";
 
-    const SCENARIOS: &[Scenario] = &[
-        Scenario::Create,
-        Scenario::Append,
-        Scenario::Restore,
-        Scenario::Bootstrap,
-    ];
+    const SCENARIOS: &[Scenario] = &[Scenario::Create, Scenario::Append, Scenario::Restore];
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Scenario {
         Create,
         Append,
         Restore,
-        Bootstrap,
     }
 
     impl Scenario {
@@ -50,7 +44,6 @@ mod enabled {
                 Self::Create => "create-stream",
                 Self::Append => "append-stream",
                 Self::Restore => "restore-stream",
-                Self::Bootstrap => "bootstrap-stream",
             }
         }
 
@@ -194,7 +187,7 @@ mod enabled {
                 "enabled::scalable_fault_inert_child",
             ])
             .env(CHILD_ENV, "1")
-            .env(FAULT_ENV, "abort:generation.commit:1")
+            .env(FAULT_ENV, "abort:sync.native_sync:1")
             .env(TRACE_ENV, &trace)
             .status()
             .expect("run inert child");
@@ -225,7 +218,7 @@ mod enabled {
             return;
         }
         suppress_interactive_fault_reporting();
-        fault_point("generation.commit");
+        fault_point("sync.native_sync");
     }
 
     /// Keeps a deliberately aborting child process non-interactive.
@@ -365,22 +358,10 @@ mod enabled {
             Scenario::Restore => {
                 write_dirty_stream(root);
                 let _fault_guard = mark_ready_and_arm(root);
-                let writer = VarlitStreamWriter::restore_checkpoint_and_open(
-                    stream_spec(),
-                    native_path(root),
-                    stream_options(),
-                )
-                .expect("restore stream checkpoint");
+                let writer =
+                    VarlitStreamWriter::open(stream_spec(), native_path(root), stream_options())
+                        .expect("recover stream");
                 drop(writer);
-            }
-            Scenario::Bootstrap => {
-                write_stream_generation(root, false);
-                fs::remove_file(stream_sidecar_path(root))
-                    .expect("remove bootstrap source sidecar");
-                write_base_eof(root);
-                let _fault_guard = mark_ready_and_arm(root);
-                bootstrap_stream_checkpoint(stream_spec(), native_path(root), stream_options())
-                    .expect("bootstrap stream sidecar");
             }
         }
     }
@@ -452,7 +433,6 @@ mod enabled {
             Scenario::Create => assert_interrupted_stream_creation(root, event),
             Scenario::Append => assert_stream_append_outcome(root, event),
             Scenario::Restore => assert_stream_restore_outcome(root, event),
-            Scenario::Bootstrap => assert_stream_bootstrap_outcome(root, event),
         }
     }
 
@@ -465,19 +445,14 @@ mod enabled {
         }
     }
 
-    fn stream_needs_restore(root: &Path) -> bool {
-        match VarlitStreamWriter::open(stream_spec(), native_path(root), stream_options()) {
-            Ok(writer) => {
-                drop(writer);
-                false
-            }
-            Err(varlit::Error::DiskIndex(error))
-                if matches!(*error, varlit::DiskIndexError::CleanStateRequired) =>
-            {
-                true
-            }
-            Err(error) => panic!("unexpected stream writer reopen failure: {error:?}"),
-        }
+    /// Opens (and so recovers) the writer and closes it again.
+    fn reopen_writer(root: &Path, event: &TraceEvent) {
+        drop(
+            VarlitStreamWriter::open(stream_spec(), native_path(root), stream_options())
+                .unwrap_or_else(|error| {
+                    panic!("stream writer reopen failed at {event:?}: {error}")
+                }),
+        );
     }
 
     fn assert_stream_append_outcome(root: &Path, event: &TraceEvent) {
@@ -488,64 +463,32 @@ mod enabled {
             values == base_stream_values() || values == full_stream_values(),
             "partial stream at {event:?}"
         );
-        if stream_needs_restore(root) {
-            assert_eq!(
-                values,
-                base_stream_values(),
-                "Dirty stream exposed an unconfirmed suffix at {event:?}"
-            );
-            assert!(fs::metadata(native_path(root)).unwrap().len() >= base_eof);
-            drop(
-                VarlitStreamWriter::restore_checkpoint_and_open(
-                    stream_spec(),
-                    native_path(root),
-                    stream_options(),
-                )
-                .unwrap(),
-            );
-            assert_eq!(fs::metadata(native_path(root)).unwrap().len(), base_eof);
-            assert_eq!(read_stream(root).unwrap(), base_stream_values());
-        } else if values == base_stream_values() {
+        // Recovery keeps exactly what a reader saw: every verified sync, and
+        // nothing after the last one.
+        reopen_writer(root, event);
+        assert_eq!(
+            read_stream(root).unwrap(),
+            values,
+            "recovery changed the confirmed stream at {event:?}"
+        );
+        if values == base_stream_values() {
             assert_eq!(fs::metadata(native_path(root)).unwrap().len(), base_eof);
         }
     }
 
     fn assert_stream_restore_outcome(root: &Path, event: &TraceEvent) {
         assert_eq!(read_stream(root).unwrap(), base_stream_values());
-        if stream_needs_restore(root) {
-            assert!(
-                fs::metadata(native_path(root)).unwrap().len() >= read_base_eof(root),
-                "interrupted restore truncated below its base EOF at {event:?}"
-            );
-            let writer = VarlitStreamWriter::restore_checkpoint_and_open(
-                stream_spec(),
-                native_path(root),
-                stream_options(),
-            )
-            .unwrap_or_else(|error| panic!("repeated stream restore failed at {event:?}: {error}"));
-            drop(writer);
-        }
+        assert!(
+            fs::metadata(native_path(root)).unwrap().len() >= read_base_eof(root),
+            "interrupted recovery truncated below its base EOF at {event:?}"
+        );
+        // A repeated recovery finishes what the interrupted one began.
+        reopen_writer(root, event);
         assert_eq!(
             fs::metadata(native_path(root)).unwrap().len(),
             read_base_eof(root)
         );
         assert_eq!(read_stream(root).unwrap(), base_stream_values());
-    }
-
-    fn assert_stream_bootstrap_outcome(root: &Path, event: &TraceEvent) {
-        assert_eq!(
-            fs::metadata(native_path(root)).unwrap().len(),
-            read_base_eof(root),
-            "bootstrap changed the native file at {event:?}"
-        );
-        if stream_sidecar_path(root).exists() {
-            assert_eq!(
-                read_stream(root).unwrap_or_else(|error| {
-                    panic!("bootstrap published an invalid sidecar at {event:?}: {error}")
-                }),
-                full_stream_values()
-            );
-        }
     }
 
     fn parse_trace(path: &Path) -> Vec<TraceEvent> {
@@ -634,21 +577,8 @@ mod enabled {
         .with_read_limits(ReadLimits::STANDARD)
     }
 
-    fn disk_options() -> DiskIndexOptions {
-        DiskIndexOptions {
-            batch: DiskIndexBatchOptions {
-                max_records: 2,
-                max_bytes: 1024 * 1024,
-            },
-            ..DiskIndexOptions::default()
-        }
-    }
-
     fn stream_options() -> StreamOptions {
-        StreamOptions {
-            state: disk_options(),
-            ..StreamOptions::default()
-        }
+        StreamOptions::default()
     }
 
     const fn batch_options() -> BatchOptions {
@@ -675,12 +605,6 @@ mod enabled {
 
     fn native_path(root: &Path) -> PathBuf {
         root.join("fixture.varlit")
-    }
-
-    fn stream_sidecar_path(root: &Path) -> PathBuf {
-        let mut path = native_path(root).into_os_string();
-        path.push(".vks");
-        path.into()
     }
 
     fn write_base_eof(root: &Path) {
