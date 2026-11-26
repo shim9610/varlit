@@ -242,8 +242,8 @@ reports `NotApplicable`, because no block declares a disk index.
 Merge-operation keys and envelopes are inspected, but their separate operation
 codecs are not registered and therefore also prevent a pass. Custom
 physical layout headers and segment structure are still inspected. The checker
-does not inspect a stream `.vks` sidecar or other application-owned companion
-files.
+does not inspect application-owned companion files. Stream files have none; a
+`.vks` left by an earlier release is ignored.
 
 The file and its companions must remain unchanged throughout inspection; marker
 absence alone cannot establish this. Custom codec/key callbacks must terminate,
@@ -359,7 +359,7 @@ python3 scripts/load_scalable.py --suite large --only raw-20g --only stream-20g 
 
 Qualification checks model histories, independent reader snapshots, stream
 writer process-kill recovery with a live reader kept across each crash, and a
-redb oracle for the sidecar page store. Real-file
+redb oracle for the page tree of the private scratch index. Real-file
 runs write, verify and delete owned payload files; sparse addressability probes
 are separate and do not measure storage bandwidth. Use each runner's `--help`
 for workload sizes, timeouts and comparison options.

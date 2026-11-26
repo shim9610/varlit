@@ -148,20 +148,37 @@ and compile-time schema validation.
 
 - A stream primary's first record is its creation nonce (`0xFFFF_FFF8`,
   version 1, internal): the bare 16-byte nonce, unique per create (not secret), written
-  once at create. It
-  binds a state sidecar to one creation of the file (see
-  [primary generation binding](scalable-io.md#primary-generation-binding)).
-- A checkpointed stream writer appends a sync marker (`0xFFFF_FFF4`, version 1,
-  internal) after the records each sync commits. Its 32-byte payload is
-  little-endian: `"VSYN" | version u16 = 1 | reserved u16 | link start u64 |
-  link length u64 | CRC-32 u32 | CRC-32 of bytes 0..28`. The link starts where
-  the previous marker ended (or at the sidecar's confirmed end) and its CRC
-  covers every physical byte from there to the marker, headers and footers
-  included, except the payloads of in-place records (`0xFFFF_FFF3`). Recovery
-  accepts a prefix only up to the last marker whose bytes verify.
-- The state sidecar (`.vks`) uses the `VARVEIX5` paged container with
-  `VARVEVKI` metadata at record version 3 (300 bytes); see
-  [scalable I/O](scalable-io.md#durability-and-recovery).
+  once at create.
+- A stream writer appends a sync marker (`0xFFFF_FFF4`, version 1, internal)
+  after the records each sync commits. Its 32-byte payload is little-endian:
+  `"VSYN" | version u16 = 1 | reserved u16 | link start u64 | link length u64 |
+  CRC-32 u32 | CRC-32 of bytes 0..28`. The link starts where the previous
+  marker ended (or at the end the writer published when it created or opened
+  the file) and its CRC covers every physical byte from there to the marker,
+  headers and footers included, except the payloads of in-place records
+  (`0xFFFF_FFF3`). Readers and recovery accept a prefix only up to the last
+  marker whose bytes verify; a marker that does not verify followed by a later
+  marker is corruption.
+- A stream file carries a `VPUB` block ([published end](#published-end)) even
+  though its commit policy is not `TransactionMarker`. `create` publishes the
+  end of the nonce (and embedded manifest) record; each `sync` publishes the
+  end of its marker. A file without the block, or whose two slots are both
+  unreadable, is framed from its header, and its chain is taken to begin at
+  the link start of its first sync marker; with no marker, or a first link
+  that does not start on a record boundary, every record that frames is kept.
+  A newest slot that is inactive (written by a native writer that took the
+  file over) keeps every record that frames.
+- An anchor in a stream file carries a stream summary at byte 48 instead of
+  the open summary (see
+  [file-header flags and anchors](#file-header-flags-and-anchors)):
+  `flags u16 = 0x8 | reserved u16 | tail count u32 | records_before u64 | next
+  sequence u64`, then `tail count` entries of `block id u32 | record offset u64
+  | sequence u64`, ascending by block id: the state before the record spanning
+  the anchor. A native open does not know the flag
+  and reads it as no summary. A stream writer open resumes from the newest of
+  at most four anchors before the published end whose summary is intact.
+- A stream file has no companion file. A `.vks` file left by an earlier
+  release is ignored.
 
 ## Preallocated Matrix Wire Contract
 
@@ -1154,7 +1171,8 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
 
 ### Published End
 
-- A native file whose commit policy is `TransactionMarker` carries a `VPUB`
+- A native file whose commit policy is `TransactionMarker`, and every stream
+  file (see [stream records](#stream-records)), carries a `VPUB`
   header extension block, framed `magic[4] | len u32` like the blocks after
   `VCHD`, appended after every other extension block. Its payload (56 bytes)
   is `version u16 = 1 | reserved u16 | reserved u32` followed by two slots of
@@ -1204,8 +1222,7 @@ place, little-endian.
 
 The mutable header blocks are `VBTT`, `VLIV`, `VHSL` (below) and `VPUB`
 ([published end](#published-end)). An open compares their lengths, not their
-contents, with what the format would write, and the stream generation witness
-blanks their payloads.
+contents, with what the format would write.
 
 ### Editable Header Region
 

@@ -153,7 +153,7 @@ loss interval, with its cheapest mechanism for each:
 
 | format | visible | durable |
 |---|---|---|
-| varlit (stream) | `sync()` (stream followers advance on the generation `sync` publishes; `flush()` is not visible to them, so visibility and durability cannot be separated) | same `sync()` |
+| varlit (stream) | `sync()` (stream followers advance on the end `sync` publishes; `flush()` is not visible to them, so visibility and durability cannot be separated) | same `sync()` |
 | varlit-native | `commit()` (transaction marker, no fsync) | `commit_durable()`, single-barrier commit (`transaction_marker(explicit, single_barrier)`, one `sync_all`) |
 | sqlite | WAL `COMMIT` with `synchronous=NORMAL` | `synchronous=FULL` for that transaction; WAL checkpoints only at durable commits once ~4 MB accumulated (`wal_autocheckpoint=0`) |
 | hdf5 | SWMR `H5Fflush` | `H5Fflush` + fsync |
@@ -193,7 +193,9 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 The latest results, at 10 GB per scenario with the current harness and the
 hardware stated, are in
 [results-10gb-20261118.md](results-10gb-20261118.md).
-The tables below are older runs on other hosts and smaller data.
+The tables below are older runs on other hosts and smaller data. All of
+these results, the linked ones included, were measured while stream files
+still had the former `.vks` state sidecar; the varlit (stream) rows reflect it.
 
 2026-11-11, Linux 7.0, 24 cores, NVMe ext4, rustc 1.98.1, release build, branch
 `perf/bulk-primitive-codec` (Varlit 0.13.0 plus the bulk codec, single-barrier
@@ -382,9 +384,10 @@ three repeats. Growth = file growth during the 2000 batches (logical updates:
 - Integrity: Varlit stores CRC32 over header+payload (verified unless `+trusted`);
   the others store no data checksums here.
 - Publication: SQLite WAL and Varlit transaction markers commit atomically.
-  Varlit stream `sync()` also publishes a crash-recoverable sidecar
-  generation (two fsync-class calls per publication). HDF5 flush + fsync is
-  not transactional across datasets. Parquet relies on rename.
+  Varlit stream `sync()` makes its records durable with one fsync-class call
+  and then publishes their end in the file header (recovery keeps every sync
+  whose marker verifies). HDF5 flush + fsync is not transactional across
+  datasets. Parquet relies on rename.
 - Loss bound: with a non-zero bound, SQLite (`synchronous=NORMAL`), Varlit
   (`commit()`), HDF5 (flush without fsync) and Parquet (no fsync) may all lose
   the not-yet-durable publications on power loss; each still recovers to a

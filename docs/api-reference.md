@@ -432,10 +432,12 @@ another handle appends afterwards are not visible until it advances with
   barrier instead of two; open then verifies the newest transaction before it
   is trusted. It requires `crc32_with_header`. See
   [single-barrier commit](durability-model.md#single-barrier-commit).
-- **Disk index confirmation.** A stream writer's sidecar confirms its end of
-  file on the schedule a `DiskIndexConfirmPolicy` sets (default every 64 MiB or
-  65,536 records; `EVERY_SYNC` confirms at each sync). See
-  [scalable I/O](scalable-io.md).
+- **Stream durable boundary.** A stream file carries a `VPUB` block as well,
+  although stream formats use no transaction markers: each stream `sync()`
+  appends a sync marker, issues one storage barrier and then publishes its
+  end. Readers adopt that end plus every later sync whose marker verifies.
+  There is no companion file. See
+  [scalable I/O](scalable-io.md#durability-and-recovery).
 
 ### Reads that fill a buffer you own
 
@@ -959,23 +961,20 @@ count. It needs no Cargo feature.
 
 | Generated API | Meaning |
 | --- | --- |
-| `create_stream_writer(path, options)` | create native file plus state-only `.vks` |
-| `open_stream_writer(path, options)` | resume from `.vks` without a native prefix scan; a sidecar that trails the primary is recovered as `restore_stream_writer` does |
-| `open_stream_reader(path, options)` | pinned open from `.vks` plus the synced records after it |
-| `restore_stream_writer(path, options)` | return to the newest confirmed checkpoint, keep every synced record after it, cut the unsynced suffix |
-| `bootstrap_stream_checkpoint(path, options)` | explicit native scan to create a missing `.vks` |
-| `bootstrap_stream_checkpoint_with_progress(path, options, scan, observer)` | controlled bootstrap scan with progress/cancellation |
+| `create_stream_writer(path, options)` | create the native file, publish the start of its sync-marker chain, sync it and its parent directory |
+| `open_stream_writer(path, options)` | recover and resume: state from the newest anchor's stream summary before the published end, keep every later sync whose marker verifies, cut the rest, sync and publish |
+| `open_stream_reader(path, options)` | open at the published end plus every later sync whose marker verifies |
 | `clear_stale_writer_lock(path, policy)` | O(1) explicit lock recovery without opening/scanning native data |
 
 Generated `push_<blocks>(iterator, BatchOptions)` methods coalesce native
 records into bounded writes and return one compact `BatchAppendInfo` rather
 than a per-record vector. The stream writer also exposes `flush()`, `sync()`,
-`immediate()`, `set_immediate_policy(policy)` and `compact_index()`. In a
+`immediate()` and `set_immediate_policy(policy)`. In a
 `keyed_offset_chain` format the stream writer generates no push or delete
 method for a keyed block, because it keeps no previous-key chain. Stream
 readers expose `events()`, `verify_all()`, lazy typed plural methods for
 explicit sequential scans, `follow()`, `follow_events`, `follow_blocks`,
-`snapshot_status()` and `release_snapshot()`. They have no lookup by key, and
+and `snapshot_status()`. They have no lookup by key, and
 every stream constructor refuses a format that declares keyed storage
 (`StreamingUnsupported`); use the native handles' [keyed storage](#keyed-storage)
 for lookup by key.
@@ -992,25 +991,32 @@ Stream readers also expose
 | `ScanProgressPhase` | `Started`, `Running`, or final pre-publication `Complete` |
 
 Defaults notify every 16,384 records or 16 MiB. Cancellation returns
-`Error::ScanCancelled { progress }`; cancellation observed through the final
-callback/check publishes no new sidecar target. Progress bookkeeping does not
-allocate per record.
+`Error::ScanCancelled { progress }`; a verification scan writes nothing.
+Progress bookkeeping does not allocate per record.
 
-Normal stream open never bootstraps, rebuilds, verifies or scans the native
-prefix. A missing, stale or identity-mismatched `.vks` is an error.
-`open_stream_writer` recovers one condition itself: a sidecar that trails the
-primary (an unconfirmed tail or an interrupted generation) is restored to its
-newest confirmed checkpoint, the verified sync-marker prefix after it is kept
-and replayed, and the unsynced suffix is cut. `sync()`, not `flush()`, makes
-records durable and visible to readers.
+`snapshot_status()` returns `SnapshotStatus { committed_len, records_behind,
+bytes_behind }`: the end of the prefix the reader holds and the confirmed
+records and bytes past it, that is, what `follow()` would adopt now. It frames
+only the records past the reader's end and changes nothing.
+
+Normal stream open never verifies or scans the native prefix. A reader opens
+at the published end and walks only the syncs after it whose end was not yet
+published; on a clean file it frames nothing. `open_stream_writer` always
+recovers: it frames from the newest anchor before the published end (at most
+one anchor spacing, 4 MiB by default), keeps every later sync whose marker
+verifies, cuts the unsynced suffix, syncs and publishes the kept end. A
+published end beyond the file is `Error::CorruptTail`; a marker that does not
+verify followed by a later one is `Error::ChecksumMismatch`. A file with no
+published end (written before the `VPUB` block existed) is framed from its
+header; a `.vks` file left beside it by an earlier release is ignored.
+`sync()`, not `flush()`, makes records durable and visible to readers.
 
 ### One Poison Flag Per Writer
 
 A stream writer poisons itself when an append fails and the truncate-or-seek
 rollback that should undo it fails too: the file's tail is then in an unknown
 state and no further mutation is safe. Every later mutation is refused with
-`Error::WriterPoisoned`. A sidecar publication whose outcome is uncertain also
-poisons the writer.
+`Error::WriterPoisoned`.
 
 The writer has a single poison flag, and its mutating entry points require a
 witness value that only the poison check produces — a caller that skips the
@@ -1018,31 +1024,19 @@ check does not compile. Each published chunk of a batch takes its own fresh
 check, so a chunk that poisons the writer stops the chunks after it in the
 same call.
 
-`Error::DiskIndex` contains the original boxed `DiskIndexError`; callers should
-match that source rather than parse display text. Sidecar lock contention maps
-to `Error::IndexBusy`. Bootstrap refuses an existing `.vks`, so it cannot bless
-an unsynced tail; to replace a `.vks` known to be stale, remove it explicitly
-and bootstrap again.
-
-Sidecar publication reports durability honestly: stream sidecar create and
-stream bootstrap can return `Error::PublishedButParentSyncPending` when the
-sidecar was atomically published but the parent-directory sync failed. The
-published sidecar is preserved and usable; treat the error as a durability
-warning, not as "nothing was published". `verify_all()` is the whole-file
-integrity scan.
+Stream create reports durability honestly: `create_stream_writer` returns
+`Error::PublishedButParentSyncPending`, naming the stream file, when the file
+is complete and synced but the parent-directory sync failed. The file is
+usable and a plain `open_stream_writer` resumes it; treat the error as a
+durability warning, not as "nothing was created". `verify_all()` is the
+whole-file integrity scan.
 
 Typed access requires an immutable identity for the block in `FormatSpec`.
 An absent identity returns `Error::InvalidFormatSpec` before codec invocation.
 
 Stream primaries carry a per-create 128-bit nonce as their first record
 (reserved block id `CREATION_NONCE_BLOCK_ID`, one record at create and nothing
-per append), and the sidecar binds to it through its recorded
-primary-generation witness. Replacing a primary in place with another
-equal-length primary of the same format is refused at open with
-`DiskIndexError::PrimaryGenerationMismatch` on both the reader and the writer;
-the recovery is to remove the `.vks` and run `bootstrap_stream_checkpoint`. A
-primary bootstrapped from a resident `VarlitFile` carries no nonce and is
-protected only by the weaker content-window witness over its leading bytes.
+per append).
 
 Manual `VarlitBlock` implementations must state
 `IS_KEYED` explicitly. This is a compile-time chain-safety requirement; macro
@@ -1912,7 +1906,7 @@ survives.
 | `experimental-matrix-reuse` | the `experimental_matrix` module: explicit opt-in matrix page reuse | **experimental**: own format and compatibility rules, see [experimental matrix reuse](experimental-matrix-reuse.md) |
 | `scalable-fault-injection` | fault-injection counters and hooks for the scalable-path tests | **test infrastructure**: not a production feature; the counters it exposes are `#[doc(hidden)]` |
 
-Generation-store page and checkpoint checksums remain active in every build.
+Sync-marker and published-end checksums remain active in every build.
 All optional features are off by default. Resident, matrix, stream and
 scan-control APIs require no Cargo feature, even when using
 `default-features = false`. `high-cardinality-dev` was removed in 0.10.0;
@@ -1944,7 +1938,7 @@ minor-version policy as the rest of the library.
 | `LimitExceeded { resource: "merge distinct keys" }` | a `*_with_key_limit` merge/compact hit the caller's `K-ever` ceiling; nothing was published |
 | `BlockSchemaFingerprintMismatch` | a block impl disagrees with the format's declared identity for that block id |
 | `BlockKeyednessMismatch` | a block impl disagrees with the format's declared keyedness for that block id |
-| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also surfaced by sidecar create/bootstrap |
+| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also returned by stream create, naming the complete stream file |
 | `MatrixCommittedButHookFailed { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` committed the cell and published its generation, then the caller's post-commit hook failed. Not a rollback: retry the notification with the carried `MatrixCommitEvent`, not the whole call |
 | `MatrixPublicationUncertain { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` failed while publishing, before the handle's generation advanced. The writer is poisoned and the hook did not run; reopen and read the cell before retrying |
 | `MatrixCommittedButDurabilityUnproven { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` published the cell's generation and a later step of `sync()` failed. Not a rollback, and the hook did **not** run. The writer is poisoned; reopen and `sync`, then issue the notification with the carried event |

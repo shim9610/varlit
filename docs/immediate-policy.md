@@ -9,8 +9,7 @@ the writer:
   boundaries decide only what is synced.
 - A stream writer (`VarlitStreamWriter` and the generated stream wrapper)
   makes records visible to readers only at a durability boundary, so each
-  Immediate boundary is also a publication. It also confirms the sidecar
-  checkpoint when the writer's `DiskIndexConfirmPolicy` is due.
+  Immediate boundary is also a publication: `immediate()` is `sync()`.
 
 There are three ways to request one.
 
@@ -106,46 +105,29 @@ transaction itself must become committed and durable.
 
 ## Stream commit and recovery order
 
-1. Before the first mutation after a clean boundary, save the clean rollback
-   checkpoint and mark the generation Dirty. This marker is not a barrier: a
-   crash that loses it leaves the newest durable state clean with the native
-   file longer than it covers, which is recovered by restore exactly as a
-   surviving Dirty checkpoint is.
-2. Write native chunks and append bounded sidecar working checkpoints without
-   a durability barrier. A native chunk does not force a sidecar commit; sidecar
-   record/byte bounds, API-end publication and explicit boundaries do.
-3. At `immediate()` / `sync()`, append a sync marker to the native file and
-   sync it. This runs through the Kani-verified `commit` driver in
-   `crates/varlit-core/src/publication_protocol.rs`. The sidecar is confirmed in the same call only when the native file
-   has grown past the last confirmed EOF by the writer's
-   `DiskIndexConfirmPolicy` (default 64 MiB or 65,536 records; `EVERY_SYNC`
-   confirms on every sync). Until then readers and recovery take the unconfirmed
-   tail from the native file. A confirmation finishes the pending sidecar batch,
-   writes the clean checkpoint and syncs it, writes one confirmed head into the
-   slot that does not hold the newest durable head, and syncs again. The head is
-   then copied into the other slot without a barrier of its own; the next
-   barrier persists it, so a completed generation keeps two head copies.
-   A version 5 sidecar (`VIXHEAD2` heads) confirms with one sync instead: its
-   head names the checksum of every sidecar byte appended since the previous
-   confirmed checkpoint, a head whose generation fails that checksum is skipped
-   for the other confirmed slot, and a generation whose two head copies both
-   name it but fail the checksum is refused as damaged durable data.
+1. Write native chunks without a durability barrier. They are in the file but
+   not visible to readers.
+2. At `immediate()` / `sync()`, append a sync marker that closes the records
+   since the previous sync and sync the native file. This runs through the
+   Kani-verified `commit` driver in
+   `crates/varlit-core/src/publication_protocol.rs`.
+3. Write the new end into the file's `VPUB` header block: one 24-byte write
+   into the slot after the newest, not synced on its own. The next barrier
+   makes it durable; until then a crash leaves the earlier end, and the next
+   open walks the verified markers after it.
 
-A `sync()` therefore costs one storage barrier on the native file, plus two on
-the sidecar when it confirms (one for a version 5 sidecar). A writer open adds
-one sidecar sync when the two confirmed heads differ.
+A `sync()` therefore costs one storage barrier. `create` also syncs the file
+and its parent directory once, and a writer open that cut an unsynced suffix
+or found syncs past the published end syncs once before its first append.
 
-`flush()` does not request a new durable clean generation. Creating or
-bootstrapping a sidecar and establishing a rollback checkpoint still perform
-required safety I/O. This is not a promise of zero fsync calls before the first application
-boundary. Neither Drop nor a working checkpoint is an application durability
-acknowledgment.
+`flush()` does not request a durable boundary. This is not a promise of zero
+fsync calls before the first application boundary. Drop is not an application
+durability acknowledgment.
 
-Recovery restores the newest confirmed checkpoint, keeps every synced record
-after it, and discards the unsynced suffix. Fresh readers open the confirmed
-checkpoint plus the synced records after it. Existing readers adopt new
-generations and synced records with `follow()`, which runs through the
-Kani-verified `follow` driver; use
+Recovery is part of every writer open: it keeps every synced record whose
+marker verifies and discards the unsynced suffix. Fresh readers open at the
+published end plus the verified syncs after it. Existing readers adopt new
+syncs with `follow()`, which runs through the Kani-verified `follow` driver; use
 `follow_events` or `follow_blocks` to resume a parser without replaying its prefix.
 Independent readers can run in separate processes. These paths add no mutex or
 reader write-admission gate.
@@ -155,11 +137,9 @@ If an automatic boundary fails after append, the call returns
 record again. The batch error's `written` prefix includes records already in the
 native file, including the triggering record. If the writer remains usable,
 retry `immediate`; a poisoned writer requires recovery. A direct `immediate()`
-returns its original sync/sidecar error because it appends no new user record.
+returns its original sync error because it appends no new user record.
 
-The batch and private-cache limits bound sidecar residency, not on-disk history.
-Explicit `compact_index()` after a sync rewrites the sidecar to its current
-state. Old open readers can retain the replaced file. Select record/byte
+The batch limits bound buffering, not on-disk history. Select record/byte
 conditions for a finite durability interval and manage disk space explicitly.
 
 ## Validation
