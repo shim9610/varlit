@@ -895,6 +895,19 @@ jobs:
           assert rows and not failed, failed
           print(rows[0]["platform"])
           PYEOF
+      - name: Check that cold reads are cold
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          out="$(tools/format-bench/target/release/varlit-format-bench evict-check "$RUNNER_TEMP/evict-check")"
+          echo "$out"
+          "$PY" -c 'import json,sys; r=json.loads(sys.argv[1]); a=r["resident_after"]; assert a is None or a < 0.1, r' "$out"
+      - name: Run the memory-capped scenario (small shape)
+        env:
+          FB_GRID: small
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          "$PY" tools/format-bench/run.py --only grid --formats varlit --out "$RUNNER_TEMP/bench-grid"
+          "$PY" -c 'import json,sys; r=[json.loads(l) for l in open(sys.argv[1])]; assert r and not any(x.get("failed") for x in r), r; print(r[0].get("memcap"))' "$RUNNER_TEMP/bench-grid/results.jsonl"
 
   required-gate:
     # Keep this name stable: main protection requires this aggregate check.

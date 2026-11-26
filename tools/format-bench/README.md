@@ -55,10 +55,14 @@ fails there. What differs by platform is recorded in every result under
 
 | | Linux / FreeBSD | macOS | Windows |
 | --- | --- | --- | --- |
-| Cold reads (`cold_*`, `grid`) | page cache evicted (`posix_fadvise`) | not evicted: the first read after the write, may be cached | not evicted |
-| `grid` 4 GiB memory cap | systemd scope or cgroup (Linux) | none (`memcap: none`) | none |
+| Cold reads (`cold_*`, `grid`): page cache evicted by | `posix_fadvise(DONTNEED)` | `mmap` + `msync(MS_INVALIDATE)` | a `FILE_FLAG_NO_BUFFERING` open, which purges the file's cached pages |
+| `grid` 4 GiB memory cap | process and page cache (systemd scope or cgroup, Linux) | none: macOS enforces no memory limit for an unprivileged process; reads still start evicted | process committed memory (Job Object); the page cache is system-wide, reads start evicted |
 | Peak RSS | `getrusage` | `getrusage` | `GetProcessMemoryInfo` |
 | Durable sync | `fdatasync`/`fsync` | `F_FULLFSYNC` for the Rust engines, and SQLite with `fullfsync` and `checkpoint_fullfsync` on, so every engine flushes the drive cache | `FlushFileBuffers` |
+
+`varlit-format-bench evict-check <dir>` writes a file, reads it, evicts it
+and reports the resident fraction before and after (`mincore` on Unix); CI
+runs it on every platform and requires the file to leave the cache.
 
 Without `fullfsync`, SQLite on macOS would commit with a plain `fsync(2)`,
 which does not flush the drive's write cache, while the Rust engines pay
