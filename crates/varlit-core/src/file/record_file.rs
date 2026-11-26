@@ -192,6 +192,36 @@ impl RecordFile {
         Ok(())
     }
 
+    /// Withdraws a published end: one write of an inactive slot after the
+    /// newest, so readers read to the end of the file again. Nothing when the
+    /// handle owns no `VPUB` block or the newest slot is already inactive.
+    pub(super) fn withdraw_published_end(&mut self) -> Result<()> {
+        use crate::published_end::{SLOT_LEN, Slot, encode_slot, slot_of_seq};
+        let Some(mut published) = self.file.writer_published() else {
+            return Ok(());
+        };
+        if published.end.is_none() {
+            return Ok(());
+        }
+        let seq = published
+            .seq
+            .checked_add(1)
+            .ok_or(super::Error::LengthOverflow {
+                value: published.seq,
+            })?;
+        let bytes = encode_slot(Slot {
+            end: 0,
+            seq,
+            flags: 0,
+        });
+        let at = published.slots_at + (slot_of_seq(seq) * SLOT_LEN) as u64;
+        self.overwrite_header_region(at, &bytes)?;
+        published.seq = seq;
+        published.end = None;
+        self.file.set_writer_published(published);
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn metadata(&self) -> std::io::Result<std::fs::Metadata> {
         self.file.raw().metadata()

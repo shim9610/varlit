@@ -16,7 +16,8 @@ use crate::file::{
     blank_mutable_header_bytes, fresh_stream_creation_nonce, prepare_stream_creation_nonce_record,
     prepare_stream_manifest_record, prepare_stream_tombstone_record,
     prepare_stream_user_record_into, publish_temp_path_atomically, read_file_header,
-    read_file_header_parts, read_primary_header, read_stream_creation_nonce, write_file_header,
+    read_file_header_parts, read_primary_header, read_stream_creation_nonce,
+    write_stream_file_header,
 };
 use crate::primary_file::PrimaryFile;
 use crate::scan_control::{ScanCancelled, ScanProgressDriver};
@@ -1123,7 +1124,7 @@ impl VarlitStreamWriter {
         lock.bind_native(file.raw(), &path)?;
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
-        write_file_header(spec, &mut file)?;
+        write_stream_file_header(spec, &mut file)?;
         let snapshot = SnapshotFile::new(file.try_clone()?)?;
         let mut writer = Self {
             spec,
@@ -3127,17 +3128,24 @@ mod tests {
             )?;
             let mut stream =
                 VarlitStreamWriter::create(spec, &stream_path, StreamOptions::default())?;
+            // A stream file's header also carries the published end, so its
+            // records start later by exactly that block; relative to each
+            // file's own header they are where the resident writer put them.
+            let resident_header =
+                crate::file::read_file_header(spec, &mut std::fs::File::open(&resident_path)?)?;
+            let stream_header =
+                crate::file::read_file_header(spec, &mut std::fs::File::open(&stream_path)?)?;
             for value in [3, 5, 8, 13] {
                 let block = TestBlock(value);
-                assert_eq!(resident.push_info(&block)?, stream.push_info(&block)?);
+                let (r, s) = (resident.push_info(&block)?, stream.push_info(&block)?);
+                assert_eq!(r.sequence, s.sequence);
+                assert_eq!(r.record_offset - resident_header, s.record_offset - stream_header);
+                assert_eq!(r.payload_len, s.payload_len);
             }
             resident.flush()?;
             stream.flush()?;
             let resident_bytes = std::fs::read(&resident_path)?;
             let stream_bytes = std::fs::read(&stream_path)?;
-            assert_eq!(resident_bytes.len(), stream_bytes.len());
-            let mut file = std::fs::File::open(&stream_path)?;
-            let header_len = crate::file::read_file_header(spec, &mut file)?;
             let nonce_record_len = crate::file::RECORD_HEADER_LEN
                 + 16
                 + if spec.spec_needs_record_footer() {
@@ -3145,16 +3153,30 @@ mod tests {
                 } else {
                     0
                 };
-            let user_start = usize::try_from(header_len + nonce_record_len).unwrap();
-            assert_eq!(
-                resident_bytes[..header_len as usize],
-                stream_bytes[..header_len as usize]
+            let resident_user = usize::try_from(resident_header + nonce_record_len).unwrap();
+            let stream_user = usize::try_from(stream_header + nonce_record_len).unwrap();
+            // The published end, plus the extension length a header without
+            // any other block did not carry.
+            let grown = stream_header - resident_header;
+            assert!(
+                grown == crate::published_end::region_len()
+                    || grown == crate::published_end::region_len() + 4,
+                "the stream header is the resident one plus the published end ({grown} bytes)"
             );
             assert_eq!(
-                resident_bytes[user_start..],
-                stream_bytes[user_start..],
-                "user records must encode identically in the resident and streaming writers"
+                resident_bytes.len() - resident_user,
+                stream_bytes.len() - stream_user,
+                "the user records take the same bytes in both writers"
             );
+            if !spec.spec_needs_record_footer() {
+                // Without footers no record names an absolute offset, so the
+                // records are the same bytes.
+                assert_eq!(
+                    resident_bytes[resident_user..],
+                    stream_bytes[stream_user..],
+                    "user records must encode identically in the resident and streaming writers"
+                );
+            }
         }
         Ok(())
     }
@@ -3561,7 +3583,7 @@ mod tests {
         let path = directory.path().join("sequence.varlit");
         let spec = spec(IndexPolicy::ScanOnOpen, CommitPolicy::None);
         let mut file: crate::primary_file::PrimaryFile = std::fs::File::create(&path)?.into();
-        write_file_header(spec, &mut file)?;
+        crate::file::write_file_header(spec, &mut file)?;
         let first_offset = file.stream_position()?;
         let first = prepare_stream_user_record(spec, &TestBlock(1), 4, first_offset, None, None)?;
         file.write_all(&first.bytes)?;

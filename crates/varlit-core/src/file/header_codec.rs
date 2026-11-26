@@ -1207,6 +1207,22 @@ fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
     Ok(())
 }
 
+/// The extension region a stream writer creates: the spec's own, plus the
+/// `VPUB` published-end block when the spec does not already carry it. A
+/// stream writer moves it after each durable sync; it is the boundary stream
+/// recovery verifies the sync-marker chain onward from, so a stream file
+/// needs no state sidecar. Files created by a native handle of the same
+/// format are unchanged, byte for byte.
+pub(crate) fn stream_file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
+    let mut payload = file_header_extensions(spec)?;
+    if !crate::published_end::applies_to(spec) {
+        payload.extend_from_slice(PUBLISHED_END_MAGIC);
+        payload.extend_from_slice(&crate::width::small32(PUBLISHED_END_PAYLOAD_LEN).to_le_bytes());
+        payload.extend_from_slice(&crate::published_end::empty_payload());
+    }
+    Ok(payload)
+}
+
 pub(crate) fn file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
     let mut payload = Vec::new();
     if let Some(compression) = variable_compression(spec)
@@ -2037,6 +2053,15 @@ pub(super) fn validate_file_header_extensions(spec: FormatSpec, extensions: &[u8
     }
     for block in &present {
         if !is_known_header_extension_magic(&block.magic) {
+            continue;
+        }
+        // A stream writer adds the published end to formats that do not
+        // declare one (see `stream_file_header_extensions`); every handle of
+        // the format accepts it, at its one length.
+        if &block.magic == PUBLISHED_END_MAGIC
+            && !crate::published_end::applies_to(spec)
+            && block.encoded.len() as u64 == crate::published_end::region_len()
+        {
             continue;
         }
         if !expected_blocks
