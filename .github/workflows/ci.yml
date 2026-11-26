@@ -852,6 +852,63 @@ jobs:
           cargo test --locked --target s390x-unknown-linux-gnu --workspace --all-features \
             --lib --tests --no-fail-fast
 
+  bench-harness:
+    # The cross-format harness is a separate workspace that only the manual
+    # Performance A/B workflow builds, so nothing caught it when it stopped
+    # linking on macOS. Build it on each operating system and run one tiny
+    # pass of two scenarios, so a platform assumption fails here, not on
+    # someone's machine. HDF5 is left out (it builds its C library with
+    # CMake); the Rust engines and SQLite are built and run.
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: bench harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: bench-harness
+          workspaces: tools/format-bench
+      - name: Build the harness
+        run: cargo build --release --locked --no-default-features --manifest-path tools/format-bench/Cargo.toml
+      - name: Run a tiny pass
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          "$PY" tools/format-bench/run.py --data-gb 0.02 --only oltp,mixed --formats varlit,sqlite \
+            --out "$RUNNER_TEMP/bench-harness"
+          "$PY" - "$RUNNER_TEMP/bench-harness/results.jsonl" <<'PYEOF'
+          import json, sys
+          rows = [json.loads(l) for l in open(sys.argv[1])]
+          failed = [r for r in rows if r.get("failed")]
+          assert rows and not failed, failed
+          print(rows[0]["platform"])
+          PYEOF
+      - name: Check that cold reads are cold
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          out="$(tools/format-bench/target/release/varlit-format-bench evict-check "$RUNNER_TEMP/evict-check")"
+          echo "$out"
+          "$PY" -c 'import json,sys; r=json.loads(sys.argv[1]); a=r["resident_after"]; assert a is None or a < 0.1, r' "$out"
+      - name: Run the memory-capped scenario (small shape)
+        env:
+          FB_GRID: small
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          "$PY" tools/format-bench/run.py --only grid --formats varlit --out "$RUNNER_TEMP/bench-grid"
+          "$PY" -c 'import json,sys; r=[json.loads(l) for l in open(sys.argv[1])]; assert r and not any(x.get("failed") for x in r), r; print(r[0].get("memcap"))' "$RUNNER_TEMP/bench-grid/results.jsonl"
+
   required-gate:
     # Keep this name stable: main protection requires this aggregate check.
     if: always() && github.repository == 'shim9610/varlit' && !github.event.repository.private
@@ -883,6 +940,7 @@ jobs:
       - source-contents
       - git-consumer
       - clean-archive
+      - bench-harness
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

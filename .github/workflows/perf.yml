@@ -1,7 +1,7 @@
 name: Performance A/B
 
 # Runs only when started by hand. It compares two library revisions with the
-# same harness on each runner (Linux and Windows): tools/format-bench/ab.py
+# same harness on each runner (Linux, macOS and Windows): tools/format-bench/ab.py
 # alternates the two builds, five runs each by default, and reports medians
 # with their spread. GitHub-hosted runners are shared machines whose disk and
 # fsync timings vary from run to run by 10-20 % or more, so the comparison is
@@ -47,6 +47,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            exe: ''
+          - os: macos-latest
             exe: ''
           - os: windows-latest
             exe: '.exe'

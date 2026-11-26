@@ -4,6 +4,7 @@ mod common;
 mod grid;
 mod mixed;
 mod oltp;
+mod platform;
 
 use common::Result;
 use std::path::PathBuf;
@@ -69,6 +70,7 @@ fn main() -> Result<()> {
         #[cfg(unix)]
         Some("tile-bufsweep") => cells::tile_proto::buffer_sweep(&PathBuf::from(&a[2]))?,
         Some("probe") => println!("{}", common::probe(&PathBuf::from(&a[2]))?),
+        Some("evict-check") => println!("{}", platform::evict_check(&PathBuf::from(&a[2]))?),
         Some("codec-probe") => mixed::codec_probe()?,
         Some("follow-cells") => cells::follower_main(&a[2], &PathBuf::from(&a[3]), a[4].parse()?)?,
         Some("follow-mixed") => {

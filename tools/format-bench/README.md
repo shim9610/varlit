@@ -46,6 +46,30 @@ the Blosc-zstd filter), Parquet (arrow-rs 60), Varlit from this checkout. Each
 engine has one writer thread; `mixed` adds producer threads, and `mixed`/`cells`
 followers are separate processes.
 
+## Platforms
+
+The harness builds and runs on Linux, macOS and Windows; CI builds it on all
+three and runs a small pass (`bench harness` jobs), so a platform assumption
+fails there. What differs by platform is recorded in every result under
+`platform`:
+
+| | Linux / FreeBSD | macOS | Windows |
+| --- | --- | --- | --- |
+| Cold reads (`cold_*`, `grid`): page cache evicted by | `posix_fadvise(DONTNEED)` | `mmap` + `msync(MS_INVALIDATE)` | a `FILE_FLAG_NO_BUFFERING` open, which purges the file's cached pages |
+| `grid` 4 GiB memory cap | process and page cache (systemd scope or cgroup, Linux) | none: macOS enforces no memory limit for an unprivileged process; reads still start evicted | process committed memory (Job Object); the page cache is system-wide, reads start evicted |
+| Peak RSS | `getrusage` | `getrusage` | `GetProcessMemoryInfo` |
+| Durable sync | `fdatasync`/`fsync` | `F_FULLFSYNC` for the Rust engines, and SQLite with `fullfsync` and `checkpoint_fullfsync` on, so every engine flushes the drive cache | `FlushFileBuffers` |
+
+`varlit-format-bench evict-check <dir>` writes a file, reads it, evicts it
+and reports the resident fraction before and after (`mincore` on Unix); CI
+runs it on every platform and requires the file to leave the cache.
+
+Without `fullfsync`, SQLite on macOS would commit with a plain `fsync(2)`,
+which does not flush the drive's write cache, while the Rust engines pay
+`F_FULLFSYNC`: the engines would be measured under different durability.
+Numbers from different operating systems or machines are not comparable row
+by row.
+
 ## How results are measured
 
 - Write time includes durable completion (fsync / `sync()` / commit).
@@ -68,7 +92,7 @@ Model output as climate and simulation codes write it: f32
 `[time 64, ensemble 8, variable 4, level 16, lat 256, lon 512]` (17.2 GB),
 written one time step at a time, growing the time axis (the file is not
 sized up front). run.py runs this scenario in a cgroup with
-`MemoryMax=4G` (page cache counts toward it; Linux harness only), so the data
+`MemoryMax=4G` (page cache counts toward it; Linux only, see [Platforms](#platforms)), so the data
 is about four times the memory the engine can use. `FB_GRID=small` selects a
 268 MB shape for smoke tests.
 
@@ -190,8 +214,11 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 
 ## Results
 
-The latest results, at 10 GB per scenario with the current harness and the
-hardware stated, are in
+[docs/benchmarks.md](../../docs/benchmarks.md) summarizes the purpose, method and
+latest results. The latest run is macOS (Apple M4, 1 GB per scenario,
+sidecar-free streams):
+[results-mac/20261127.md](results-mac/20261127.md). The latest Linux results,
+at 10 GB per scenario with the hardware stated, are in
 [results-10gb-20261118.md](results-10gb-20261118.md).
 The tables below are older runs on other hosts and smaller data. All of
 these results, the linked ones included, were measured while stream files

@@ -7,14 +7,19 @@ usage: run.py [--data-gb GB] [--repeats N] [--out DIR] [--only SCENARIO,...]
 
 DIR must be on a real disk (fsync costs matter); default target/runs. Every
 scenario is sized to --data-gb (default 10 GB of logical data). Scenarios in
-MEMCAP run under a memory cap (page cache included): systemd-run when there
-is a user systemd, else a cgroup v1 memory group (root).
+MEMCAP run under a memory cap: on Linux the process and its page cache
+(systemd-run when there is a user systemd, else a cgroup v1 memory group as
+root); on Windows the process's committed memory (a Job Object); on macOS none,
+since nothing there enforces one for an unprivileged process. Every result
+records the cap it ran under (`memcap`), and the scenario evicts its files
+from the page cache before it reads on every platform.
 """
 import argparse, json, os, shutil, statistics, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-BIN = HERE / "target/release/varlit-format-bench"
+BIN = HERE / "target/release" / ("varlit-format-bench" + (".exe" if os.name == "nt" else ""))
+LINUX = sys.platform.startswith("linux")
 
 # (label, scenario, extra environment, engines). Each engine runs with its
 # layout for that data: the first of its candidates (see README).
@@ -36,16 +41,78 @@ MEMCAP = {"grid": "4G"}
 CGROUP = Path("/sys/fs/cgroup/memory/fb-bench")
 
 
+UNITS = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30}
+
+
 def capped(cmd, limit):
-    """`cmd` run under a memory cap of `limit` (e.g. "4G")."""
+    """`cmd` run under a memory cap of `limit` (e.g. "4G"), and the cap it got.
+
+    Linux caps the process and its page cache (systemd scope or cgroup).
+    Windows caps the process's committed memory with a Job Object (see
+    `run`); the page cache is the system's there, and the scenario evicts its
+    files before it reads. macOS gives an unprivileged process no enforceable
+    memory limit (no cgroups, and `RLIMIT_RSS`/`RLIMIT_AS` are not enforced),
+    so it runs uncapped and relies on the same eviction."""
+    if sys.platform == "win32":
+        return cmd, f"{limit} job"
+    if not LINUX:
+        return cmd, "none"
     if shutil.which("systemd-run") and subprocess.run(
             ["systemd-run", "--user", "--scope", "-q", "true"], capture_output=True).returncode == 0:
         return ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={limit}",
-                "-p", "MemorySwapMax=0"] + cmd
-    units = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30}
+                "-p", "MemorySwapMax=0"] + cmd, limit
     CGROUP.mkdir(exist_ok=True)
-    (CGROUP / "memory.limit_in_bytes").write_text(str(int(limit[:-1]) * units[limit[-1]]))
-    return ["sh", "-c", f'echo $$ > {CGROUP}/cgroup.procs && exec "$@"', "sh"] + cmd
+    (CGROUP / "memory.limit_in_bytes").write_text(str(int(limit[:-1]) * UNITS[limit[-1]]))
+    return ["sh", "-c", f'echo $$ > {CGROUP}/cgroup.procs && exec "$@"', "sh"] + cmd, limit
+
+
+def run(cmd, env, cap):
+    """Runs `cmd` like `subprocess.run(capture_output=True, text=True)`; with a
+    Windows job cap (`cap` ending in " job") the child is put in a Job Object
+    whose per-process committed-memory limit is the cap."""
+    if not (cap and cap.endswith(" job")):
+        return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class BASIC(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class IO(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in ("ReadOperationCount", "WriteOperationCount",
+                    "OtherOperationCount", "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class EXTENDED(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", BASIC), ("IoInfo", IO),
+                    ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x100
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    ExtendedLimitInformation = 9
+    limit = cap.split()[0]
+    info = EXTENDED()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    info.ProcessMemoryLimit = int(limit[:-1]) * UNITS[limit[-1]]
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    job = k32.CreateJobObjectW(None, None)
+    if not job or not k32.SetInformationJobObject(wintypes.HANDLE(job), ExtendedLimitInformation,
+                                                  ctypes.byref(info), ctypes.sizeof(info)):
+        raise OSError(ctypes.get_last_error(), "job object for the memory cap")
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    try:
+        if not k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(p._handle)):
+            p.kill()
+            raise OSError(ctypes.get_last_error(), "assign the benchmark to its job object")
+        out, err = p.communicate()
+    finally:
+        k32.CloseHandle(wintypes.HANDLE(job))
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 def control(out):
@@ -79,6 +146,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     results_path = out / "results.jsonl"
     rep = 0
+    warned = {}
     while rep < a.repeats:
         if a.gate:
             wait_healthy(out)
@@ -93,10 +161,16 @@ def main():
                 shutil.rmtree(d, ignore_errors=True)
                 env = dict(os.environ, FB_DATA_GB=str(a.data_gb), **extra)
                 cmd = [str(BIN), "bench", scen, fmt, str(d)]
+                cap = None
                 if scen in MEMCAP:
-                    cmd = capped(cmd, MEMCAP[scen])
+                    cmd, cap = capped(cmd, MEMCAP[scen])
+                    if cap == "none" and not warned.get(scen):
+                        warned[scen] = True
+                        print(f"note: {scen} runs without a memory cap on {sys.platform} (none is enforceable "
+                              "there); its files are evicted from the page cache before it reads",
+                              file=sys.stderr, flush=True)
                 t = time.time()
-                p = subprocess.run(cmd, capture_output=True, text=True, env=env)
+                p = run(cmd, env, cap)
                 shutil.rmtree(d, ignore_errors=True)
                 if p.returncode != 0:
                     print(f"FAIL {label} {fmt} rep{rep}\n{p.stderr[-2000:]}", file=sys.stderr, flush=True)
@@ -105,6 +179,8 @@ def main():
                 else:
                     r = json.loads(p.stdout.strip().splitlines()[-1])
                     r.update(label=label, rep=rep, data_gb=a.data_gb)
+                if cap is not None:
+                    r["memcap"] = cap
                 batch.append(r)
                 with results_path.open("a") as f:
                     f.write(json.dumps(r) + "\n")

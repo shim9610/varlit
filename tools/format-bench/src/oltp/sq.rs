@@ -18,7 +18,7 @@ fn setup(c: &Connection, cand: &str) -> Result<()> {
 
 pub struct W(Connection);
 pub fn create(p: &Path, cand: &str) -> Result<Box<dyn Oltp>> {
-    let c = Connection::open(p)?;
+    let c = crate::platform::sqlite_open(p)?;
     let page = if cand.starts_with("p16384") {
         16384
     } else {

@@ -14,7 +14,7 @@ pub struct W {
     started: bool,
 }
 pub fn create(p: &Path, cand: &str) -> Result<Box<dyn Writer>> {
-    let c = Connection::open(p)?;
+    let c = crate::platform::sqlite_open(p)?;
     let page = if cand.starts_with("p65536") {
         65536
     } else {

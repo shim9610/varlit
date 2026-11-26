@@ -16,7 +16,9 @@ Every run executes inside a 4 GiB memory cgroup (page cache included) and its
 data directory is deleted as soon as the metrics are read. With a systemd user
 manager the cgroup is a transient scope; without one, set FB_CGROUP to an
 existing cgroup directory whose memory limit is 4 GiB (cgroup v1 memory
-controller or v2) and each run is moved into it. The effort of each
+controller or v2) and each run is moved into it. Off Linux there is no cap that
+counts the page cache: runs are uncapped there and each result records
+`memcap: none`. The effort of each
 chosen adapter (non-comment lines, structures the application had to build) is
 recorded next to the results.
 """
@@ -24,7 +26,8 @@ import argparse, json, os, shutil, statistics, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-BIN = HERE / "target/release/varlit-format-bench"
+BIN = HERE / "target/release" / ("varlit-format-bench" + (".exe" if os.name == "nt" else ""))
+LINUX = sys.platform.startswith("linux")
 MEMCAP = "4G"
 GATE = 0.7  # probe seconds; healthy disk ~0.48 s
 OBJECTIVE = {"cells": ("batches_per_s", "max"), "oltp": ("total_s", "min"), "oltp-sparse": ("total_s", "min"),
@@ -73,7 +76,11 @@ def run_one(scen, engine, cand, env, out, timeout):
     shutil.rmtree(d, ignore_errors=True)
     unit = f"fb-{os.getpid()}-{int(time.time() * 1000)}"
     cgroup = os.environ.get("FB_CGROUP")
-    if cgroup:
+    uncapped = not LINUX
+    if uncapped:
+        cgroup = None
+        cmd = [str(BIN), "bench", scen, engine, str(d)]
+    elif cgroup:
         # Join the capped cgroup, then become the benchmark process.
         oom_before = cgroup_ooms(cgroup)
         cmd = ["sh", "-c", 'echo $$ > "$0/cgroup.procs" && exec "$@"', cgroup,
@@ -90,7 +97,7 @@ def run_one(scen, engine, cand, env, out, timeout):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, env=e, timeout=timeout)
     except subprocess.TimeoutExpired:
-        if not cgroup:
+        if not cgroup and not uncapped:
             subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], check=False)
         return {"failed": f"timeout {timeout}s"}
     finally:
@@ -99,14 +106,15 @@ def run_one(scen, engine, cand, env, out, timeout):
     if p.returncode != 0:
         lines = [l for l in p.stderr.strip().splitlines() if l.strip()]
         why = lines[-1] if lines else f"exit {p.returncode}"
-        res = ("oom-kill" if cgroup_ooms(cgroup) > oom_before else "") if cgroup else subprocess.run(
-            ["systemctl", "--user", "show", "-p", "Result", "--value", f"{unit}.scope"],
-            capture_output=True, text=True).stdout.strip()
+        res = ("" if uncapped else
+               ("oom-kill" if cgroup_ooms(cgroup) > oom_before else "") if cgroup else subprocess.run(
+                   ["systemctl", "--user", "show", "-p", "Result", "--value", f"{unit}.scope"],
+                   capture_output=True, text=True).stdout.strip())
         if res == "oom-kill":
             why = f"killed under memory pressure (cap {MEMCAP}, oom-kill)"
         elif p.returncode in (-9, 137):
             why = f"killed (signal 9): {why}"
-        if not cgroup:
+        if not cgroup and not uncapped:
             subprocess.run(["systemctl", "--user", "reset-failed", f"{unit}.scope"], capture_output=True)
         return {"failed": why, "stderr": p.stderr[-3000:]}
     r = json.loads(p.stdout.strip().splitlines()[-1])
@@ -114,6 +122,7 @@ def run_one(scen, engine, cand, env, out, timeout):
     if fc:
         r["first_corrupt"] = fc[0]
     r["wall_s"] = time.time() - t
+    r["memcap"] = "none" if uncapped else MEMCAP
     return r
 
 

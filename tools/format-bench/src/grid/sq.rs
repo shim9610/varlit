@@ -11,7 +11,7 @@ pub struct Wr {
     buf: Vec<u8>,
 }
 pub fn create(p: &Path, ck: Ck) -> Result<Box<dyn GridWrite>> {
-    let c = Connection::open(p)?;
+    let c = crate::platform::sqlite_open(p)?;
     c.execute_batch(
         "PRAGMA page_size=32768; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
          CREATE TABLE chunks(id INTEGER PRIMARY KEY, data BLOB NOT NULL);",

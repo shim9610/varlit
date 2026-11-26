@@ -493,6 +493,9 @@ Further required jobs guard the dependency policy and what is published:
 - **clean source archive** unpacks `git archive HEAD` (tracked files only) and
   checks the workspace and the fuzz workspace from it, so a build that depends
   on an untracked file fails.
+- **bench harness** builds `tools/format-bench` on Linux, macOS and Windows
+  and runs a small pass of two scenarios on each, so a platform assumption in
+  the harness fails in CI.
 - The `fmt` job also runs `scripts/check_runtime_dependencies.py` and
   `scripts/check_repository_hygiene.py`.
 

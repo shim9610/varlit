@@ -20,6 +20,8 @@ release. The last published version is 0.12.1.
 
 Start with the [quickstart](https://github.com/shim9610/varlit/blob/main/docs/quickstart.md), which writes grouped samples
 through the stream API. See [API changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md) when upgrading.
+How Varlit compares with SQLite, HDF5 and Parquet, and why it is measured that
+way, is on the [benchmarks](https://github.com/shim9610/varlit/blob/main/docs/benchmarks.md) page.
 
 ## Choose the storage path
 
@@ -86,6 +88,8 @@ allocation and durability depend on the actual filesystem. See
 
 ## Performance and verification
 
+[Benchmarks](https://github.com/shim9610/varlit/blob/main/docs/benchmarks.md) states the purpose, the method and the latest
+results, including where Varlit is behind.
 [`tools/format-bench`](tools/format-bench/README.md) compares Varlit with SQLite,
 HDF5 and Parquet on grid, OLTP, analytics, mixed-stream and cell workloads, and
 its `ab.py` compares two Varlit revisions. The manual *Performance A/B*
