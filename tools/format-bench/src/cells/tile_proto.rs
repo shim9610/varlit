@@ -261,6 +261,11 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
 
     /// Reopens after a crash: replays every whole journal frame of the
     /// current epoch into the main file, makes it durable, resets the journal.
+    /// The benchmark always creates a fresh file; the crash tests reopen.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the crash tests reopen a tile file")
+    )]
     pub fn open(p: &Path) -> Result<Self> {
         let (jp, lp) = paths(p);
         let main = OpenOptions::new().read(true).write(true).open(p)?;
