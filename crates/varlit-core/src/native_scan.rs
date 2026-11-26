@@ -312,7 +312,7 @@ fn open_follow_marker(path: &Path) -> Option<File> {
 /// several 4 KiB pages each, never reclaimed. A sorted batch touches each
 /// leaf once.
 pub(crate) struct SequenceSet {
-    index: crate::disk_index::ScratchIndex,
+    index: crate::scratch_index::ScratchIndex,
     pending: std::collections::BTreeSet<u64>,
 }
 
@@ -332,7 +332,7 @@ const SEQUENCE_BATCH: usize = 64 * 1024;
 impl SequenceSet {
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {
-            index: crate::disk_index::ScratchIndex::new(0)?,
+            index: crate::scratch_index::ScratchIndex::new(0)?,
             pending: std::collections::BTreeSet::new(),
         })
     }

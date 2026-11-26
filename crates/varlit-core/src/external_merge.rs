@@ -1,7 +1,7 @@
 //! Budgeted keyed merge. State, encoded bytes and ordering stay in bounded
 //! owner-local buffers; overflow moves them to disposable private files.
 use super::*;
-use crate::disk_index::ScratchIndex;
+use crate::scratch_index::ScratchIndex;
 use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 

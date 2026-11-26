@@ -1819,53 +1819,6 @@ pub(super) fn parse_file_header_extension_blocks(
     Ok(blocks)
 }
 
-/// Blank out the header bytes a file is allowed to change after create.
-///
-/// `prefix` is the file's leading bytes from offset 0 — any length, so a caller
-/// holding a fixed window shorter than the header can pass what it has.
-/// `header_len` and `extensions` are what `read_file_header_parts` returned for
-/// the same file.
-///
-/// This exists for the two places that bind a *derived* artefact to the primary
-/// file by hashing its leading bytes. Both were written when the header was
-/// written exactly once, and both say so out loud; an updatable region falsifies
-/// that, and without this every in-place update would permanently invalidate
-/// every published sidecar for the file.
-///
-/// **Only the mutable block's payload is blanked.** Its magic and its declared
-/// length stay in the hash, so a region that changed size, changed identity or
-/// disappeared is still caught — which is the property that matters, because
-/// those are the changes that move `append_log_start` and with it every record
-/// offset. What stops being detected is a change to the table's *contents*,
-/// which is exactly what the option exists to make legal.
-///
-/// Returns the number of bytes it blanked, so a caller can assert it did
-/// something.
-pub(crate) fn blank_mutable_header_bytes(
-    prefix: &mut [u8],
-    header_len: u64,
-    extensions: &[u8],
-) -> Result<u64> {
-    // Every mutable block, not the first. With two of them, blanking one left
-    // the other's bytes in the identity hash, and a single flip there would
-    // permanently invalidate every published sidecar for the file — the exact
-    // defect this function exists to prevent, reintroduced by a second block.
-    let mut blanked = 0u64;
-    for (_, extent) in mutable_header_block_extents(header_len, extensions)? {
-        let Ok(start) = usize::try_from(extent.payload_offset) else {
-            continue;
-        };
-        // A caller's window may end inside the region, or before it starts.
-        let Some(window) = prefix.get_mut(start..) else {
-            continue;
-        };
-        let take = extent.payload_len.min(window.len());
-        window[..take].fill(0);
-        blanked = blanked.saturating_add(take as u64);
-    }
-    Ok(blanked)
-}
-
 /// Where the mutable extension block's payload lives, as a file offset.
 ///
 /// **One derivation, two callers**: the blanking above, which has to skip these

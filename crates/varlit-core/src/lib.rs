@@ -24,7 +24,7 @@ mod decode_state;
 mod diagnostics;
 mod primary_file;
 
-mod disk_index;
+mod scratch_index;
 mod error;
 mod fallible;
 mod file;
@@ -118,10 +118,6 @@ pub use diagnostics::{
 };
 
 pub use anchor::{Anchor, AnchorLayout, AnchorPolicy};
-pub use disk_index::{
-    DiskIndexBatchOptions, DiskIndexConfirmPolicy, DiskIndexDigest, DiskIndexError, DiskIndexMode,
-    DiskIndexOptions, IndexCompaction, SnapshotStatus,
-};
 pub use error::{AllocationFailureContext, Error, Result};
 pub use fallible::{TryClone, try_box};
 pub use fallible::{try_box_uninit, try_box_with};
@@ -185,9 +181,8 @@ pub use scan_control::{
 pub(crate) use snapshot::SnapshotFile;
 
 pub use stream::{
-    BatchAppendError, BatchAppendInfo, BatchOptions, StreamBootstrapReport, StreamEvents,
-    StreamOptions, StreamResidentState, StreamingBlocks, VarlitStreamReader, VarlitStreamWriter,
-    bootstrap_stream_checkpoint, bootstrap_stream_checkpoint_with_progress,
+    BatchAppendError, BatchAppendInfo, BatchOptions, SnapshotStatus, StreamEvents, StreamOptions,
+    StreamResidentState, StreamingBlocks, VarlitStreamReader, VarlitStreamWriter,
 };
 pub use traits::{
     VarlitBlock, VarlitKey, VarlitKeyedBlock, VarlitMatrixBlock, VarlitMigration,

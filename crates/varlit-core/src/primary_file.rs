@@ -206,7 +206,7 @@ impl PrimaryFile {
     /// in the header, no barrier: a slot torn by a crash fails its checksum
     /// and leaves the previous one.
     pub(crate) fn write_published_end(&mut self, end: Option<u64>) -> Result<()> {
-        use crate::published_end::{ACTIVE, SLOT_LEN, Slot, encode_slot, slot_of_seq};
+        use crate::published_end::{ACTIVE, SLOT_LEN, Slot, encode_slot};
         let Some(mut published) = self.published else {
             return Ok(());
         };
@@ -224,7 +224,9 @@ impl PrimaryFile {
             seq,
             flags: if end.is_some() { ACTIVE } else { 0 },
         });
-        let at = published.slots_at + (slot_of_seq(seq) * SLOT_LEN) as u64;
+        // The slot after the newest: a torn write leaves the newest standing.
+        let slot = crate::publication_protocol::slot_after(published.seq);
+        let at = published.slots_at + (slot * SLOT_LEN) as u64;
         // The header precedes every anchor: a physical write.
         write_all_at(&self.file, at, &bytes)?;
         published.seq = seq;
