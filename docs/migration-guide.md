@@ -16,8 +16,10 @@ Files: native files need no conversion. In a format with data checksums,
 new record flag, which 0.12.x refuses. Matrix storage is now tiled and a
 matrix spec's schema hash includes its tile shape, so matrix files written by
 0.12.x (layout `VMAT` v5) are refused (with `SchemaHashMismatch` when the
-format declares a schema hash); recreate them from their source. Stream
-sidecars written by 0.13.0 cannot be read by 0.12.x. Files written by a 0.13
+format declares a schema hash); recreate them from their source. Stream files
+written by 0.13.0 keep their durable boundary in a header block instead of a
+`.vks` sidecar (see [Stream state sidecar removed](#stream-state-sidecar-removed));
+0.12.x is not tested against them. Files written by a 0.13
 pre-release are not guaranteed to open with 0.13.0; matrix files from an
 earlier pre-release are already refused with `InvalidMatrixLayout`. Rewrite
 them from their source with the release before keeping them. Indexed files (a native
@@ -127,6 +129,39 @@ opens. Check those call sites too, not only direct `*_lazy` calls.
 Strict lazy open selects header tails when declared, otherwise the trailing
 digest. See [lazy-open changes](api-changes.md#lazy-open-and-explicit-scan-selection).
 
+### Stream state sidecar removed
+
+A stream file no longer has a `<file>.vks` companion. Its durable boundary is
+in the file: each `sync()` writes its end into a `VPUB` header block, readers
+read that end and verify the sync markers after it, and a writer resumes from
+the newest anchor's stream summary before it. Nothing to migrate on disk:
+
+- Stream files written by earlier releases open as they are. With no published
+  end they are framed from the header once per open; the next writer open
+  publishes nothing into them (they have no `VPUB` block), so rewrite a large
+  old stream with this release if open time matters.
+- An existing `.vks` file is ignored. Delete it at any time.
+
+In code:
+
+- Drop `state: DiskIndexOptions { .. }` from `StreamOptions`; only `limits`
+  remains.
+- Replace `restore_stream_writer` / `restore_checkpoint_and_open` with
+  `open_stream_writer` / `VarlitStreamWriter::open`, which recovers: it keeps
+  every acknowledged sync and cuts what follows the last one.
+- Delete calls to `bootstrap_stream_checkpoint[_with_progress]`,
+  `compact_index` and `release_snapshot`; there is nothing to build, compact or
+  release.
+- `snapshot_status()` returns `SnapshotStatus { committed_len, records_behind,
+  bytes_behind }`: what `follow()` would adopt now. Code that read
+  `generation`, `confirmed_generation` or `pinned` has no equivalent.
+- Remove matches on `Error::DiskIndex`, `Error::IndexBusy` and
+  `Error::PublishedButIndexStale`; stream opens never report lock contention
+  between readers, and appends report no index failure.
+- `VarlitStreamWriter::create` can return `PublishedButParentSyncPending`
+  (naming the stream file) when the file is complete but its directory entry
+  could not be synced; a plain `open` resumes it.
+
 ### Indexed primary removed
 
 The indexed primary is removed: `VarlitIndexedWriter`, `VarlitIndexedReader`,
@@ -161,8 +196,8 @@ In code:
   resident writers where the application looks records up by key. In a
   `keyed_offset_chain` format the stream writer generates no method for a keyed
   block.
-- Replace `rebuild_disk_index` with `bootstrap_stream_checkpoint` for stream
-  files.
+- `rebuild_disk_index` has no replacement: stream files need no rebuild
+  (see [Stream state sidecar removed](#stream-state-sidecar-removed)).
 - Finite keys (`key_values`, `key_domain`) still generate their key enum and
   work with the resident keyed API.
 - A stream writer's Immediate policy counters now start at the first caller
@@ -246,8 +281,7 @@ there is no automatic migration path for these surfaces:
   `decode_metadata` checks the record length before magic and version and the
   record grew from 260 to 300 bytes; a sidecar published against an older plan
   digest is refused as stale. Both recovered with `rebuild_disk_index`, which
-  0.13.0 removed; a stream `.vks` recovers by removal and
-  `bootstrap_stream_checkpoint`. This is
+  0.13.0 removed together with the sidecars themselves. This is
   hypothetical: `disk_index.rs` is new in 0.4.0, so no released version wrote a
   v2 sidecar.
 - Decoding now charges the materialization budget 8 bytes for each distinct
