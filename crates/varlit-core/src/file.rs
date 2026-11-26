@@ -1678,6 +1678,7 @@ pub use record_view::{
 };
 
 pub(crate) use header_codec::file_header_extensions;
+pub(crate) use header_codec::published_end_slots_at;
 
 pub(crate) use header_codec::header_tails_region_len;
 

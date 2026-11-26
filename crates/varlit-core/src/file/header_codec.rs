@@ -1947,7 +1947,7 @@ pub(super) fn mutable_header_block_extents(
 /// One named mutable block's extent, for a writer that needs to hit exactly it.
 /// Header offset of the `VPUB` slots, when the file has a published end
 /// block of this build's geometry.
-pub(super) fn published_end_slots_at(header_len: u64, extensions: &[u8]) -> Result<Option<u64>> {
+pub(crate) fn published_end_slots_at(header_len: u64, extensions: &[u8]) -> Result<Option<u64>> {
     let Some(extent) = mutable_header_block_extent(header_len, extensions, PUBLISHED_END_MAGIC)?
     else {
         return Ok(None);

@@ -180,8 +180,57 @@ impl PrimaryFile {
         self.published
     }
 
-    pub(crate) fn set_writer_published(&mut self, published: WriterPublished) {
+    /// Takes over the `VPUB` slots at `slots_at`: later
+    /// [`Self::write_published_end`] calls continue after the newest slot.
+    pub(crate) fn adopt_writer_published(&mut self, slots_at: u64) -> Result<()> {
+        use crate::published_end::{ACTIVE, SLOT_LEN, decode_slot};
+        let mut slots = [0u8; 2 * SLOT_LEN];
+        read_exact_at(&self.file, slots_at, &mut slots)?;
+        let mut seq = 0u64;
+        let mut end = None;
+        for bytes in slots.as_chunks::<SLOT_LEN>().0 {
+            if let Some(slot) = decode_slot(bytes)
+                && slot.seq >= seq
+            {
+                seq = slot.seq;
+                end = (slot.flags & ACTIVE != 0).then_some(slot.end);
+            }
+        }
+        self.published = Some(WriterPublished { slots_at, seq, end });
+        Ok(())
+    }
+
+    /// Writes the slot after the newest: publishing `Some(end)`, or
+    /// withdrawing with `None`. Nothing when the handle owns no `VPUB` block
+    /// or the newest slot already says so. One positional write of 24 bytes
+    /// in the header, no barrier: a slot torn by a crash fails its checksum
+    /// and leaves the previous one.
+    pub(crate) fn write_published_end(&mut self, end: Option<u64>) -> Result<()> {
+        use crate::published_end::{ACTIVE, SLOT_LEN, Slot, encode_slot, slot_of_seq};
+        let Some(mut published) = self.published else {
+            return Ok(());
+        };
+        if published.end == end {
+            return Ok(());
+        }
+        let seq = published
+            .seq
+            .checked_add(1)
+            .ok_or(crate::Error::LengthOverflow {
+                value: published.seq,
+            })?;
+        let bytes = encode_slot(Slot {
+            end: end.unwrap_or(0),
+            seq,
+            flags: if end.is_some() { ACTIVE } else { 0 },
+        });
+        let at = published.slots_at + (slot_of_seq(seq) * SLOT_LEN) as u64;
+        // The header precedes every anchor: a physical write.
+        write_all_at(&self.file, at, &bytes)?;
+        published.seq = seq;
+        published.end = end;
         self.published = Some(published);
+        Ok(())
     }
 
     /// Makes [`Self::len`] stop at the published end the `VPUB` slots at

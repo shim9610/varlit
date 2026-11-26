@@ -1124,7 +1124,9 @@ impl VarlitStreamWriter {
         lock.bind_native(file.raw(), &path)?;
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
-        write_stream_file_header(spec, &mut file)?;
+        let header_extensions = write_stream_file_header(spec, &mut file)?;
+        let header_len = file.stream_position()?;
+        adopt_published_end(&mut file, header_len, &header_extensions)?;
         let snapshot = SnapshotFile::new(file.try_clone()?)?;
         let mut writer = Self {
             spec,
@@ -1238,7 +1240,8 @@ impl VarlitStreamWriter {
             crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
             None,
         );
-        let header_len = read_primary_header(spec, &mut file)?.0;
+        let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        adopt_published_end(&mut file, header_len, &header_extensions)?;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;
         let physical_snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, physical_len)?;
@@ -1297,7 +1300,8 @@ impl VarlitStreamWriter {
             crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
             None,
         );
-        let header_len = read_primary_header(spec, &mut file)?.0;
+        let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        adopt_published_end(&mut file, header_len, &header_extensions)?;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;
         let physical_snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, physical_len)?;
@@ -1553,6 +1557,13 @@ impl VarlitStreamWriter {
                 }
                 CommitStep::Publish => {
                     let eof = self.snapshot.len();
+                    // The end of this sync, after its barrier: the durable
+                    // boundary recovery verifies the marker chain onward
+                    // from. One 24-byte header write, made durable by the
+                    // next barrier; until then a crash leaves the previous
+                    // slot, an earlier boundary, which only lengthens the
+                    // walk. Best-effort for the same reason.
+                    let _ = self.file.write_published_end(Some(eof));
                     let records = self.record_count;
                     let due = self.state.as_ref().is_some_and(|state| {
                         state.dirty
@@ -2020,6 +2031,15 @@ impl VarlitStreamWriter {
 fn refuse_matrix_stream(spec: FormatSpec) -> Result<()> {
     if spec.has_matrix_blocks() || spec.keyed_storage.is_some() {
         return Err(Error::StreamingUnsupported);
+    }
+    Ok(())
+}
+
+/// Lets a stream writer's file handle publish into the file's `VPUB` block,
+/// when it has one (every stream-created file does; older ones do not).
+fn adopt_published_end(file: &mut PrimaryFile, header_len: u64, extensions: &[u8]) -> Result<()> {
+    if let Some(slots_at) = crate::file::published_end_slots_at(header_len, extensions)? {
+        file.adopt_writer_published(slots_at)?;
     }
     Ok(())
 }
@@ -3090,6 +3110,37 @@ mod tests {
     }
 
     #[test]
+    fn each_sync_publishes_its_end_and_a_native_writer_withdraws_it() -> Result<()> {
+        use crate::published_end::{Published, SLOT_LEN};
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("published.varlit");
+        let spec = spec(IndexPolicy::ScanOnOpen, CommitPolicy::None);
+        let published = |path: &Path| -> Result<Published> {
+            let mut file = PrimaryFile::new(std::fs::File::open(path)?, None);
+            let (header_len, extensions) = read_primary_header(spec, &mut file)?;
+            let slots_at = crate::file::published_end_slots_at(header_len, &extensions)?
+                .expect("a stream file carries the published end");
+            let mut slots = [0u8; 2 * SLOT_LEN];
+            crate::primary_file::read_exact_at(file.raw(), slots_at, &mut slots)?;
+            Ok(crate::published_end::read(&slots))
+        };
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        assert_eq!(published(&path)?, Published::Unbounded);
+        for round in 0..3u64 {
+            writer.push_info(&TestBlock(round))?;
+            writer.sync()?;
+            assert_eq!(published(&path)?, Published::Bounded(writer.snapshot.len()));
+        }
+        drop(writer);
+        // A native writer of a format without transaction markers bounds no
+        // reader: it withdraws the stream writer's end when it takes over.
+        let native = crate::VarlitFile::open(spec, &path)?;
+        assert_eq!(published(&path)?, Published::Unbounded);
+        drop(native);
+        Ok(())
+    }
+
+    #[test]
     fn stream_writer_matches_resident_native_bytes() -> Result<()> {
         #[allow(unused_mut)]
         let mut policies = vec![
@@ -3139,7 +3190,10 @@ mod tests {
                 let block = TestBlock(value);
                 let (r, s) = (resident.push_info(&block)?, stream.push_info(&block)?);
                 assert_eq!(r.sequence, s.sequence);
-                assert_eq!(r.record_offset - resident_header, s.record_offset - stream_header);
+                assert_eq!(
+                    r.record_offset - resident_header,
+                    s.record_offset - stream_header
+                );
                 assert_eq!(r.payload_len, s.payload_len);
             }
             resident.flush()?;
