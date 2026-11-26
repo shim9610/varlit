@@ -214,8 +214,11 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 
 ## Results
 
-The latest results, at 10 GB per scenario with the current harness and the
-hardware stated, are in
+[docs/benchmarks.md](../../docs/benchmarks.md) summarizes the purpose, method and
+latest results. The latest run is macOS (Apple M4, 1 GB per scenario,
+sidecar-free streams):
+[results-mac/20261127.md](results-mac/20261127.md). The latest Linux results,
+at 10 GB per scenario with the hardware stated, are in
 [results-10gb-20261118.md](results-10gb-20261118.md).
 The tables below are older runs on other hosts and smaller data. All of
 these results, the linked ones included, were measured while stream files
