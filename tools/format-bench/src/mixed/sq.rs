@@ -80,7 +80,7 @@ pub struct W {
     wal_bytes: usize,
 }
 pub fn create(p: &Path) -> Result<Box<dyn AcqWriter>> {
-    let c = Connection::open(p)?;
+    let c = crate::platform::sqlite_open(p)?;
     c.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=0;
          CREATE TABLE a(w INTEGER PRIMARY KEY, t0 INTEGER, data BLOB);

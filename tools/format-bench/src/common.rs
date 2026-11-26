@@ -1,38 +1,9 @@
 //! Shared helpers: deterministic data, timing, file accounting, metric output.
-#[cfg(unix)]
-use std::ffi::{c_int, c_long};
 use std::{collections::BTreeMap, path::Path, time::Instant};
 
+pub use crate::platform::{evict, mono_ns, peak_rss_mb, process_cpu_s};
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-
-#[cfg(unix)]
-#[repr(C)]
-struct Timespec {
-    sec: c_long,
-    nsec: c_long,
-}
-#[cfg(unix)]
-unsafe extern "C" {
-    fn clock_gettime(id: c_int, t: *mut Timespec) -> c_int;
-}
-
-/// CLOCK_MONOTONIC, comparable across processes on the same host.
-#[cfg(unix)]
-pub fn mono_ns() -> u64 {
-    let mut t = Timespec { sec: 0, nsec: 0 };
-    assert_eq!(unsafe { clock_gettime(1, &mut t) }, 0);
-    t.sec as u64 * 1_000_000_000 + t.nsec as u64
-}
-
-/// Elsewhere the precise wall clock (on Windows, the system time with
-/// sub-microsecond resolution), the clock every process of a run shares.
-/// A clock adjustment during a run would show in its latencies.
-#[cfg(not(unix))]
-pub fn mono_ns() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64)
-}
 
 pub fn splitmix(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -111,7 +82,10 @@ impl Metrics {
         self.0.insert(k.to_string(), v.into());
     }
     pub fn print(&self) {
-        println!("{}", serde_json::to_string(&self.0).unwrap());
+        let mut out = self.0.clone();
+        out.entry("platform".to_string())
+            .or_insert_with(crate::platform::caveats);
+        println!("{}", serde_json::to_string(&out).unwrap());
     }
 }
 
@@ -121,35 +95,6 @@ pub fn percentile(sorted: &[f64], p: f64) -> f64 {
     }
     let i = ((sorted.len() - 1) as f64 * p).round() as usize;
     sorted[i]
-}
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int) -> c_int;
-}
-
-/// Without `posix_fadvise` (Windows) nothing is evicted: "cold" reads there
-/// read from the cache.
-#[cfg(not(unix))]
-pub fn evict(_root: &Path) {}
-
-/// Evict every file under `root` from the page cache (clean pages only, so
-/// files are fsynced first). Gives cold-read numbers without root privileges.
-#[cfg(unix)]
-pub fn evict(root: &Path) {
-    use std::os::fd::AsRawFd;
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            evict(&p);
-        } else if let Ok(f) = std::fs::OpenOptions::new().read(true).open(&p) {
-            let _ = f.sync_all();
-            unsafe { posix_fadvise(f.as_raw_fd(), 0, 0, 4) }; // POSIX_FADV_DONTNEED
-        }
-    }
 }
 
 /// `<format>+trusted` selects `ReadValidation::TRUSTED` for every Varlit
@@ -175,20 +120,6 @@ pub fn vl_stream(mut o: varlit::StreamOptions) -> varlit::StreamOptions {
     o.limits = o.limits.overlay(vl_limits());
     o.state = vl_dio(o.state);
     o
-}
-
-/// Not measured off Unix: reported as 0.
-#[cfg(not(unix))]
-pub fn process_cpu_s() -> f64 {
-    0.0
-}
-
-/// CPU seconds consumed by this process (all threads).
-#[cfg(unix)]
-pub fn process_cpu_s() -> f64 {
-    let mut t = Timespec { sec: 0, nsec: 0 };
-    assert_eq!(unsafe { clock_gettime(2, &mut t) }, 0); // CLOCK_PROCESS_CPUTIME_ID
-    t.sec as f64 + t.nsec as f64 / 1e9
 }
 
 /// A keyed read into a fresh caller-owned value; `what` names a missing key.
@@ -238,23 +169,6 @@ pub fn probe(dir: &Path) -> Result<f64> {
     drop(f);
     std::fs::remove_file(&p)?;
     Ok(s)
-}
-
-/// Peak resident set of this process (VmHWM), MiB.
-pub fn peak_rss_mb() -> u64 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("VmHWM:"))
-                .map(str::to_owned)
-        })
-        .and_then(|l| {
-            l.split_whitespace()
-                .nth(1)
-                .and_then(|v| v.parse::<u64>().ok())
-        })
-        .map_or(0, |kb| kb / 1024)
 }
 
 /// Logical data size every scenario is scaled to, in GB (10^9 bytes), from

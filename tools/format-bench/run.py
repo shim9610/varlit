@@ -7,14 +7,17 @@ usage: run.py [--data-gb GB] [--repeats N] [--out DIR] [--only SCENARIO,...]
 
 DIR must be on a real disk (fsync costs matter); default target/runs. Every
 scenario is sized to --data-gb (default 10 GB of logical data). Scenarios in
-MEMCAP run under a memory cap (page cache included): systemd-run when there
-is a user systemd, else a cgroup v1 memory group (root).
+MEMCAP run under a memory cap (page cache included) on Linux: systemd-run when
+there is a user systemd, else a cgroup v1 memory group (root). Other platforms
+have no cap that counts the page cache, so those scenarios run uncapped there
+and every result records the cap it ran under (`memcap`).
 """
 import argparse, json, os, shutil, statistics, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-BIN = HERE / "target/release/varlit-format-bench"
+BIN = HERE / "target/release" / ("varlit-format-bench" + (".exe" if os.name == "nt" else ""))
+LINUX = sys.platform.startswith("linux")
 
 # (label, scenario, extra environment, engines). Each engine runs with its
 # layout for that data: the first of its candidates (see README).
@@ -37,15 +40,18 @@ CGROUP = Path("/sys/fs/cgroup/memory/fb-bench")
 
 
 def capped(cmd, limit):
-    """`cmd` run under a memory cap of `limit` (e.g. "4G")."""
+    """`cmd` run under a memory cap of `limit` (e.g. "4G"), and the cap it got
+    ("none" off Linux, where nothing caps the page cache)."""
+    if not LINUX:
+        return cmd, "none"
     if shutil.which("systemd-run") and subprocess.run(
             ["systemd-run", "--user", "--scope", "-q", "true"], capture_output=True).returncode == 0:
         return ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={limit}",
-                "-p", "MemorySwapMax=0"] + cmd
+                "-p", "MemorySwapMax=0"] + cmd, limit
     units = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30}
     CGROUP.mkdir(exist_ok=True)
     (CGROUP / "memory.limit_in_bytes").write_text(str(int(limit[:-1]) * units[limit[-1]]))
-    return ["sh", "-c", f'echo $$ > {CGROUP}/cgroup.procs && exec "$@"', "sh"] + cmd
+    return ["sh", "-c", f'echo $$ > {CGROUP}/cgroup.procs && exec "$@"', "sh"] + cmd, limit
 
 
 def control(out):
@@ -79,6 +85,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     results_path = out / "results.jsonl"
     rep = 0
+    warned = {}
     while rep < a.repeats:
         if a.gate:
             wait_healthy(out)
@@ -93,8 +100,13 @@ def main():
                 shutil.rmtree(d, ignore_errors=True)
                 env = dict(os.environ, FB_DATA_GB=str(a.data_gb), **extra)
                 cmd = [str(BIN), "bench", scen, fmt, str(d)]
+                cap = None
                 if scen in MEMCAP:
-                    cmd = capped(cmd, MEMCAP[scen])
+                    cmd, cap = capped(cmd, MEMCAP[scen])
+                    if cap == "none" and not warned.get(scen):
+                        warned[scen] = True
+                        print(f"note: {scen} runs without its {MEMCAP[scen]} memory cap on {sys.platform}; "
+                              "its reads may come from the page cache", file=sys.stderr, flush=True)
                 t = time.time()
                 p = subprocess.run(cmd, capture_output=True, text=True, env=env)
                 shutil.rmtree(d, ignore_errors=True)
@@ -105,6 +117,8 @@ def main():
                 else:
                     r = json.loads(p.stdout.strip().splitlines()[-1])
                     r.update(label=label, rep=rep, data_gb=a.data_gb)
+                if cap is not None:
+                    r["memcap"] = cap
                 batch.append(r)
                 with results_path.open("a") as f:
                     f.write(json.dumps(r) + "\n")

@@ -4,6 +4,7 @@ mod common;
 mod grid;
 mod mixed;
 mod oltp;
+mod platform;
 
 use common::Result;
 use std::path::PathBuf;
