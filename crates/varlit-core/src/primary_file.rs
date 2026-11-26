@@ -605,28 +605,45 @@ impl PrimaryFile {
     }
 
     pub(crate) fn anchor(&self, k: u64) -> Result<Option<Anchor>> {
+        let mut bytes = [0u8; 4096];
+        Ok(self.anchor_into(k, &mut bytes)?.map(|(anchor, _)| anchor))
+    }
+
+    /// Anchor `k` and its whole reserved range, read into `bytes`: the
+    /// decoded anchor and the range's length, or `None` when the file has no
+    /// intact anchor `k`. The range holds any summary the anchor carries.
+    pub(crate) fn anchor_into(
+        &self,
+        k: u64,
+        bytes: &mut [u8; 4096],
+    ) -> Result<Option<(Anchor, usize)>> {
         let Some(layout) = self.layout else {
             return Ok(None);
         };
         let Some(physical) = layout.anchor_physical(k) else {
             return Ok(None);
         };
-        let hole = usize::try_from(layout.hole()).expect("anchor fits memory");
+        let Some(hole) = usize::try_from(layout.hole())
+            .ok()
+            .filter(|hole| *hole <= bytes.len())
+        else {
+            return Ok(None);
+        };
         let end = physical.saturating_add(layout.hole());
         if self.file.metadata()?.len() < end {
             return Ok(None);
         }
-        let mut bytes = vec![0u8; hole];
+        let range = &mut bytes[..hole];
         let mut done = 0;
         while done < hole {
-            match crate::snapshot::read_at(&self.file, &mut bytes[done..], physical + done as u64) {
+            match crate::snapshot::read_at(&self.file, &mut range[done..], physical + done as u64) {
                 Ok(0) => return Ok(None),
                 Ok(n) => done += n,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error.into()),
             }
         }
-        Ok(Anchor::decode(&layout, k, &bytes))
+        Ok(Anchor::decode(&layout, k, range).map(|anchor| (anchor, hole)))
     }
 }
 

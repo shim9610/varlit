@@ -2303,10 +2303,17 @@ fn advance_reader_tail(
 }
 
 /// The anchor a prepared chunk reaches: the record in it that spans the
-/// anchor's logical offset.
+/// anchor's logical offset, and the stream summary of the state before that
+/// record (what a stream open resumes from).
 struct ChunkAnchors<'a> {
     records: &'a [(u32, AppendInfo)],
     end: u64,
+    /// The writer's tails and record count before this chunk.
+    tails: &'a [(u32, Option<StreamTail>)],
+    record_count: u64,
+    /// The index in `records` of the record spanning the last anchor asked
+    /// for: what [`Self::summary`] describes.
+    spanning: Option<usize>,
 }
 
 impl crate::primary_file::AnchorSource for ChunkAnchors<'_> {
@@ -2323,6 +2330,7 @@ impl crate::primary_file::AnchorSource for ChunkAnchors<'_> {
             .records
             .get(index + 1)
             .map_or(self.end, |(_, next)| next.record_offset);
+        self.spanning = Some(index);
         Ok(crate::anchor::Anchor {
             k,
             logical,
@@ -2331,7 +2339,72 @@ impl crate::primary_file::AnchorSource for ChunkAnchors<'_> {
             sequence: info.sequence,
         })
     }
+
+    fn summary(&self) -> Option<&dyn crate::anchor::SummarySource> {
+        self.spanning
+            .map(|_| self as &dyn crate::anchor::SummarySource)
+    }
 }
+
+impl crate::anchor::SummarySource for ChunkAnchors<'_> {
+    /// The state before the spanning record: the writer's state before the
+    /// chunk, advanced by the chunk's records before it. Computed from the
+    /// borrowed slices, with nothing allocated.
+    fn write_summary(&self, out: &mut [u8]) -> bool {
+        let Some(index) = self.spanning else {
+            return false;
+        };
+        let before = &self.records[..index];
+        let tails = self.tails.iter().filter_map(|(block_id, base)| {
+            before
+                .iter()
+                .rev()
+                .find(|(id, _)| id == block_id)
+                .map(|(_, info)| (*block_id, info.record_offset, info.sequence))
+                .or_else(|| {
+                    base.as_ref()
+                        .map(|tail| (*block_id, tail.record_offset, tail.sequence))
+                })
+        });
+        // `filter_map` loses the exact size the encoder bounds by; count once.
+        let count = self
+            .tails
+            .iter()
+            .filter(|(block_id, base)| {
+                base.is_some() || before.iter().any(|(id, _)| id == block_id)
+            })
+            .count();
+        crate::anchor::encode_stream_summary(
+            out,
+            self.record_count + index as u64,
+            self.records[index].1.sequence,
+            ExactCount {
+                inner: tails,
+                left: count,
+            },
+        )
+    }
+}
+
+/// An iterator whose length was counted beforehand.
+struct ExactCount<I> {
+    inner: I,
+    left: usize,
+}
+
+impl<I: Iterator> Iterator for ExactCount<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next()?;
+        self.left = self.left.saturating_sub(1);
+        Some(item)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for ExactCount<I> {}
 
 fn state_error(error: crate::disk_index::DiskIndexError) -> Error {
     crate::disk_index::index_error(error)
@@ -2764,6 +2837,9 @@ impl StreamMutationPermit<'_> {
                     &mut ChunkAnchors {
                         records,
                         end: new_eof,
+                        tails: &self.block_tails,
+                        record_count: self.record_count,
+                        spanning: None,
                     },
                 )
                 .map_err(crate::Error::into_io);
@@ -3106,6 +3182,59 @@ mod tests {
         // into the EOF: an error either way, whichever check reaches it first.
         assert!(reader.events()?.any(|event| event.is_err()));
         assert!(matches!(reader.blocks::<TestBlock>()?.next(), Some(Err(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn anchors_carry_the_stream_state_before_their_spanning_record() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("summaries.varlit");
+        // 4 KiB spacing, 256-byte anchors: a few hundred records cross many.
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::None)
+            .with_anchors(crate::AnchorPolicy::every(12, true));
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        let records_at_create = writer.record_count;
+        let mut written = Vec::new();
+        for value in 0..600u64 {
+            let info = writer.push_info(&TestBlock(value))?;
+            written.push(info);
+        }
+        writer.sync()?;
+        let mut file = PrimaryFile::new(std::fs::File::open(&path)?, None);
+        let header_len = read_primary_header(spec, &mut file)?.0;
+        let mut bytes = [0u8; 4096];
+        let mut seen = 0;
+        for k in 1.. {
+            let Some((anchor, hole)) = file.anchor_into(k, &mut bytes)? else {
+                break;
+            };
+            let mut tails = Vec::new();
+            let summary = crate::anchor::StreamSummary::decode(
+                &bytes[..hole],
+                header_len,
+                anchor.record_start,
+                |id, offset, sequence| tails.push((id, offset, sequence)),
+            )
+            .expect("every stream anchor carries a summary");
+            let before: Vec<_> = written
+                .iter()
+                .filter(|info| info.record_offset < anchor.record_start)
+                .collect();
+            assert_eq!(summary.next_sequence, anchor.sequence);
+            assert_eq!(
+                summary.records_before,
+                records_at_create + before.len() as u64
+            );
+            let user_tail = tails.iter().find(|(id, ..)| *id == TestBlock::ID).copied();
+            assert_eq!(
+                user_tail,
+                before
+                    .last()
+                    .map(|info| (TestBlock::ID, info.record_offset, info.sequence))
+            );
+            seen += 1;
+        }
+        assert!(seen >= 5, "the test must cross several anchors ({seen})");
         Ok(())
     }
 
