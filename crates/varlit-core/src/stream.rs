@@ -2334,10 +2334,10 @@ mod tests {
 
     fn read_values(spec: FormatSpec, path: &Path) -> Result<Vec<u64>> {
         let reader = VarlitStreamReader::open(spec, path, StreamOptions::default())?;
-        Ok(reader
+        reader
             .blocks::<TestBlock>()?
             .map(|block| block.map(|block| block.0))
-            .collect::<Result<_>>()?)
+            .collect()
     }
 
     #[test]

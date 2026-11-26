@@ -47,7 +47,6 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     let path = dir.path().join("stream.varlit");
     let options = StreamOptions {
         limits: runtime(IntegrityVerification::AtOpen),
-        ..StreamOptions::default()
     };
     let mut writer = VarlitStreamWriter::create(spec, &path, options)?;
     writer.push_info(&item(1, 41))?;
@@ -87,7 +86,6 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     assert_eq!(reader.verify_all()?, expected);
     let tight = StreamOptions {
         limits: ResourceLimits::MISSING.with_max_logical_payload_len(32),
-        ..StreamOptions::default()
     };
     let limited = VarlitStreamReader::open(spec, &path, tight)?;
     assert!(matches!(

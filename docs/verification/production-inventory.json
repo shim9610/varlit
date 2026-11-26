@@ -483,7 +483,7 @@
     "crates/varlit-core/src/snapshot.rs": "f3cec93cb0b1cf01",
     "crates/varlit-core/src/spill_file.rs": "2f836dcbff8ab333",
     "crates/varlit-core/src/spill_rows.rs": "6910a54278ec6ae1",
-    "crates/varlit-core/src/stream.rs": "8fdfb367deafad1a",
+    "crates/varlit-core/src/stream.rs": "30e251af3ee44f0c",
     "crates/varlit-core/src/sync_marker.rs": "354a8e1ae3fd434c",
     "crates/varlit-core/src/test_pages.rs": "bac01e8a51504b24",
     "crates/varlit-core/src/traits.rs": "76c3af222ad61e6e",

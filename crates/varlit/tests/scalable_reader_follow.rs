@@ -256,7 +256,6 @@ fn follow_retains_scan_limits_and_cannot_revive_a_failed_cursor() -> varlit::Res
     let mut writer = Feed::create_stream_writer(&path, StreamOptions::default())?;
     let opts = StreamOptions {
         limits: varlit::ResourceLimits::MISSING.with_max_records(3),
-        ..StreamOptions::default()
     };
     let mut reader = Feed::open_stream_reader(&path, opts)?;
     let mut cursor = reader.events()?;
