@@ -47,7 +47,6 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     let path = dir.path().join("stream.varlit");
     let options = StreamOptions {
         limits: runtime(IntegrityVerification::AtOpen),
-        ..StreamOptions::default()
     };
     let mut writer = VarlitStreamWriter::create(spec, &path, options)?;
     writer.push_info(&item(1, 41))?;
@@ -64,7 +63,6 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     assert!(cursor.next_into(&mut next)?);
     assert_eq!(next, item(2, 42));
     assert!(!cursor.next_into(&mut next)?);
-    writer.compact_index()?;
     reader.follow_blocks(&mut cursor)?;
     drop(writer);
     let mut writer = VarlitStreamWriter::open(spec, &path, options)?;
@@ -77,16 +75,9 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     assert!(!cursor.next_into(&mut next)?);
     drop(cursor);
     drop(reader);
-    let mut state = path.as_os_str().to_owned();
-    state.push(".vks");
-    std::fs::remove_file(state)?;
     // The creation nonce, three items and the three sync markers that closed
     // them, plus an embedded manifest.
     let expected = 7 + u64::from(spec.manifest_policy == ManifestPolicy::Embedded);
-    assert_eq!(
-        bootstrap_stream_checkpoint(spec, &path, options)?.records,
-        expected
-    );
     let reader = VarlitStreamReader::open(spec, &path, options)?;
     assert_eq!(
         collect_rest(&mut reader.blocks::<Item>()?)?,
@@ -95,7 +86,6 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     assert_eq!(reader.verify_all()?, expected);
     let tight = StreamOptions {
         limits: ResourceLimits::MISSING.with_max_logical_payload_len(32),
-        ..StreamOptions::default()
     };
     let limited = VarlitStreamReader::open(spec, &path, tight)?;
     assert!(matches!(

@@ -8,12 +8,14 @@
 //! generation that wrote it (its *birth*), every pointer to it records that
 //! birth too, and a reader that follows a pointer to a page born later than
 //! the pointer says knows the page was reclaimed and rewritten:
-//! a damaged-sidecar error. When a freed page may be reused is the
-//! allocator owner's decision; see `storage`.
-use super::{DiskIndexError, DiskIndexResult, LATEST_LEN};
+//! a damaged-index error. When a freed page may be reused is the
+//! allocator owner's decision; see `ScratchIndex`.
+use super::{LATEST_LEN, ScratchError, ScratchResult};
 use crate::fallible::Arc;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 
 pub(super) const PAGE: usize = 4096;
@@ -69,7 +71,7 @@ impl PageAlloc {
     pub(super) fn take(&mut self) -> Option<u64> {
         self.reusable.pop()
     }
-    pub(super) fn free(&mut self, offset: u64, birth: u64) -> DiskIndexResult<()> {
+    pub(super) fn free(&mut self, offset: u64, birth: u64) -> ScratchResult<()> {
         if birth == self.building {
             self.reusable.try_reserve(1).map_err(oom)?;
             self.reusable.push(offset);
@@ -80,7 +82,7 @@ impl PageAlloc {
         Ok(())
     }
     /// Makes every pending page tagged at or before `through` reusable.
-    pub(super) fn release(&mut self, through: u64) -> DiskIndexResult<()> {
+    pub(super) fn release(&mut self, through: u64) -> ScratchResult<()> {
         let ready = self
             .pending
             .iter()
@@ -100,14 +102,14 @@ impl PageAlloc {
     }
 }
 
-fn corrupt(message: &'static str) -> DiskIndexError {
-    DiskIndexError::CheckpointMismatch(message)
+fn corrupt(message: &'static str) -> ScratchError {
+    ScratchError::Corrupt(message)
 }
 
 /// A page reached through an older root was reused by a later generation.
-/// No reader reaches a page through an older root (a stream reader reads its
-/// state once, at open), so this is a damaged sidecar.
-pub(super) fn reclaimed_page() -> DiskIndexError {
+/// No reader reaches a page through an older root, so this is a damaged
+/// scratch file.
+pub(super) fn reclaimed_page() -> ScratchError {
     corrupt("index page was reused by a later generation")
 }
 
@@ -366,16 +368,16 @@ impl<T: Resident> Drop for Lease<'_, T> {
         }
     }
 }
-fn oom(_: std::collections::TryReserveError) -> DiskIndexError {
+fn oom(_: std::collections::TryReserveError) -> ScratchError {
     std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
 }
-fn buffer(len: usize) -> DiskIndexResult<Vec<u8>> {
+fn buffer(len: usize) -> ScratchResult<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(len).map_err(oom)?;
     bytes.resize(len, 0);
     Ok(bytes)
 }
-fn copy_bytes(bytes: &[u8]) -> DiskIndexResult<Vec<u8>> {
+fn copy_bytes(bytes: &[u8]) -> ScratchResult<Vec<u8>> {
     let mut result = Vec::new();
     result.try_reserve_exact(bytes.len()).map_err(oom)?;
     result.extend_from_slice(bytes);
@@ -399,7 +401,7 @@ pub(super) struct Reader {
 }
 
 impl Reader {
-    pub fn new(file: Arc<File>, end: u64, max_key: usize, budget: usize) -> Self {
+    pub(super) fn new(file: Arc<File>, end: u64, max_key: usize, budget: usize) -> Self {
         Self {
             file,
             format: PageFormat::Append,
@@ -415,6 +417,7 @@ impl Reader {
             key_reads: std::cell::Cell::new(0),
         }
     }
+    #[cfg(test)]
     pub(super) fn with_metadata_verification(mut self, enabled: bool) -> Self {
         self.verify_metadata = enabled;
         self
@@ -423,11 +426,12 @@ impl Reader {
         self.format = format;
         self
     }
+    #[cfg(test)]
     pub(super) fn with_minimum_offset(mut self, minimum_offset: u64) -> Self {
         self.minimum_offset = minimum_offset;
         self
     }
-    fn node(&self, root: Root) -> DiskIndexResult<Lease<'_, Node>> {
+    fn node(&self, root: Root) -> ScratchResult<Lease<'_, Node>> {
         if let Some(node) = self.cached::<Node>(root.offset) {
             if node.birth != root.birth {
                 return Err(reclaimed_page());
@@ -439,7 +443,7 @@ impl Reader {
         }
         self.retain(root.offset, self.read_node(root)?)
     }
-    fn read_node(&self, root: Root) -> DiskIndexResult<Node> {
+    fn read_node(&self, root: Root) -> ScratchResult<Node> {
         if root.offset < self.minimum_offset
             || root
                 .offset
@@ -678,7 +682,7 @@ impl Reader {
             cached: true,
         })
     }
-    fn retain<T: Resident>(&self, offset: u64, value: T) -> DiskIndexResult<Lease<'_, T>> {
+    fn retain<T: Resident>(&self, offset: u64, value: T) -> ScratchResult<Lease<'_, T>> {
         let charge = value.charge();
         let mut cache = self.cache.borrow_mut();
         let cached = !T::slots(&mut cache).contains_key(&offset)
@@ -698,7 +702,7 @@ impl Reader {
             cached,
         })
     }
-    fn store<T: Resident>(&self, offset: u64, value: T) -> DiskIndexResult<()> {
+    fn store<T: Resident>(&self, offset: u64, value: T) -> ScratchResult<()> {
         let charge = value.charge();
         let mut cache = self.cache.borrow_mut();
         debug_assert!(!T::slots(&mut cache).contains_key(&offset));
@@ -752,13 +756,13 @@ impl Reader {
         }
         true
     }
-    fn read_key_bytes(&self, offset: u64, bytes: &mut [u8]) -> DiskIndexResult<()> {
+    fn read_key_bytes(&self, offset: u64, bytes: &mut [u8]) -> ScratchResult<()> {
         read_at(&self.file, offset, bytes)?;
         #[cfg(test)]
         self.key_reads.set(self.key_reads.get() + 1);
         Ok(())
     }
-    fn long_key(&self, key: &Key) -> DiskIndexResult<Lease<'_, Vec<u8>>> {
+    fn long_key(&self, key: &Key) -> ScratchResult<Lease<'_, Vec<u8>>> {
         if let Some(bytes) = self.cached::<Vec<u8>>(key.offset) {
             if bytes.len() != key.len || bytes[..16] != key.prefix {
                 return Err(corrupt("inconsistent cached index key"));
@@ -780,7 +784,7 @@ impl Reader {
         bytes.truncate(key.len);
         self.retain(key.offset, bytes)
     }
-    fn key(&self, key: &Key, packed: &[u8]) -> DiskIndexResult<Vec<u8>> {
+    fn key(&self, key: &Key, packed: &[u8]) -> ScratchResult<Vec<u8>> {
         if let Some(bytes) = key.cached(packed) {
             copy_bytes(bytes)
         } else {
@@ -792,7 +796,7 @@ impl Reader {
         stored: &Key,
         key: &[u8],
         packed: &[u8],
-    ) -> DiskIndexResult<std::cmp::Ordering> {
+    ) -> ScratchResult<std::cmp::Ordering> {
         if let Some(bytes) = stored.cached(packed) {
             return Ok(bytes.cmp(key));
         }
@@ -803,7 +807,7 @@ impl Reader {
         }
         Ok(self.long_key(stored)?.as_slice().cmp(key))
     }
-    fn search(&self, node: &Node, key: &[u8]) -> DiskIndexResult<Result<usize, usize>> {
+    fn search(&self, node: &Node, key: &[u8]) -> ScratchResult<Result<usize, usize>> {
         let entries = &node.entries;
         let (mut low, mut high) = (0, entries.len());
         while low < high {
@@ -820,7 +824,7 @@ impl Reader {
         cache: &Cache,
         node: &Node,
         key: &[u8],
-    ) -> DiskIndexResult<Option<Result<usize, usize>>> {
+    ) -> ScratchResult<Option<Result<usize, usize>>> {
         let (mut low, mut high) = (0, node.entries.len());
         while low < high {
             let mid = low + (high - low) / 2;
@@ -848,7 +852,11 @@ impl Reader {
         }
         Ok(Some(Err(low)))
     }
-    pub fn get(&self, mut root: Root, key: &[u8]) -> DiskIndexResult<Option<[u8; LATEST_LEN]>> {
+    pub(super) fn get(
+        &self,
+        mut root: Root,
+        key: &[u8],
+    ) -> ScratchResult<Option<[u8; LATEST_LEN]>> {
         if root.offset == 0 {
             if root.count != 0 {
                 return Err(corrupt("invalid empty index"));
@@ -877,7 +885,7 @@ impl Reader {
         let mut expected_height = None;
         let mut minimum: Option<Key> = None;
         loop {
-            let validate = |node: &Node| -> DiskIndexResult<()> {
+            let validate = |node: &Node| -> ScratchResult<()> {
                 if node.birth != root.birth {
                     return Err(reclaimed_page());
                 }
@@ -935,11 +943,11 @@ impl Reader {
             }
         }
     }
-    pub fn visit(
+    pub(super) fn visit(
         &self,
         root: Root,
-        visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>,
-    ) -> DiskIndexResult<()> {
+        visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> ScratchResult<()>,
+    ) -> ScratchResult<()> {
         if root.offset == 0 {
             if root.count != 0 {
                 return Err(corrupt("invalid empty index"));
@@ -964,7 +972,7 @@ impl Reader {
         left_packed: &[u8],
         right: &Key,
         right_packed: &[u8],
-    ) -> DiskIndexResult<bool> {
+    ) -> ScratchResult<bool> {
         let order = left.prefix[..left.len.min(16)].cmp(&right.prefix[..right.len.min(16)]);
         if !order.is_eq() || left.len <= 16 || right.len <= 16 {
             return Ok(order.then(left.len.cmp(&right.len)).is_lt());
@@ -984,8 +992,8 @@ impl Reader {
         minimum: Option<&Key>,
         upper: Option<(&Key, &[u8])>,
         remaining: &mut u64,
-        visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>,
-    ) -> DiskIndexResult<()> {
+        visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> ScratchResult<()>,
+    ) -> ScratchResult<()> {
         take_visit(remaining)
             .ok_or_else(|| corrupt("index traversal exceeds checkpoint extent"))?;
         let node = self.node(root)?;
@@ -1026,16 +1034,18 @@ impl Reader {
     }
 }
 
+#[cfg(test)]
 /// Rewrites each affected node once per batch, retaining unchanged subtrees.
 pub(super) fn apply(
     file: &File,
     reader: &Reader,
     root: Root,
     updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
-) -> DiskIndexResult<Root> {
+) -> ScratchResult<Root> {
     apply_with_limit(file, reader, root, updates.iter(), None, None)
 }
 
+#[cfg(test)]
 /// [`apply`] for a reuse-format tree: pages come from, and are freed to,
 /// `alloc`.
 pub(super) fn apply_reusing(
@@ -1044,7 +1054,7 @@ pub(super) fn apply_reusing(
     root: Root,
     updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
     alloc: &mut PageAlloc,
-) -> DiskIndexResult<Root> {
+) -> ScratchResult<Root> {
     apply_with_limit(file, reader, root, updates.iter(), None, Some(alloc))
 }
 
@@ -1055,7 +1065,7 @@ pub(super) fn apply_with_limit<'a>(
     updates: impl ExactSizeIterator<Item = (&'a Vec<u8>, &'a [u8; LATEST_LEN])>,
     maximum: Option<u64>,
     alloc: Option<&mut PageAlloc>,
-) -> DiskIndexResult<Root> {
+) -> ScratchResult<Root> {
     if updates.len() == 0 {
         return Ok(root);
     }
@@ -1099,7 +1109,7 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    fn append(&mut self, bytes: &[u8]) -> DiskIndexResult<u64> {
+    fn append(&mut self, bytes: &[u8]) -> ScratchResult<u64> {
         let start = self.end;
         self.end = start
             .checked_add(bytes.len() as u64)
@@ -1108,7 +1118,7 @@ impl Writer<'_> {
         write_at(self.file, start, bytes)?;
         Ok(start)
     }
-    fn key(&mut self, bytes: &[u8]) -> DiskIndexResult<Key> {
+    fn key(&mut self, bytes: &[u8]) -> ScratchResult<Key> {
         if bytes.is_empty() || bytes.len() > self.reader.max_key || bytes.len() > u32::MAX as usize
         {
             return Err(corrupt("invalid index update key"));
@@ -1131,14 +1141,14 @@ impl Writer<'_> {
     }
     /// Writes one page into a reusable page if the allocator has one, else
     /// at the end of the file.
-    fn page(&mut self, bytes: &[u8; PAGE]) -> DiskIndexResult<u64> {
+    fn page(&mut self, bytes: &[u8; PAGE]) -> ScratchResult<u64> {
         if let Some(offset) = self.alloc.as_deref_mut().and_then(PageAlloc::take) {
             write_at(self.file, offset, bytes)?;
             return Ok(offset);
         }
         self.append(bytes)
     }
-    fn nodes(&mut self, height: u8, entries: Vec<Entry>) -> DiskIndexResult<Vec<Entry>> {
+    fn nodes(&mut self, height: u8, entries: Vec<Entry>) -> ScratchResult<Vec<Entry>> {
         let format = self.reader.format;
         let birth = self.alloc.as_ref().map_or(0, |alloc| alloc.building);
         let mut output = Vec::new();
@@ -1187,7 +1197,7 @@ impl Writer<'_> {
         root: Root,
         height: u8,
         updates: &[(&Vec<u8>, &[u8; LATEST_LEN])],
-    ) -> DiskIndexResult<Vec<Entry>> {
+    ) -> ScratchResult<Vec<Entry>> {
         let node = if root.offset == 0 {
             None
         } else {
@@ -1360,7 +1370,7 @@ mod tests {
             .try_for_each(|key| stale.get(first, key).map(|_| ()));
         assert!(matches!(
             outcome,
-            Err(DiskIndexError::CheckpointMismatch(
+            Err(ScratchError::Corrupt(
                 "index page was reused by a later generation"
             ))
         ));
@@ -1643,7 +1653,7 @@ mod corruption_guards {
         };
         assert!(matches!(
             reader.long_key(&key),
-            Err(DiskIndexError::Io(error)) if error.kind() == std::io::ErrorKind::OutOfMemory
+            Err(ScratchError::Io(error)) if error.kind() == std::io::ErrorKind::OutOfMemory
         ));
         assert_eq!(reader.key_reads.get(), 0);
     }
@@ -1717,7 +1727,7 @@ mod corruption_guards {
                             // (Miri exercises this). Each non-interrupted success
                             // advances at least one byte; at most one terminal error.
                             assert!(calls <= 2 * PAGE + 1, "unbounded read work: {calls}");
-                            if let Err(DiskIndexError::Io(error)) = &result {
+                            if let Err(ScratchError::Io(error)) = &result {
                                 io_errors += usize::from(error.kind() == kind);
                                 allocation_errors +=
                                     usize::from(error.kind() == ErrorKind::OutOfMemory);

@@ -1,22 +1,15 @@
 use std::borrow::Borrow;
-use std::fs::{self, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use crate::collections::{MaterializationBudget, ensure_registered_block};
-use crate::disk_index::{
-    DiskIndexBatchOptions, DiskIndexDigest, DiskIndexError, DiskIndexFrontier, DiskIndexMetadata,
-    DiskIndexMode, DiskIndexOptions, DiskIndexPrimaryGeneration, DiskIndexSnapshot, DiskIndexStore,
-    DiskIndexTail, PRIMARY_GENERATION_WINDOW, batch_item_fixed_bytes, state_sidecar_path,
-    tail_limit_for_spec,
-};
 use crate::file::{
-    NativeStreamScanner, PreparedStreamRecord, ReplaceDurability, WriterLock,
-    blank_mutable_header_bytes, fresh_stream_creation_nonce, prepare_stream_creation_nonce_record,
-    prepare_stream_manifest_record, prepare_stream_tombstone_record,
-    prepare_stream_user_record_into, publish_temp_path_atomically, read_file_header,
-    read_file_header_parts, read_primary_header, read_stream_creation_nonce, write_file_header,
+    NativeStreamScanner, PreparedStreamRecord, WriterLock, fresh_stream_creation_nonce,
+    prepare_stream_creation_nonce_record, prepare_stream_manifest_record,
+    prepare_stream_tombstone_record, prepare_stream_user_record_into, read_file_header,
+    read_primary_header, write_stream_file_header,
 };
 use crate::primary_file::PrimaryFile;
 use crate::scan_control::{ScanCancelled, ScanProgressDriver};
@@ -51,12 +44,6 @@ pub(crate) const INTERNAL_BLOCK_IDS: [u32; 3] = [
 ];
 
 thread_local! {
-    /// Armed post-publication generation-restamp failures (round 11,
-    /// invariant 3).
-    static INJECTED_GENERATION_RESTAMP_FAILURES: std::cell::Cell<u64> = const {
-        std::cell::Cell::new(0)
-    };
-
     /// Armed native-append write failures whose rollback also fails (round 12,
     /// F-05).
     static INJECTED_APPEND_ROLLBACK_FAILURES: std::cell::Cell<u64> = const {
@@ -98,45 +85,15 @@ fn take_injected_append_rollback_failure() -> bool {
     false
 }
 
-/// Consumes one armed generation-restamp failure (round 11, invariant 3).
-///
-/// The restamp is the first fallible step of the sidecar commit that runs
-/// *after* a prepared chunk has been published natively, and it is not
-/// reachable from outside the crate on demand: it needs a fallible read of the
-/// primary's own leading bytes while the witness window is still filling.
-/// Inert without the `scalable-fault-injection` feature. Thread-local so
-/// concurrently running tests cannot arm each other's writers.
-#[inline]
-pub(crate) fn take_injected_generation_restamp_failure() -> Result<()> {
-    #[cfg(feature = "scalable-fault-injection")]
-    {
-        let armed = INJECTED_GENERATION_RESTAMP_FAILURES.with(|count| {
-            let current = count.get();
-            if current != 0 {
-                count.set(current - 1);
-            }
-            current != 0
-        });
-        if armed {
-            return Err(Error::Io(std::io::Error::other(
-                "injected post-publication generation restamp failure",
-            )));
-        }
-    }
-    Ok(())
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamOptions {
     pub limits: ResourceLimits,
-    pub state: DiskIndexOptions,
 }
 
 impl Default for StreamOptions {
     fn default() -> Self {
         Self {
             limits: ResourceLimits::MISSING,
-            state: DiskIndexOptions::default(),
         }
     }
 }
@@ -210,166 +167,16 @@ pub struct StreamResidentState {
     pub active_payload_bytes: u64,
 }
 
+/// How far a reader trails its file's confirmed prefix: what
+/// [`VarlitStreamReader::follow`] would adopt now.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct StreamBootstrapReport {
-    pub records: u64,
-    pub scanned_bytes: u64,
-}
-
-/// Scans a native stream file and publishes a clean state sidecar for it.
-///
-/// # Non-cooperating writers
-///
-/// Cooperating writers are serialized by the writer lock this call holds. A
-/// process that replaces the primary *pathname* without taking that lock is
-/// outside the contract, and no userspace library can make publication atomic
-/// against it. This call bounds what such a writer can cause: the primary's
-/// identity is verified immediately before publication, the verified object is
-/// held open across it so its identity cannot be recycled behind an unlink, and
-/// the identity is re-checked once the sidecar is visible. If the replacement
-/// landed inside that interval the published sidecar is removed again and the
-/// call fails with `DiskIndexError::IdentityMismatch` — or, if the stale
-/// sidecar could not be removed, with a `DiskIndexError::CheckpointMismatch`
-/// naming what must be deleted. The residual cost is a bootstrap the caller
-/// must repeat, never a sidecar a consumer would accept for the wrong primary.
-pub fn bootstrap_stream_checkpoint(
-    spec: FormatSpec,
-    path: impl AsRef<Path>,
-    options: StreamOptions,
-) -> Result<StreamBootstrapReport> {
-    bootstrap_stream_checkpoint_with_progress(spec, path, options, silent_scan_options(), |_| {})
-}
-
-pub fn bootstrap_stream_checkpoint_with_progress<F>(
-    spec: FormatSpec,
-    path: impl AsRef<Path>,
-    options: StreamOptions,
-    scan: ScanOptions<'_>,
-    mut observer: F,
-) -> Result<StreamBootstrapReport>
-where
-    F: FnMut(ScanProgress),
-{
-    refuse_matrix_stream(spec)?;
-    let path = std::fs::canonicalize(path.as_ref())?;
-    let _lock = WriterLock::acquire(&path)?;
-    let sidecar = state_sidecar_path(&path);
-    if sidecar.exists() {
-        return Err(state_error(
-            crate::disk_index::DiskIndexError::CheckpointMismatch(
-                "state sidecar already exists; restore a dirty checkpoint or remove a known-stale clean sidecar explicitly",
-            ),
-        ));
-    }
-    let reader = VarlitStreamReader::open_native(spec, &path, options)?;
-    let mut header_file = reader.snapshot.reader();
-    let header_eof = read_file_header(reader.spec, &mut header_file)?;
-    let mut progress = ScanProgressDriver::new(scan, header_eof, reader.snapshot.len());
-    progress.start(&mut observer).map_err(scan_cancelled)?;
-    let mut scanner = NativeStreamScanner::from_snapshot(reader.spec, reader.snapshot.clone())?;
-    let mut block_tails = initial_block_tails(reader.spec);
-    let mut record_count = 0u64;
-    let mut next_sequence = Some(0u64);
-    while let Some(entry) = scanner.next_entry()? {
-        record_count = record_count
-            .checked_add(1)
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "stream bootstrap record count",
-            })?;
-        next_sequence = entry.sequence.checked_add(1);
-        set_tail(
-            &mut block_tails,
-            entry.block_id,
-            entry.record_offset,
-            entry.sequence,
-        );
-        progress
-            .record_completed(scanner.logical_eof(), &mut observer)
-            .map_err(scan_cancelled)?;
-    }
-    if scanner.logical_eof() != reader.snapshot.len() {
-        return Err(Error::CorruptTail {
-            offset: scanner.logical_eof(),
-        });
-    }
-    let checkpoint = StreamCheckpoint {
-        logical_eof: reader.snapshot.len(),
-        record_count,
-        next_sequence,
-        block_tails: block_tails
-            .into_iter()
-            .filter_map(|(_, tail)| tail)
-            .collect(),
-    };
-    let identity = primary_identity(reader.spec, &reader.snapshot)?;
-    let metadata = DiskIndexMetadata::new_state(
-        identity,
-        checkpoint_frontier(&checkpoint),
-        tail_limit_for_spec(reader.spec).map_err(state_error)?,
-    )
-    .with_primary_generation(primary_generation(
-        reader.spec,
-        &reader.snapshot,
-        checkpoint.logical_eof,
-    )?);
-    progress.complete(&mut observer).map_err(scan_cancelled)?;
-    // The checkpoint is only valid for the exact file object the retained
-    // snapshot scanned. Re-resolve the pathname immediately before publishing
-    // and refuse to publish for a swapped-in generation.
-    let snapshot_identity = opened_file_identity(reader.snapshot.try_clone_file()?.raw())?;
-    // the verified handle is kept open across publication. Cooperating
-    // writers are already excluded by the `WriterLock` held above; against a
-    // pathname mutator that ignores that protocol, holding the object open is
-    // what stops the operating system from recycling its identity behind an
-    // unlink, so the post-publication re-check below cannot be satisfied by a
-    // different object wearing the same device/inode pair.
-    let verified = crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)?;
-    let current_identity = opened_file_identity(&verified)?;
-    if current_identity != snapshot_identity {
-        return Err(state_error(
-            crate::disk_index::DiskIndexError::IdentityMismatch,
-        ));
-    }
-    create_state_store(
-        &path,
-        state_options(options),
-        metadata,
-        &checkpoint_disk_tails(&checkpoint),
-    )?;
-    #[cfg(test)]
-    interpose_after_state_publication(&path);
-    // publication is not a single syscall with the check above, so
-    // re-resolve once more now that the sidecar is visible. If the primary was
-    // replaced in that interval the sidecar just published describes a file
-    // object that no longer holds the pathname, and leaving it there would
-    // displace whatever newer sidecar the replacement brought with it. Retire
-    // it and report a typed mismatch rather than return success or leave a
-    // stale sidecar behind silently.
-    //
-    // Neither step below may turn into a bare `Err` on its own: the sidecar is
-    // already published, so an unreadable pathname is resolved *against*
-    // publication (fail closed, retire the sidecar) rather than reported as a
-    // plain IO failure that would leave a caller unable to tell what is on
-    // disk.
-    let sidecar = state_sidecar_path(&path);
-    // Held open, not merely stat-ed: the retirement below deletes by pathname
-    // and can only tell "still my sidecar" from "somebody else's file at the
-    // same name" while this handle keeps the identity from being reissued.
-    let published = crate::file::PinnedObject::open(&sidecar).ok();
-    let republished_identity =
-        crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)
-            .ok()
-            .and_then(|file| opened_file_identity(&file).ok());
-    if republished_identity.as_deref() != Some(snapshot_identity.as_slice()) {
-        return Err(state_error(retire_sidecar_for_replaced_primary(
-            &sidecar, published,
-        )));
-    }
-    drop(verified);
-    Ok(StreamBootstrapReport {
-        records: record_count,
-        scanned_bytes: checkpoint.logical_eof.saturating_sub(header_eof),
-    })
+pub struct SnapshotStatus {
+    /// The end of the prefix this reader holds.
+    pub committed_len: u64,
+    /// Confirmed records past it.
+    pub records_behind: u64,
+    /// Confirmed bytes past it.
+    pub bytes_behind: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -379,135 +186,67 @@ pub(crate) struct StreamTail {
     pub(crate) sequence: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct StreamCheckpoint {
-    pub(crate) logical_eof: u64,
-    pub(crate) record_count: u64,
-    pub(crate) next_sequence: Option<u64>,
-    pub(crate) block_tails: Vec<StreamTail>,
-}
-
-impl StreamCheckpoint {
-    fn validate(&self, spec: FormatSpec, header_len: u64, physical_len: u64) -> Result<()> {
-        if self.logical_eof != physical_len || self.logical_eof < header_len {
-            return Err(Error::SnapshotRangeOutOfBounds {
-                offset: 0,
-                len: self.logical_eof,
-                snapshot_len: physical_len,
-            });
-        }
-        let expected = initial_block_tails(spec);
-        let mut previous_id = None;
-        for tail in &self.block_tails {
-            if previous_id.is_some_and(|id| id >= tail.block_id)
-                || expected
-                    .binary_search_by_key(&tail.block_id, |(id, _)| *id)
-                    .is_err()
-            {
-                return Err(state_error(
-                    crate::disk_index::DiskIndexError::CheckpointMismatch(
-                        "checkpoint block tails do not match the format",
-                    ),
-                ));
-            }
-            previous_id = Some(tail.block_id);
-            if tail.record_offset < header_len || tail.record_offset >= self.logical_eof {
-                return Err(state_error(
-                    crate::disk_index::DiskIndexError::CheckpointMismatch(
-                        "checkpoint block tail is outside the native snapshot",
-                    ),
-                ));
-            }
-            if self.next_sequence.is_some_and(|next| tail.sequence >= next) {
-                return Err(state_error(
-                    crate::disk_index::DiskIndexError::CheckpointMismatch(
-                        "checkpoint block tail sequence is outside the committed frontier",
-                    ),
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
 /// A reader owned by one reading thread. It is `Send`, but deliberately not
 /// `Sync`: open a separate reader per thread instead of sharing this handle.
 /// Reads use `&self`; following only mutates this handle's snapshot and cursor.
 pub struct VarlitStreamReader {
     spec: FormatSpec,
     snapshot: SnapshotFile,
-    _state: Option<StreamReaderState>,
+    /// Where this file's durable boundary is read again on follow.
+    root: RootSource,
+    /// The verified sync-marker prefix this handle has adopted.
+    tail: crate::sync_marker::MarkedTail,
     // Cell is Send + !Sync. This zero-sized marker adds no runtime locking.
     _thread_owned: PhantomData<std::cell::Cell<()>>,
-}
-
-struct StreamReaderState {
-    snapshot: DiskIndexSnapshot,
-    store: DiskIndexStore,
-    /// The verified sync-marker prefix past the confirmed EOF.
-    tail: crate::sync_marker::MarkedTail,
-    /// Records in that prefix.
-    tail_records: u64,
 }
 
 /// A generation `prepare_follow` read and checked, ready to install.
 struct FollowedGeneration {
     snapshot: SnapshotFile,
-    state: StreamReaderState,
+    tail: crate::sync_marker::MarkedTail,
     added: u64,
 }
 
 impl VarlitStreamReader {
+    /// Opens the confirmed prefix: the durable end the writer published, and
+    /// every sync after it whose marker verifies. Nothing past the last
+    /// verified marker is visible.
     pub fn open(spec: FormatSpec, path: impl AsRef<Path>, options: StreamOptions) -> Result<Self> {
         refuse_matrix_stream(spec)?;
-        let path = std::fs::canonicalize(path.as_ref())?;
-        let mut reader = Self::open_native(spec, &path, options)?;
-        let identity = primary_identity(reader.spec, &reader.snapshot)?;
-        let store = DiskIndexStore::open(state_sidecar_path(&path), state_options(options))
-            .map_err(state_error)?;
-        let snapshot = store
-            .begin_committed_snapshot(identity, DiskIndexMode::StateOnly)
-            .map_err(state_error)?;
-        let committed = reader.committed_native_snapshot(&snapshot)?;
-        let mut tail = crate::sync_marker::MarkedTail::new(snapshot.committed_eof());
-        let tail_records = advance_reader_tail(reader.spec, &mut tail, &committed.physical()?)?;
-        reader.snapshot = committed.with_len(tail.committed())?;
-        reader._state = Some(StreamReaderState {
-            snapshot,
-            store,
-            tail,
-            tail_records,
-        });
-        Ok(reader)
-    }
-
-    pub(crate) fn open_native(
-        spec: FormatSpec,
-        path: impl AsRef<Path>,
-        options: StreamOptions,
-    ) -> Result<Self> {
         let spec = stream_spec(spec, options, false)?;
+        let path = std::fs::canonicalize(path.as_ref())?;
         let mut file = PrimaryFile::new(
-            crate::primary_file::open_data_file(OpenOptions::new().read(true), path)?,
+            crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)?,
             None,
         );
-        let header_len = read_primary_header(spec, &mut file)?.0;
-        let captured_len = file.len()?;
-        if captured_len < header_len {
-            return Err(Error::CorruptTail { offset: header_len });
-        }
-        let snapshot = SnapshotFile::from_file_with_len(file, captured_len)?;
+        let (header_len, extensions) = read_primary_header(spec, &mut file)?;
+        let root = RootSource {
+            header_len,
+            slots_at: crate::file::published_end_slots_at(header_len, &extensions)?,
+        };
+        let header = SnapshotFile::from_file_with_len(file, header_len)?;
+        let (published, captured_len) = root.read(&header, || Ok(header.physical()?.len()))?;
+        let physical = header.with_len(captured_len)?;
+        let start = match published {
+            StreamRoot::Published(end) => end,
+            StreamRoot::Scan { takeover } => {
+                scan_root(spec, &physical, header_len, takeover, &mut NoPosition)?
+            }
+        };
+        let mut tail = crate::sync_marker::MarkedTail::new(start);
+        tail.advance(spec, &physical)?;
         Ok(Self {
             spec,
-            snapshot,
-            _state: None,
+            snapshot: physical.with_len(tail.committed())?,
+            root,
+            tail,
             _thread_owned: PhantomData,
         })
     }
 
-    /// Adopt the latest confirmed generation on this file object. Dirty
+    /// Adopt the latest confirmed prefix on this file object. Dirty
     /// working data remains invisible. Returns the additional native record
-    /// count; no native prefix scan or write transaction is performed.
+    /// count; only the newly confirmed records are framed.
     pub fn follow(&mut self) -> Result<u64> {
         self.follow_records()
     }
@@ -525,47 +264,37 @@ impl VarlitStreamReader {
     }
 
     fn prepare_follow(&self) -> Result<Option<FollowedGeneration>> {
-        let state = self._state.as_ref().ok_or(Error::StreamingUnsupported)?;
-        let (store, next) = state
-            .store
-            .followed_handle(&state.snapshot)
-            .map_err(state_error)?;
-        let unchanged = next.generation() == state.snapshot.generation()
-            && state.snapshot.is_pinned()
-            && state.store.same_file(&store);
-        let index_added = next.record_count() - state.snapshot.record_count();
-        let mut tail = state.tail;
-        let mut tail_records = state.tail_records;
-        if next.committed_eof() != state.snapshot.committed_eof() {
-            if next.committed_eof() >= tail.committed() {
-                tail = crate::sync_marker::MarkedTail::new(next.committed_eof());
-                tail_records = 0;
-            } else {
-                tail_records = tail_records.saturating_sub(index_added);
-            }
+        let (published, len) = self
+            .root
+            .read(&self.snapshot, || Ok(self.snapshot.physical()?.len()))?;
+        let physical = self.snapshot.with_len(len)?;
+        let mut tail = self.tail;
+        // A newer published end lets the walk start there; otherwise the
+        // walk continues from the last verified marker.
+        if let StreamRoot::Published(end) = published
+            && end > tail.committed()
+        {
+            tail = crate::sync_marker::MarkedTail::new(end);
         }
-        let before = state.snapshot.record_count() + state.tail_records;
-        let native = self.committed_native_snapshot(&next)?;
-        tail_records += advance_reader_tail(self.spec, &mut tail, &native.physical()?)?;
-        if unchanged && tail.committed() == self.snapshot.len() {
+        tail.advance(self.spec, &physical)?;
+        let from = self.snapshot.len();
+        let to = tail.committed();
+        if to <= from {
             return Ok(None);
         }
+        let mut added = CountPosition(0);
+        frame_until(self.spec, &physical, from, to, &mut added)?;
         Ok(Some(FollowedGeneration {
-            added: (next.record_count() + tail_records).saturating_sub(before),
-            snapshot: native.with_len(tail.committed())?,
-            state: StreamReaderState {
-                snapshot: next,
-                store,
-                tail,
-                tail_records,
-            },
+            snapshot: physical.with_len(to)?,
+            tail,
+            added: added.0,
         }))
     }
 
     /// Installs a prepared generation; infallible by construction.
     fn adopt_follow(&mut self, followed: FollowedGeneration) -> u64 {
         self.snapshot = followed.snapshot;
-        self._state = Some(followed.state);
+        self.tail = followed.tail;
         followed.added
     }
 
@@ -589,33 +318,23 @@ impl VarlitStreamReader {
         Ok(added)
     }
 
-    /// Release this reader's backend page pin without closing its native file.
-    /// Native cursors remain usable; `follow` pins the latest confirmed state.
-    pub fn release_snapshot(&mut self) -> bool {
-        self._state
-            .as_mut()
-            .is_some_and(|state| state.snapshot.release())
-    }
-
+    /// How far this handle trails the file's confirmed prefix: what
+    /// [`Self::follow`] would adopt now. Reads the published end and frames
+    /// only the records past this handle's end.
     pub fn snapshot_status(&self) -> Result<crate::SnapshotStatus> {
-        let state = self._state.as_ref().ok_or(Error::StreamingUnsupported)?;
-        state.snapshot.status(&state.store).map_err(state_error)
+        let behind = self.prepare_follow()?;
+        Ok(crate::SnapshotStatus {
+            committed_len: self.snapshot.len(),
+            records_behind: behind.as_ref().map_or(0, |followed| followed.added),
+            bytes_behind: behind.map_or(0, |followed| {
+                followed.snapshot.len().saturating_sub(self.snapshot.len())
+            }),
+        })
     }
 
     /// The EOF of this handle's confirmed generation.
     pub fn committed_len(&self) -> u64 {
         self.snapshot.len()
-    }
-
-    pub(crate) fn committed_native_snapshot(
-        &self,
-        index: &DiskIndexSnapshot,
-    ) -> Result<SnapshotFile> {
-        // Sample physical length AFTER capturing the index generation, on the
-        // same retained file object. This removes the old EOF/publication race.
-        let native = self.snapshot.with_len(index.committed_eof())?;
-        verify_primary_generation(self.spec, index.primary_generation(), &native)?;
-        Ok(native)
     }
 
     pub fn verify_all(&self) -> Result<u64> {
@@ -908,7 +627,6 @@ pub struct VarlitStreamWriter {
     sequence: Option<u64>,
     record_count: u64,
     block_tails: Vec<(u32, Option<StreamTail>)>,
-    state: Option<StreamWriterState>,
     poison: PoisonFlag,
     /// Staging buffer for the single-record append path, reused for the life of
     /// the writer.
@@ -919,55 +637,11 @@ pub struct VarlitStreamWriter {
     /// depends on what it last held; it is a buffer, not state.
     record_buffer: Vec<u8>,
     immediate_state: crate::immediate::ImmediateState,
-    /// The open link of this writer's sync-marker chain; `Some` exactly when
-    /// the writer is checkpointed (it has a state sidecar).
+    /// The open link of this writer's sync-marker chain; `Some` once the
+    /// writer is created or opened.
     /// See [`crate::sync_marker`].
     sync_chain: Option<crate::sync_marker::SyncChain>,
     _lock: WriterLock,
-}
-
-struct StreamWriterState {
-    store: DiskIndexStore,
-    chunk_records: usize,
-    batch_records: usize,
-    batch_last_sequence: Option<u64>,
-    dirty: bool,
-    /// Primary EOF and record count the last confirmed sidecar covers.
-    confirmed_eof: u64,
-    confirmed_records: u64,
-}
-
-impl StreamWriterState {
-    fn new(store: DiskIndexStore, chunk_records: usize) -> Self {
-        Self {
-            store,
-            chunk_records,
-            batch_records: 0,
-            batch_last_sequence: None,
-            dirty: false,
-            confirmed_eof: 0,
-            confirmed_records: 0,
-        }
-    }
-}
-
-impl Drop for StreamWriterState {
-    fn drop(&mut self) {
-        // Discard uncommitted staging before releasing the writer file guard.
-        self.store.batch.take();
-    }
-}
-
-impl Drop for VarlitStreamWriter {
-    fn drop(&mut self) {
-        // Confirm a state sidecar over every synced record, best effort.
-        if self.state.as_ref().is_some_and(|state| state.dirty)
-            && !self.sync_pending()
-            && self.check_mutation(STREAM_WRITER_POISON_CONTEXT).is_ok()
-        {
-            let _ = self.sync_with(true);
-        }
-    }
 }
 
 impl GuardedWriter for VarlitStreamWriter {
@@ -998,96 +672,30 @@ impl VarlitStreamWriter {
         refuse_matrix_stream(spec)?;
         let path = canonical_write_path(path.as_ref())?;
         let mut writer = Self::create_unmanaged(spec, &path, options)?;
+        // The nonce and manifest open the sync chain: they are published and
+        // made durable with the file itself, so the first sync's marker
+        // verifies from here and a reader never sees a record before it.
+        writer
+            .file
+            .write_published_end(Some(writer.snapshot.len()))?;
         crate::scalable_fault_point("create.native_sync");
         let sync = writer.file.sync_all();
         crate::scalable_fault_point("create.native_sync");
         sync?;
-        let checkpoint = writer.checkpoint();
-        let identity = primary_identity(writer.spec, &writer.snapshot)?;
-        let metadata = DiskIndexMetadata::new_state(
-            identity,
-            checkpoint_frontier(&checkpoint),
-            tail_limit_for_spec(writer.spec).map_err(state_error)?,
-        )
-        .with_primary_generation(primary_generation(
-            writer.spec,
-            &writer.snapshot,
-            writer.snapshot.len(),
-        )?);
-        let store = create_state_store(
-            &path,
-            state_options(options),
-            metadata,
-            &checkpoint_disk_tails(&checkpoint),
-        )?;
-        writer.state = Some(StreamWriterState::new(
-            store.with_device_flush(writer.spec.device_flush),
-            state_chunk_records(writer.spec, state_options(options).batch),
-        ));
-        writer.install_state_chain();
+        // The file is durable; its name is once the directory holding it is.
+        // A failure here leaves a complete file a plain open resumes.
+        crate::file::sync_parent_directory(&path, writer.spec.device_flush).map_err(|error| {
+            crate::fallible::boxed_path_error(
+                error,
+                &path,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            )
+        })?;
+        writer.begin_sync_chain();
         Ok(writer)
-    }
-
-    pub fn restore_checkpoint_and_open(
-        spec: FormatSpec,
-        path: impl AsRef<Path>,
-        options: StreamOptions,
-    ) -> Result<Self> {
-        refuse_matrix_stream(spec)?;
-        let path = std::fs::canonicalize(path.as_ref())?;
-        let (mut writer, store, base_eof) = Self::restore_checkpointed(
-            spec,
-            &path,
-            options,
-            state_options(options),
-            state_sidecar_path(&path),
-            DiskIndexMode::StateOnly,
-        )?;
-        writer.state = Some(StreamWriterState::new(
-            store.with_device_flush(writer.spec.device_flush),
-            state_chunk_records(writer.spec, state_options(options).batch),
-        ));
-        writer.install_state_chain();
-        writer.replay_state_tail(base_eof)?;
-        Ok(writer)
-    }
-
-    /// Covers the records in `[from, EOF)` — kept by recovery, not yet in the
-    /// state sidecar — and confirms the sidecar over them.
-    fn replay_state_tail(&mut self, from: u64) -> Result<()> {
-        let end = self.snapshot.len();
-        if from == end {
-            return Ok(());
-        }
-        let chunk = self
-            .state
-            .as_ref()
-            .map_or(1, |state| state.chunk_records.max(1));
-        let mut scanner =
-            NativeStreamScanner::from_offset_framing_only(self.spec, self.snapshot.clone(), from)?;
-        let mut records: Vec<(u32, AppendInfo)> = Vec::new();
-        loop {
-            let entry = scanner.next_entry()?;
-            if let Some(entry) = entry.as_ref() {
-                records
-                    .try_reserve(1)
-                    .map_err(|_| Error::AllocationFailed {
-                        resource: "recovered record descriptors",
-                        requested: std::mem::size_of::<(u32, AppendInfo)>() as u64,
-                    })?;
-                records.push((entry.block_id, AppendInfo::from(entry)));
-            }
-            if records.len() >= chunk || (entry.is_none() && !records.is_empty()) {
-                let chunk_end = scanner.logical_eof();
-                self.ensure_writable()?.reserve_state_chunk(records.len())?;
-                self.stage_state_records(&records, chunk_end)?;
-                records.clear();
-            }
-            if entry.is_none() {
-                break;
-            }
-        }
-        self.sync_with(true)
     }
 
     pub(crate) fn create_unmanaged(
@@ -1124,7 +732,9 @@ impl VarlitStreamWriter {
         lock.bind_native(file.raw(), &path)?;
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
-        write_file_header(spec, &mut file)?;
+        let header_extensions = write_stream_file_header(spec, &mut file)?;
+        let header_len = file.stream_position()?;
+        adopt_published_end(&mut file, header_len, &header_extensions)?;
         let snapshot = SnapshotFile::new(file.try_clone()?)?;
         let mut writer = Self {
             spec,
@@ -1133,7 +743,6 @@ impl VarlitStreamWriter {
             sequence: Some(0),
             record_count: 0,
             block_tails: initial_block_tails(spec),
-            state: None,
             poison: PoisonFlag::healthy(),
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
@@ -1178,214 +787,110 @@ impl VarlitStreamWriter {
         Ok(writer)
     }
 
-    /// Opens the writer, recovering first when the state sidecar trails the
-    /// primary (an unconfirmed tail, or an interrupted generation): the
-    /// verified sync-marker prefix is kept and replayed, anything after it is
-    /// cut. See [`Self::restore_checkpoint_and_open`].
+    /// Opens the writer at the file's confirmed prefix, recovering first.
+    ///
+    /// The durable boundary is the end the last sync published in the
+    /// file's `VPUB` block. The state there (next sequence, record count,
+    /// block tails) is the stream summary of the newest intact anchor before
+    /// it, advanced over the records framed from that anchor on; a file with
+    /// no such anchor is framed from its header. Every later sync whose marker
+    /// verifies is kept, everything after the last one is cut, and the kept
+    /// end is synced and published before the first append. A file with no
+    /// published end (one written before the block existed, or last written by
+    /// a native writer) is framed from its header to find it.
     pub fn open(spec: FormatSpec, path: impl AsRef<Path>, options: StreamOptions) -> Result<Self> {
         refuse_matrix_stream(spec)?;
-        match Self::open_clean(spec, path.as_ref(), options) {
-            Err(error) if crate::disk_index::requires_recovery(&error) => {
-                Self::restore_checkpoint_and_open(spec, path, options)
-            }
-            result => result,
-        }
+        Self::open_recovered(spec, path.as_ref(), options)
     }
 
-    fn open_clean(spec: FormatSpec, path: &Path, options: StreamOptions) -> Result<Self> {
+    fn open_recovered(spec: FormatSpec, path: &Path, options: StreamOptions) -> Result<Self> {
+        let spec = stream_spec(spec, options, false)?;
         let path = std::fs::canonicalize(path)?;
-        let (mut writer, store) =
-            Self::open_checkpointed(spec, &path, options, |identity, physical_len| {
-                let mut store =
-                    DiskIndexStore::open_writer(state_sidecar_path(&path), state_options(options))
-                        .map_err(state_error)?;
-                let state = store
-                    .validate_clean_writer_for_spec(
-                        identity,
-                        DiskIndexMode::StateOnly,
-                        physical_len,
-                        spec,
-                    )
-                    .map_err(state_error)?;
-                Ok((
-                    stream_checkpoint_from_state(&state),
-                    state.metadata.primary_generation,
-                    store,
-                ))
-            })?;
-        writer.state = Some(StreamWriterState::new(
-            store.with_device_flush(writer.spec.device_flush),
-            state_chunk_records(writer.spec, state_options(options).batch),
-        ));
-        writer.install_state_chain();
-        Ok(writer)
-    }
-
-    pub(crate) fn open_checkpointed<T>(
-        spec: FormatSpec,
-        path: impl AsRef<Path>,
-        options: StreamOptions,
-        load_checkpoint: impl FnOnce(
-            crate::disk_index::DiskIndexIdentity,
-            u64,
-        )
-            -> Result<(StreamCheckpoint, DiskIndexPrimaryGeneration, T)>,
-    ) -> Result<(Self, T)> {
-        let spec = stream_spec(spec, options, false)?;
-        let path = std::fs::canonicalize(path.as_ref())?;
         let lock = WriterLock::acquire(&path)?;
         let mut file = PrimaryFile::new(
             crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
             None,
         )
         .with_device_flush(spec.device_flush);
-        let header_len = read_primary_header(spec, &mut file)?.0;
+        let (header_len, extensions) = read_primary_header(spec, &mut file)?;
+        let root = RootSource {
+            header_len,
+            slots_at: crate::file::published_end_slots_at(header_len, &extensions)?,
+        };
+        if let Some(slots_at) = root.slots_at {
+            file.adopt_writer_published(slots_at)?;
+        }
         // Logical: an anchored file's anchors are not part of the log.
-        let physical_len = file.len()?;
-        let physical_snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, physical_len)?;
-        let identity = primary_identity(spec, &physical_snapshot)?;
-        let (checkpoint, generation, loaded) = load_checkpoint(identity, physical_len)?;
-        // the sidecar must belong to this generation of the primary,
-        // not merely to the same file object with the same header bytes — of
-        // which a declared `header_tails` region's payload is no longer one,
-        // since a commit rewrites it in place and `primary_generation` blanks
-        // it for exactly that reason.
-        verify_primary_generation(spec, generation, &physical_snapshot)?;
-        checkpoint.validate(spec, header_len, physical_len)?;
-        file.seek(SeekFrom::Start(checkpoint.logical_eof))?;
-        let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, checkpoint.logical_eof)?;
-        Ok((
-            Self {
-                spec,
-                file,
-                snapshot,
-                sequence: checkpoint.next_sequence,
-                record_count: checkpoint.record_count,
-                block_tails: block_tails_from_checkpoint(spec, &checkpoint.block_tails),
-                state: None,
-                poison: PoisonFlag::healthy(),
-                record_buffer: Vec::new(),
-                immediate_state: Default::default(),
-                sync_chain: None,
-                _lock: lock,
-            },
-            loaded,
-        ))
-    }
-
-    /// Recovers a checkpointed primary from its newest durable sidecar
-    /// checkpoint.
-    ///
-    /// The primary is cut back to the end of the verified sync-marker prefix
-    /// after the checkpoint's EOF — every acknowledged sync survives, and
-    /// nothing after the last one does — and the sidecar is reset to the
-    /// checkpoint. The returned writer is positioned at that end with its
-    /// sequence, count and tails advanced over the kept records; the returned
-    /// offset is the checkpoint's EOF, from which the caller replays those
-    /// records into its sidecar.
-    pub(crate) fn restore_checkpointed(
-        spec: FormatSpec,
-        path: impl AsRef<Path>,
-        options: StreamOptions,
-        index_options: DiskIndexOptions,
-        sidecar: impl AsRef<Path>,
-        mode: DiskIndexMode,
-    ) -> Result<(Self, DiskIndexStore, u64)> {
-        let spec = stream_spec(spec, options, false)?;
-        let path = std::fs::canonicalize(path.as_ref())?;
-        let lock = WriterLock::acquire(&path)?;
-        let mut file = PrimaryFile::new(
-            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
-            None,
-        )
-        .with_device_flush(spec.device_flush);
-        let header_len = read_primary_header(spec, &mut file)?.0;
-        // Logical: an anchored file's anchors are not part of the log.
-        let physical_len = file.len()?;
-        let physical_snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, physical_len)?;
-        let identity = primary_identity(spec, &physical_snapshot)?;
-        let mut store = DiskIndexStore::open_writer(sidecar, index_options).map_err(state_error)?;
-        let guard = store
-            .stage_restore_for_spec(identity, mode, physical_len, spec)
-            .map_err(state_error)?;
-        verify_primary_generation(spec, guard.primary_generation(), &physical_snapshot)?;
-        let checkpoint = stream_checkpoint_from_frontier(guard.frontier(), guard.tails());
-        let base_eof = guard.base_eof();
-        checkpoint.validate(spec, header_len, base_eof)?;
-        let mut tail = crate::sync_marker::MarkedTail::new(base_eof);
-        tail.advance(spec, &physical_snapshot)?;
-        let kept_eof = tail.committed();
+        let header = SnapshotFile::from_file_with_len(file.try_clone()?, header_len)?;
+        let (published, len) = root.read(&header, || Ok(file.len()?))?;
+        let physical = header.with_len(len)?;
+        let mut position = StreamPosition::initial(spec);
+        let start = match published {
+            StreamRoot::Published(end) => {
+                let from = position.resume_from_anchor(&file, header_len, end)?;
+                // Durable: a record before it that does not frame is damage,
+                // not a torn tail.
+                let reached = frame_until(spec, &physical, from, end, &mut position)?;
+                if reached != end {
+                    return Err(Error::CorruptTail { offset: reached });
+                }
+                end
+            }
+            StreamRoot::Scan { takeover } => {
+                scan_root(spec, &physical, header_len, takeover, &mut position)?
+            }
+        };
+        let mut tail = crate::sync_marker::MarkedTail::new(start);
+        tail.advance(spec, &physical)?;
+        let kept = tail.committed();
+        let reached = frame_until(spec, &physical, start, kept, &mut position)?;
+        if reached != kept {
+            return Err(Error::CorruptTail { offset: reached });
+        }
         crate::publication_protocol::restore(
-            || -> Result<()> {
+            &mut file,
+            |file| -> Result<()> {
+                if len == kept {
+                    return Ok(());
+                }
                 crate::scalable_fault_point("restore.native_truncate");
-                let truncate = file.set_len(kept_eof);
+                let truncate = file.set_len(kept);
                 crate::scalable_fault_point("restore.native_truncate");
                 truncate?;
                 Ok(())
             },
-            || -> Result<()> {
+            |file| -> Result<()> {
+                if len == start && kept == start {
+                    return Ok(());
+                }
                 crate::scalable_fault_point("restore.native_sync");
                 let sync = file.sync_all();
                 crate::scalable_fault_point("restore.native_sync");
                 sync?;
                 Ok(())
             },
-            || {
-                let observed_len = file.len()?;
-                guard
-                    .commit_after_native_sync_at(observed_len, kept_eof)
-                    .map_err(state_error)
-            },
+            // Published once durable, and made durable itself by the next
+            // barrier. A crash before then leaves the earlier end, which
+            // only lengthens the next open's walk.
+            |file| file.write_published_end(Some(kept)),
         )?;
-        file.seek(SeekFrom::Start(kept_eof))?;
-        let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, kept_eof)?;
-        let mut sequence = checkpoint.next_sequence;
-        let mut record_count = checkpoint.record_count;
-        let mut block_tails = block_tails_from_checkpoint(spec, &checkpoint.block_tails);
-        if kept_eof > base_eof {
-            let mut scanner =
-                NativeStreamScanner::from_offset_framing_only(spec, snapshot.clone(), base_eof)?;
-            while let Some(entry) = scanner.next_entry()? {
-                if sequence.is_some_and(|next| entry.sequence < next) {
-                    return Err(Error::CorruptTail {
-                        offset: entry.record_offset,
-                    });
-                }
-                sequence = entry.sequence.checked_add(1);
-                record_count =
-                    record_count
-                        .checked_add(1)
-                        .ok_or(Error::ResourceArithmeticOverflow {
-                            resource: "record count",
-                        })?;
-                if entry.block_id != crate::sync_marker::SYNC_BLOCK_ID {
-                    set_tail(
-                        &mut block_tails,
-                        entry.block_id,
-                        entry.record_offset,
-                        entry.sequence,
-                    );
-                }
-            }
-        }
-        Ok((
-            Self {
-                spec,
-                file,
-                snapshot,
-                sequence,
-                record_count,
-                block_tails,
-                state: None,
-                poison: PoisonFlag::healthy(),
-                record_buffer: Vec::new(),
-                immediate_state: Default::default(),
-                sync_chain: None,
-                _lock: lock,
-            },
-            store,
-            base_eof,
-        ))
+        file.seek(SeekFrom::Start(kept))?;
+        let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, kept)?;
+        let mut writer = Self {
+            spec,
+            file,
+            snapshot,
+            sequence: position.sequence,
+            record_count: position.record_count,
+            block_tails: position.block_tails,
+            poison: PoisonFlag::healthy(),
+            record_buffer: Vec::new(),
+            immediate_state: Default::default(),
+            sync_chain: None,
+            _lock: lock,
+        };
+        writer.begin_sync_chain();
+        Ok(writer)
     }
 
     pub fn push_info<T: VarlitBlock>(&mut self, value: &T) -> Result<AppendInfo> {
@@ -1444,9 +949,7 @@ impl VarlitStreamWriter {
         if T::KIND == BlockKind::Matrix {
             return Err(Error::StreamingUnsupported);
         }
-        // The indexed owner evaluates its own condition once and enforces it
-        // after publishing the matching index update.
-        let mandatory = self.state.is_some() && (T::IMMEDIATE || value.immediate_if());
+        let mandatory = T::IMMEDIATE || value.immediate_if();
         let sequence = self.next_sequence()?;
         let offset = self.snapshot.len();
         let previous_block = self.previous_block(T::ID);
@@ -1474,10 +977,7 @@ impl VarlitStreamWriter {
         };
         self.record_buffer = buffer;
         let info = result?;
-        // Only a checkpointed writer has a durability boundary to run.
-        if self.state.is_some() {
-            self.apply_immediate::<T>(info, crate::ImmediateOperation::Append, mandatory)?;
-        }
+        self.apply_immediate::<T>(info, crate::ImmediateOperation::Append, mandatory)?;
         Ok(info)
     }
 
@@ -1508,44 +1008,33 @@ impl VarlitStreamWriter {
         let info = self
             .ensure_writable()?
             .append_prepared(TOMBSTONE_BLOCK_ID, record)?;
-        if self.state.is_some() {
-            self.apply_immediate::<T>(info, crate::ImmediateOperation::Delete, T::IMMEDIATE)?;
-        }
+        self.apply_immediate::<T>(info, crate::ImmediateOperation::Delete, T::IMMEDIATE)?;
         Ok(info)
     }
 
     pub fn flush(&mut self) -> Result<()> {
         self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
-        self.ensure_writable()?.commit_state_chunk()?;
         self.file.flush()?;
         Ok(())
     }
 
-    /// Makes every preceding record durable and visible to readers.
-    ///
-    /// With a state sidecar this is one storage barrier: a sync marker closes
-    /// the records since the last sync and the primary is synced. The sidecar
-    /// is confirmed as well only once the primary has outgrown it by the
-    /// [`DiskIndexConfirmPolicy`](crate::DiskIndexConfirmPolicy) in
-    /// `StreamOptions::state`; readers and recovery take the rest from the
-    /// primary.
+    /// Makes every preceding record durable and visible to readers: a sync
+    /// marker closes the records since the last sync, one storage barrier
+    /// makes them durable, and the end is published in the file's `VPUB`
+    /// block.
     pub fn sync(&mut self) -> Result<()> {
-        self.sync_with(false)
+        self.sync_with()
     }
 
     /// Syncs through the verified commit driver: readiness and the sync
-    /// marker, the primary barrier, the state publication (poisoning the
-    /// writer when its outcome is uncertain), then the bookkeeping.
-    fn sync_with(&mut self, force_confirm: bool) -> Result<()> {
+    /// marker, the primary barrier, the publication, then the bookkeeping.
+    fn sync_with(&mut self) -> Result<()> {
         use crate::publication_protocol::CommitStep;
-        let mut confirmed = None;
         crate::publication_protocol::commit(|step| {
             match step {
                 CommitStep::Prepare => {
                     self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
-                    if self.state.is_some() {
-                        self.append_sync_marker()?;
-                    }
+                    self.append_sync_marker()?;
                 }
                 CommitStep::PrimarySync => {
                     crate::scalable_fault_point("sync.native_sync");
@@ -1554,51 +1043,22 @@ impl VarlitStreamWriter {
                     sync?;
                 }
                 CommitStep::Publish => {
-                    let eof = self.snapshot.len();
-                    let records = self.record_count;
-                    let due = self.state.as_ref().is_some_and(|state| {
-                        state.dirty
-                            && (force_confirm
-                                || state.store.options().confirm.due(
-                                    eof - state.confirmed_eof,
-                                    records - state.confirmed_records,
-                                ))
-                    });
-                    if due {
-                        self.ensure_writable()?.commit_state_chunk()?;
-                        let frontier = checkpoint_frontier(&self.checkpoint());
-                        let state = self.state.as_mut().expect("state checked");
-                        state.store.publish_clean(frontier).map_err(state_error)?;
-                        confirmed = Some((eof, records));
-                    }
+                    // The end of this sync, after its barrier: the durable
+                    // boundary readers and the next open start from. One
+                    // 24-byte header write, made durable by the next barrier;
+                    // until then a crash leaves the previous slot, an earlier
+                    // boundary, which only lengthens the walk. Best-effort for
+                    // the same reason.
+                    let _ = self.file.write_published_end(Some(self.snapshot.len()));
                 }
                 CommitStep::Poison => self.poison.poison(),
-                CommitStep::Finish => {
-                    if let (Some((eof, records)), Some(state)) = (confirmed, self.state.as_mut()) {
-                        state.dirty = false;
-                        state.confirmed_eof = eof;
-                        state.confirmed_records = records;
-                    }
-                    self.immediate_state.reset();
-                }
+                CommitStep::Finish => self.immediate_state.reset(),
             }
             Ok(())
         })
     }
 
-    /// Records that the state sidecar covers exactly this EOF and opens the
-    /// sync-marker chain there.
-    fn install_state_chain(&mut self) {
-        let eof = self.snapshot.len();
-        let records = self.record_count;
-        if let Some(state) = self.state.as_mut() {
-            state.confirmed_eof = eof;
-            state.confirmed_records = records;
-        }
-        self.begin_sync_chain();
-    }
-
-    /// Persist all preceding records and publish their clean sidecar root.
+    /// Persist all preceding records and publish their end.
     pub fn immediate(&mut self) -> Result<()> {
         self.sync()
     }
@@ -1627,47 +1087,8 @@ impl VarlitStreamWriter {
         Ok(())
     }
 
-    /// Reclaim old state checkpoints after an explicit sync, without waiting
-    /// for readers or changing the native file.
-    pub fn compact_index(&mut self) -> Result<crate::IndexCompaction> {
-        let _permit = self.ensure_writable()?;
-        let dirty = self
-            .state
-            .as_ref()
-            .ok_or(Error::StreamingUnsupported)?
-            .dirty;
-        if dirty {
-            // Compaction rewrites the confirmed sidecar, so confirm first:
-            // synced records not yet confirmed would otherwise be left out.
-            // Unsynced records still require a sync first.
-            if self.sync_pending() {
-                return Err(state_error(DiskIndexError::CleanStateRequired));
-            }
-            self.sync_with(true)?;
-        }
-        let state = self.state.as_mut().ok_or(Error::StreamingUnsupported)?;
-        let result = state.store.compact().map_err(state_error);
-        if result.is_err() {
-            self.poison.poison();
-        }
-        result
-    }
-
     pub fn resident_state(&self) -> StreamResidentState {
         resident_state(self.spec)
-    }
-
-    pub(crate) fn checkpoint(&self) -> StreamCheckpoint {
-        StreamCheckpoint {
-            logical_eof: self.snapshot.len(),
-            record_count: self.record_count,
-            next_sequence: self.sequence,
-            block_tails: self
-                .block_tails
-                .iter()
-                .filter_map(|(_, tail)| tail.clone())
-                .collect(),
-        }
     }
 
     fn push_iter_inner<T, I>(
@@ -1692,9 +1113,7 @@ impl VarlitStreamWriter {
             return Err(Error::StreamingUnsupported);
         }
 
-        let max_records = self.state.as_ref().map_or(options.max_records, |state| {
-            options.max_records.min(state.chunk_records)
-        });
+        let max_records = options.max_records;
         let mut bytes = Vec::new();
         let mut records: Vec<(u32, AppendInfo)> = Vec::new();
         let mut next_sequence = self.sequence;
@@ -1789,147 +1208,6 @@ impl VarlitStreamWriter {
         Ok(())
     }
 
-    fn stage_state_records(&mut self, records: &[(u32, AppendInfo)], final_eof: u64) -> Result<()> {
-        let Some(state) = self.state.as_mut() else {
-            return Ok(());
-        };
-        let chain = self.spec.index_policy.block_offset_chain;
-        let batch = state
-            .store
-            .batch
-            .as_mut()
-            .ok_or(Error::InvalidIndexCheckpoint)?;
-        for (index, (block_id, info)) in records.iter().enumerate() {
-            let end = records
-                .get(index + 1)
-                .map_or(final_eof, |(_, next)| next.record_offset);
-            // Only the final record of each block in this chunk hands a tail to
-            // the sidecar; intermediate tails would be superseded inside the
-            // same transaction anyway.
-            let tail = (chain
-                && *block_id != crate::sync_marker::SYNC_BLOCK_ID
-                && records[index + 1..]
-                    .iter()
-                    .all(|(candidate, _)| candidate != block_id))
-            .then_some(DiskIndexTail {
-                block_id: *block_id,
-                record_offset: info.record_offset,
-                sequence: info.sequence,
-            });
-            batch
-                .advance_coverage_with_tail(info.record_offset, end, info.sequence, tail)
-                .map_err(state_error)?;
-            state.batch_records += 1;
-            state.batch_last_sequence = Some(info.sequence);
-        }
-        Ok(())
-    }
-
-    /// Wraps `error` as a published outcome when `staged` names records that
-    /// are already in the native file, and poisons the writer.
-    fn published_sidecar_error(&mut self, staged: Option<u64>, error: Error) -> Error {
-        let Some(sequence) = staged else {
-            return error;
-        };
-        self.poison.poison();
-        match error {
-            already @ Error::PublishedButIndexStale { .. } => already,
-            source => crate::fallible::boxed_error(
-                source,
-                Error::ErrorContextAllocationFailed {
-                    context: crate::AllocationFailureContext::PublishedIndex { sequence },
-                },
-                |source| Error::PublishedButIndexStale { sequence, source },
-            ),
-        }
-    }
-
-    fn commit_state_chunk_inner(&mut self) -> Result<()> {
-        // re-stamp the generation witness while its window is still
-        // filling. Once the window is full it is frozen for the file's life,
-        // so steady-state appends pay nothing here.
-        let pending = match self
-            .state
-            .as_ref()
-            .and_then(|state| state.store.batch.as_ref())
-        {
-            Some(batch) if batch.primary_generation().len < PRIMARY_GENERATION_WINDOW => {
-                take_injected_generation_restamp_failure()?;
-                // At the batch's own frontier: during recovery replay the
-                // primary already extends past what the batch covers.
-                Some(primary_generation(
-                    self.spec,
-                    &self.snapshot,
-                    batch.working_frontier().eof,
-                )?)
-            }
-            _ => None,
-        };
-        let Some(state) = self.state.as_mut() else {
-            return Ok(());
-        };
-        if let (Some(generation), Some(batch)) = (pending, state.store.batch.as_mut()) {
-            batch
-                .set_primary_generation(generation)
-                .map_err(state_error)?;
-        }
-        let Some(_) = state.store.batch.as_ref() else {
-            return Ok(());
-        };
-        let sequence = state.batch_last_sequence.take();
-        state.batch_records = 0;
-        if let Err(error) = state.store.commit_batch() {
-            self.poison.poison();
-            return match sequence {
-                // The staged records were already published natively.
-                Some(sequence) => Err(crate::fallible::boxed_error(
-                    state_error(error),
-                    Error::ErrorContextAllocationFailed {
-                        context: crate::AllocationFailureContext::PublishedIndex { sequence },
-                    },
-                    |source| Error::PublishedButIndexStale { sequence, source },
-                )),
-                None => Err(state_error(error)),
-            };
-        }
-        Ok(())
-    }
-
-    /// Arms `count` injected post-publication generation-restamp failures
-    /// (round 11, invariant 3).
-    ///
-    /// Fault-testing hook only: each armed failure makes the next sidecar
-    /// chunk commit fail its
-    /// primary-generation restamp *after* the chunk's records have been
-    /// appended to the native file. The observable contract under this fault
-    /// is that the caller receives `Error::PublishedButIndexStale` and a
-    /// poisoned writer rather than a bare `Err`, because the records are in
-    /// the file and a caller entitled to read `Err` as "nothing happened"
-    /// would append them a second time. Thread-local.
-    #[cfg(feature = "scalable-fault-injection")]
-    #[doc(hidden)]
-    pub fn inject_generation_restamp_failures(count: u64) {
-        INJECTED_GENERATION_RESTAMP_FAILURES.with(|armed| armed.set(count));
-    }
-
-    /// Returns how many times this thread computed a primary generation
-    /// witness by scanning the primary's leading window.
-    ///
-    /// Fault-testing hook only: once the window is full the witness is frozen,
-    /// so steady-state appends must leave this counter unchanged.
-    #[cfg(feature = "scalable-fault-injection")]
-    #[doc(hidden)]
-    pub fn primary_generation_scans() -> u64 {
-        crate::disk_index::scaling_counters::primary_generation_scans()
-    }
-
-    /// Resets this thread's [`Self::primary_generation_scans`] counter.
-    #[cfg(feature = "scalable-fault-injection")]
-    #[doc(hidden)]
-    pub fn reset_scaling_counters() {
-        crate::disk_index::scaling_counters::reset();
-    }
-
     /// Arms `count` injected native-append failures whose rollback also fails
     /// (round 12, ).
     ///
@@ -1958,22 +1236,13 @@ impl VarlitStreamWriter {
         self.writer_permit(STREAM_WRITER_POISON_CONTEXT)
     }
 
-    /// Opens the sync-marker chain at the current EOF. Called once the writer
-    /// is checkpointed and its sidecar covers exactly this EOF.
+    /// Opens the sync-marker chain at the current EOF, a confirmed end.
     pub(crate) fn begin_sync_chain(&mut self) {
         self.sync_chain = Some(crate::sync_marker::SyncChain::new(self.snapshot.len()));
     }
 
-    /// Whether anything was appended since the last sync marker.
-    pub(crate) fn sync_pending(&self) -> bool {
-        self.sync_chain
-            .as_ref()
-            .is_some_and(|chain| chain.start() != self.snapshot.len())
-    }
-
     /// Closes the open chain link with a sync marker, if the link is not
-    /// empty. The marker is an ordinary append, so a state sidecar stages its
-    /// coverage like any other record; an indexed caller covers it itself.
+    /// empty. The marker is an ordinary append.
     pub(crate) fn append_sync_marker(&mut self) -> Result<Option<AppendInfo>> {
         self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
         let Some(chain) = self.sync_chain.as_ref() else {
@@ -2022,6 +1291,15 @@ impl VarlitStreamWriter {
 fn refuse_matrix_stream(spec: FormatSpec) -> Result<()> {
     if spec.has_matrix_blocks() || spec.keyed_storage.is_some() {
         return Err(Error::StreamingUnsupported);
+    }
+    Ok(())
+}
+
+/// Lets a stream writer's file handle publish into the file's `VPUB` block,
+/// when it has one (every stream-created file does; older ones do not).
+fn adopt_published_end(file: &mut PrimaryFile, header_len: u64, extensions: &[u8]) -> Result<()> {
+    if let Some(slots_at) = crate::file::published_end_slots_at(header_len, extensions)? {
+        file.adopt_writer_published(slots_at)?;
     }
     Ok(())
 }
@@ -2091,26 +1369,13 @@ fn initial_block_tails(spec: FormatSpec) -> Vec<(u32, Option<StreamTail>)> {
     if !spec.index_policy.block_offset_chain {
         return Vec::new();
     }
-    // Uncharged by the same exception as `disk_index::compute_plan_digest`:
-    // both terms are compile-time shape -- the declared block count and a fixed
-    // array of internal ids -- so no file content can size this.
+    // Allocated once at open and uncharged: both terms are compile-time shape
+    // -- the declared block count and a fixed array of internal ids -- so no
+    // file content can size this.
     let mut tails = Vec::with_capacity(spec.blocks.len() + INTERNAL_BLOCK_IDS.len());
     tails.extend(spec.blocks.iter().map(|block| (block.id, None)));
     tails.extend(INTERNAL_BLOCK_IDS.map(|block_id| (block_id, None)));
     tails.sort_unstable_by_key(|(block_id, _)| *block_id);
-    tails
-}
-
-fn block_tails_from_checkpoint(
-    spec: FormatSpec,
-    checkpoint: &[StreamTail],
-) -> Vec<(u32, Option<StreamTail>)> {
-    let mut tails = initial_block_tails(spec);
-    for tail in checkpoint {
-        if let Ok(index) = tails.binary_search_by_key(&tail.block_id, |(block_id, _)| *block_id) {
-            tails[index].1 = Some(tail.clone());
-        }
-    }
     tails
 }
 
@@ -2153,142 +1418,314 @@ fn canonical_write_path(path: &Path) -> Result<PathBuf> {
     Ok(parent.join(name))
 }
 
-fn state_options(options: StreamOptions) -> DiskIndexOptions {
-    options.state
+/// Where a stream file's durable boundary is read from.
+#[derive(Clone, Copy, Debug)]
+struct RootSource {
+    header_len: u64,
+    /// The file's `VPUB` slots; `None` in a file written before the block
+    /// existed.
+    slots_at: Option<u64>,
 }
 
-fn state_chunk_records(spec: FormatSpec, batch: DiskIndexBatchOptions) -> usize {
-    let per_record = batch_item_fixed_bytes(spec.index_policy.block_offset_chain);
-    batch.max_records.min(batch.max_bytes / per_record).max(1)
+/// What a stream file's `VPUB` block says about its durable boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamRoot {
+    /// The end of the newest sync the writer published.
+    Published(u64),
+    /// No end is published, so the boundary is found by framing.
+    /// `takeover` when a native writer withdrew the end a stream published.
+    Scan { takeover: bool },
 }
 
-/// Test-only interposition point between sidecar publication and the
-/// post-publication identity re-check , where a non-cooperating pathname
-/// mutator would have to land to make the published sidecar stale.
-///
-/// Armed hooks are held in a path-keyed table, and consumption removes **only**
-/// the entry whose primary matches. An earlier single-slot cell let one
-/// test's registration silently replace another still-armed test's hook, which
-/// made the parallel library run nondeterministic.
-#[cfg(test)]
-pub(crate) fn interpose_after_state_publication(primary: &Path) {
-    let mut armed = PUBLICATION_INTERPOSITION
-        .lock()
-        .expect("publication interposition");
-    let Some(position) = armed
-        .iter()
-        .position(|(target, _)| target.as_path() == primary)
-    else {
-        return;
-    };
-    let (_, hook) = armed.swap_remove(position);
-    drop(armed);
-    hook();
-}
-
-#[cfg(test)]
-type PublicationInterposition = std::sync::Mutex<Vec<(PathBuf, Box<dyn FnOnce() + Send>)>>;
-
-#[cfg(test)]
-static PUBLICATION_INTERPOSITION: PublicationInterposition = std::sync::Mutex::new(Vec::new());
-
-/// Arms a test-only hook for one primary path.
-///
-/// Registering a second hook for a path that still has one armed is a test
-/// defect - the first hook would be lost silently - so it panics rather than
-/// overwriting. Hooks for *different* paths coexist, which is what lets the
-/// stream and indexed sidecar tests run in parallel.
-#[cfg(test)]
-pub(crate) fn set_publication_interposition(primary: &Path, hook: Box<dyn FnOnce() + Send>) {
-    let mut armed = PUBLICATION_INTERPOSITION
-        .lock()
-        .expect("publication interposition");
-    assert!(
-        !armed.iter().any(|(target, _)| target.as_path() == primary),
-        "a publication interposition is already armed for {}",
-        primary.display(),
-    );
-    armed.push((primary.to_path_buf(), hook));
-}
-
-/// Retires a sidecar that was published for a primary the pathname stopped
-/// naming during publication, and reports which of the two outcomes happened
-///
-///
-/// The removal is identity-checked and directory-confined, exactly like the
-/// self-test's destructive cleanup, so this can never delete a sidecar some
-/// other party published at that pathname. Whether the stale sidecar was
-/// removed or had to be left in place changes what the caller must do next, so
-/// the two cases are different typed errors rather than one.
-///
-/// This does not make sidecar publication atomic with respect to a
-/// non-cooperating pathname mutator; nothing available to a userspace library
-/// can. It bounds the damage such a writer can do to a rebuild the caller must
-/// repeat, which is the documented non-cooperating-writer boundary: Varlit
-/// serializes cooperating writers with [`crate::file::WriterLock`], and a
-/// process that replaces the primary without it is outside that contract.
-pub(crate) fn retire_sidecar_for_replaced_primary(
-    sidecar: &Path,
-    published: Option<crate::file::PinnedObject>,
-) -> crate::disk_index::DiskIndexError {
-    let Some(published) = published else {
-        // The sidecar's own identity could not be captured, so removing it
-        // would be a deletion by unverified pathname — the very thing this
-        // helper exists to avoid. Report what the caller must clean up.
-        return crate::disk_index::DiskIndexError::CheckpointMismatch(
-            "the primary was replaced while its sidecar was published; the sidecar this call \
-             published is stale and could not be identified for removal, so delete it before \
-             reusing the file",
-        );
-    };
-    // A pin, not identity bytes: the removal compares inode numbers, and an
-    // inode number freed between the capture and the unlink is reissued to
-    // whatever is created next, so bytes copied out of a closed handle would
-    // let this delete a sidecar it never published.
-    match crate::diagnostics::remove_path_if_same_object(sidecar, &published) {
-        // Removed, or already replaced by whoever else is writing this
-        // pathname: either way this call left no sidecar of its own behind.
-        crate::diagnostics::ObjectRemoval::Removed
-        | crate::diagnostics::ObjectRemoval::NotOwned => {
-            crate::disk_index::DiskIndexError::IdentityMismatch
+impl RootSource {
+    /// Reads both slots once, through any snapshot of the file (the header
+    /// precedes every record). A slot a writer is rewriting fails its
+    /// checksum and the other one holds, so a concurrent read sees the
+    /// previous end at worst.
+    ///
+    /// `len` is the file's length measured *after* this read: the writer
+    /// publishes an end only once the file reaches it, so a later
+    /// measurement reaches it too, and one that does not means records were
+    /// lost.
+    fn read(
+        &self,
+        snapshot: &SnapshotFile,
+        len: impl FnOnce() -> Result<u64>,
+    ) -> Result<(StreamRoot, u64)> {
+        use crate::published_end::{ACTIVE, SLOT_LEN, decode_slot};
+        let Some(slots_at) = self.slots_at else {
+            return Ok((StreamRoot::Scan { takeover: false }, len()?));
+        };
+        let mut slots = [0u8; 2 * SLOT_LEN];
+        snapshot.read_exact_at(slots_at, &mut slots)?;
+        let len = len()?;
+        let mut newest: Option<crate::published_end::Slot> = None;
+        for bytes in slots.as_chunks::<SLOT_LEN>().0 {
+            if let Some(slot) = decode_slot(bytes)
+                && newest.is_none_or(|held| slot.seq > held.seq)
+            {
+                newest = Some(slot);
+            }
         }
-        crate::diagnostics::ObjectRemoval::Refused(_)
-        | crate::diagnostics::ObjectRemoval::Failed => {
-            crate::disk_index::DiskIndexError::CheckpointMismatch(
-                "the primary was replaced while its sidecar was published; the sidecar this call \
-                 published is stale and could not be removed, so delete it before reusing the file",
-            )
+        let root = match newest {
+            Some(slot) if slot.flags & ACTIVE != 0 => {
+                // A published end is durable: a file that no longer reaches
+                // it lost acknowledged records.
+                if slot.end < self.header_len || slot.end > len {
+                    return Err(Error::CorruptTail {
+                        offset: slot.end.min(len),
+                    });
+                }
+                StreamRoot::Published(slot.end)
+            }
+            Some(_) => StreamRoot::Scan { takeover: true },
+            None => StreamRoot::Scan { takeover: false },
+        };
+        Ok((root, len))
+    }
+}
+
+/// What framing a stream's records keeps track of on the way to its
+/// boundary.
+trait Track {
+    fn see(&mut self, entry: &crate::RecordIndexEntry) -> Result<()>;
+    /// Forgets everything seen, for a walk that starts over from the header.
+    fn forget(&mut self);
+}
+
+/// A reader's walk: only where it ends matters.
+struct NoPosition;
+
+impl Track for NoPosition {
+    fn see(&mut self, _entry: &crate::RecordIndexEntry) -> Result<()> {
+        Ok(())
+    }
+    fn forget(&mut self) {}
+}
+
+/// A follow's walk: how many records it adopts.
+struct CountPosition(u64);
+
+impl Track for CountPosition {
+    fn see(&mut self, _entry: &crate::RecordIndexEntry) -> Result<()> {
+        self.0 += 1;
+        Ok(())
+    }
+    fn forget(&mut self) {
+        self.0 = 0;
+    }
+}
+
+/// A writer's walk: the state it appends from.
+struct StreamPosition {
+    record_count: u64,
+    sequence: Option<u64>,
+    block_tails: Vec<(u32, Option<StreamTail>)>,
+}
+
+impl StreamPosition {
+    fn initial(spec: FormatSpec) -> Self {
+        Self {
+            record_count: 0,
+            sequence: Some(0),
+            block_tails: initial_block_tails(spec),
+        }
+    }
+
+    /// Takes the stream summary of the newest intact anchor before `root`
+    /// and returns where framing resumes: that anchor's spanning record, or
+    /// the header when no anchor before `root` carries one. Looks at a few
+    /// anchors at most; the framing after the one it takes covers the rest.
+    fn resume_from_anchor(
+        &mut self,
+        file: &PrimaryFile,
+        header_len: u64,
+        root: u64,
+    ) -> Result<u64> {
+        const TRIES: u32 = 4;
+        let Some(layout) = file.layout() else {
+            return Ok(header_len);
+        };
+        let mut bytes = [0u8; 4096];
+        let mut k = layout.anchors_before(root);
+        for _ in 0..TRIES {
+            if k == 0 {
+                break;
+            }
+            if let Some((anchor, len)) = file.anchor_into(k, &mut bytes)?
+                && anchor.record_start >= header_len
+                && anchor.record_end <= root
+            {
+                self.forget();
+                let mut fits = true;
+                let tails = &mut self.block_tails;
+                let summary = crate::anchor::StreamSummary::decode(
+                    &bytes[..len],
+                    header_len,
+                    anchor.record_start,
+                    |block_id, record_offset, sequence| match tails
+                        .binary_search_by_key(&block_id, |(id, _)| *id)
+                    {
+                        Ok(index) => {
+                            tails[index].1 = Some(StreamTail {
+                                block_id,
+                                record_offset,
+                                sequence,
+                            });
+                        }
+                        Err(_) => fits = false,
+                    },
+                );
+                if let Some(summary) = summary
+                    && fits
+                    && summary.next_sequence == anchor.sequence
+                {
+                    self.record_count = summary.records_before;
+                    self.sequence = Some(summary.next_sequence);
+                    return Ok(anchor.record_start);
+                }
+            }
+            k -= 1;
+        }
+        self.forget();
+        Ok(header_len)
+    }
+}
+
+impl Track for StreamPosition {
+    fn see(&mut self, entry: &crate::RecordIndexEntry) -> Result<()> {
+        if self.sequence.is_none_or(|next| entry.sequence < next) {
+            return Err(Error::CorruptTail {
+                offset: entry.record_offset,
+            });
+        }
+        self.sequence = entry.sequence.checked_add(1);
+        self.record_count =
+            self.record_count
+                .checked_add(1)
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "record count",
+                })?;
+        if entry.block_id != crate::sync_marker::SYNC_BLOCK_ID {
+            set_tail(
+                &mut self.block_tails,
+                entry.block_id,
+                entry.record_offset,
+                entry.sequence,
+            );
+        }
+        Ok(())
+    }
+
+    fn forget(&mut self) {
+        self.record_count = 0;
+        self.sequence = Some(0);
+        for (_, tail) in &mut self.block_tails {
+            *tail = None;
         }
     }
 }
 
-/// Advances a reader's verified tail and returns how many records it added.
-fn advance_reader_tail(
+/// Frames the records in `[from, until)`, handing each to `track`, and
+/// returns the end of the last one: `until`, unless a record before it does
+/// not frame. Storage errors are returned; a record that does not frame
+/// ends the walk.
+fn frame_until(
     spec: FormatSpec,
-    tail: &mut crate::sync_marker::MarkedTail,
     physical: &SnapshotFile,
+    from: u64,
+    until: u64,
+    track: &mut impl Track,
 ) -> Result<u64> {
-    let from = tail.committed();
-    if !tail.advance(spec, physical)? {
-        return Ok(0);
+    if from >= until {
+        return Ok(from);
     }
-    let mut scanner = NativeStreamScanner::from_offset_framing_only(
-        spec,
-        physical.with_len(tail.committed())?,
-        from,
-    )?;
-    let mut added = 0u64;
-    while scanner.next_entry()?.is_some() {
-        added += 1;
+    let mut scanner =
+        NativeStreamScanner::from_offset_framing_only(spec, physical.with_len(until)?, from)?;
+    let mut end = from;
+    loop {
+        let entry = match scanner.next_entry() {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(Error::Io(error)) => return Err(Error::Io(error)),
+            Err(_) => break,
+        };
+        track.see(&entry)?;
+        end = entry.checked_physical_end()?;
     }
-    Ok(added)
+    Ok(end)
+}
+
+/// Finds the boundary of a file that publishes none, framing from its
+/// header and handing every record before it to `track`.
+///
+/// A file a native writer took over has no markers past its stream part to
+/// verify: every record that frames is kept. Otherwise the file predates the
+/// published end, and its sync chain began where its state sidecar left off,
+/// at the start of the first marker's link, which is where the walk verifies
+/// from. A file with no marker, or whose first link does not start on a
+/// record boundary, keeps every record that frames.
+fn scan_root(
+    spec: FormatSpec,
+    physical: &SnapshotFile,
+    header_len: u64,
+    takeover: bool,
+    track: &mut impl Track,
+) -> Result<u64> {
+    if !takeover && let Some(start) = first_link_start(spec, physical, header_len)? {
+        if frame_until(spec, physical, header_len, start, track)? == start {
+            return Ok(start);
+        }
+        track.forget();
+    }
+    frame_until(spec, physical, header_len, physical.len(), track)
+}
+
+/// The start of the link the file's first sync marker closes.
+fn first_link_start(
+    spec: FormatSpec,
+    physical: &SnapshotFile,
+    header_len: u64,
+) -> Result<Option<u64>> {
+    use crate::sync_marker::{SYNC_BLOCK_ID, SYNC_PAYLOAD_LEN};
+    if header_len >= physical.len() {
+        return Ok(None);
+    }
+    let mut scanner =
+        NativeStreamScanner::from_offset_framing_only(spec, physical.clone(), header_len)?;
+    loop {
+        let entry = match scanner.next_entry() {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return Ok(None),
+            Err(Error::Io(error)) => return Err(Error::Io(error)),
+            Err(_) => return Ok(None),
+        };
+        if entry.block_id != SYNC_BLOCK_ID {
+            continue;
+        }
+        if entry.payload_len != SYNC_PAYLOAD_LEN as u64 {
+            return Ok(None);
+        }
+        let mut payload = [0u8; SYNC_PAYLOAD_LEN];
+        physical.read_exact_at(entry.payload_offset, &mut payload)?;
+        return Ok(crate::sync_marker::decode(&payload)
+            .map(|marker| marker.start)
+            .filter(|start| (header_len..=entry.record_offset).contains(start)));
+    }
 }
 
 /// The anchor a prepared chunk reaches: the record in it that spans the
-/// anchor's logical offset.
+/// anchor's logical offset, and the stream summary of the state before that
+/// record (what a stream open resumes from).
 struct ChunkAnchors<'a> {
     records: &'a [(u32, AppendInfo)],
     end: u64,
+    /// The writer's tails and record count before this chunk.
+    tails: &'a [(u32, Option<StreamTail>)],
+    record_count: u64,
+    /// The index in `records` of the record spanning the last anchor asked
+    /// for: what [`Self::summary`] describes.
+    spanning: Option<usize>,
 }
 
 impl crate::primary_file::AnchorSource for ChunkAnchors<'_> {
@@ -2305,6 +1742,7 @@ impl crate::primary_file::AnchorSource for ChunkAnchors<'_> {
             .records
             .get(index + 1)
             .map_or(self.end, |(_, next)| next.record_offset);
+        self.spanning = Some(index);
         Ok(crate::anchor::Anchor {
             k,
             logical,
@@ -2313,11 +1751,72 @@ impl crate::primary_file::AnchorSource for ChunkAnchors<'_> {
             sequence: info.sequence,
         })
     }
+
+    fn summary(&self) -> Option<&dyn crate::anchor::SummarySource> {
+        self.spanning
+            .map(|_| self as &dyn crate::anchor::SummarySource)
+    }
 }
 
-fn state_error(error: crate::disk_index::DiskIndexError) -> Error {
-    crate::disk_index::index_error(error)
+impl crate::anchor::SummarySource for ChunkAnchors<'_> {
+    /// The state before the spanning record: the writer's state before the
+    /// chunk, advanced by the chunk's records before it. Computed from the
+    /// borrowed slices, with nothing allocated.
+    fn write_summary(&self, out: &mut [u8]) -> bool {
+        let Some(index) = self.spanning else {
+            return false;
+        };
+        let before = &self.records[..index];
+        let tails = self.tails.iter().filter_map(|(block_id, base)| {
+            before
+                .iter()
+                .rev()
+                .find(|(id, _)| id == block_id)
+                .map(|(_, info)| (*block_id, info.record_offset, info.sequence))
+                .or_else(|| {
+                    base.as_ref()
+                        .map(|tail| (*block_id, tail.record_offset, tail.sequence))
+                })
+        });
+        // `filter_map` loses the exact size the encoder bounds by; count once.
+        let count = self
+            .tails
+            .iter()
+            .filter(|(block_id, base)| {
+                base.is_some() || before.iter().any(|(id, _)| id == block_id)
+            })
+            .count();
+        crate::anchor::encode_stream_summary(
+            out,
+            self.record_count + index as u64,
+            self.records[index].1.sequence,
+            ExactCount {
+                inner: tails,
+                left: count,
+            },
+        )
+    }
 }
+
+/// An iterator whose length was counted beforehand.
+struct ExactCount<I> {
+    inner: I,
+    left: usize,
+}
+
+impl<I: Iterator> Iterator for ExactCount<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next()?;
+        self.left = self.left.saturating_sub(1);
+        Some(item)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for ExactCount<I> {}
 
 pub(crate) const fn silent_scan_options() -> ScanOptions<'static> {
     ScanOptions {
@@ -2333,304 +1832,6 @@ pub(crate) const fn scan_cancelled(cancelled: ScanCancelled) -> Error {
     Error::ScanCancelled {
         progress: cancelled.progress,
     }
-}
-
-fn checkpoint_frontier(checkpoint: &StreamCheckpoint) -> DiskIndexFrontier {
-    DiskIndexFrontier::new(
-        checkpoint.logical_eof,
-        checkpoint.record_count,
-        checkpoint.next_sequence,
-    )
-}
-
-fn checkpoint_disk_tails(checkpoint: &StreamCheckpoint) -> Vec<DiskIndexTail> {
-    checkpoint
-        .block_tails
-        .iter()
-        .map(|tail| DiskIndexTail {
-            block_id: tail.block_id,
-            record_offset: tail.record_offset,
-            sequence: tail.sequence,
-        })
-        .collect()
-}
-
-fn stream_checkpoint_from_state(
-    state: &crate::disk_index::DiskIndexPersistentState,
-) -> StreamCheckpoint {
-    stream_checkpoint_from_frontier(state.metadata.committed, &state.tails)
-}
-
-fn stream_checkpoint_from_frontier(
-    frontier: DiskIndexFrontier,
-    tails: &[DiskIndexTail],
-) -> StreamCheckpoint {
-    StreamCheckpoint {
-        logical_eof: frontier.eof,
-        record_count: frontier.record_count,
-        next_sequence: frontier.next_sequence,
-        block_tails: tails
-            .iter()
-            .map(|tail| StreamTail {
-                block_id: tail.block_id,
-                record_offset: tail.record_offset,
-                sequence: tail.sequence,
-            })
-            .collect(),
-    }
-}
-
-fn create_state_store(
-    native_path: &Path,
-    options: DiskIndexOptions,
-    metadata: DiskIndexMetadata,
-    tails: &[DiskIndexTail],
-) -> Result<DiskIndexStore> {
-    let sidecar = state_sidecar_path(native_path);
-    let parent = sidecar
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let temporary = tempfile::Builder::new()
-        .prefix(".varlit-state-")
-        .suffix(".vks.tmp")
-        .tempfile_in(parent)?
-        .into_temp_path();
-    fs::remove_file(&temporary)?;
-    crate::scalable_fault_point("create.sidecar_complete");
-    let store = DiskIndexStore::create_with_tails(&temporary, options, metadata, tails)
-        .map_err(state_error);
-    crate::scalable_fault_point("create.sidecar_complete");
-    let store = store?;
-    drop(store);
-    // the temp guard is handed to publication so an indeterminate
-    // outcome preserves the replacement for reconciliation.
-    match publish_temp_path_atomically(temporary, &sidecar)? {
-        ReplaceDurability::Durable => {}
-        ReplaceDurability::ParentSyncPending(sync_error) => {
-            // Publication already happened: keep the published state sidecar
-            // and report the pending parent-directory durability instead of
-            // silently promoting it to full success.
-            return Err(crate::fallible::boxed_path_error(
-                sync_error,
-                &sidecar,
-                Error::ErrorContextAllocationFailed {
-                    context: crate::AllocationFailureContext::ParentSyncPending,
-                },
-                |path, source| Error::PublishedButParentSyncPending { path, source },
-            ));
-        }
-    }
-    DiskIndexStore::open_writer_validated(&sidecar, options, metadata.identity, metadata.mode)
-        .map_err(state_error)
-}
-
-/// Computes the primary generation witness for `snapshot` .
-///
-/// The witness has two independent parts:
-///
-/// * The **per-create nonce** stamped inside the primary at create. This is
-///   what makes the witness a true generation identity: an equal-length
-///   in-place rewrite preserves the OS object, the schema hash and — for a
-///   format without [`IndexPolicy::header_tails`] — the header bytes, but a
-///   primary created by a different `create` call carries a different nonce no
-///   matter how much content the two generations share.
-///   It is folded in explicitly rather than relied upon to fall inside the
-///   content window below, so the guarantee does not depend on record sizes.
-/// * A **content digest** over the first `min(eof, window)` bytes, bounded by
-///   [`PRIMARY_GENERATION_WINDOW`], with one exclusion. This is defence in
-///   depth against accidental truncation/overwrite of a primary that carries no
-///   nonce (legacy primaries, and primaries bootstrapped from a resident
-///   `VarlitFile`). It is a CRC-based accident detector, not an
-///   adversary-resistant hash.
-///
-///   The exclusion: a header tail region's *payload* is blanked before hashing,
-///   because a format that declares one rewrites it in place at every commit
-///   point and this witness would otherwise change on every commit — turning a
-///   generation check into a commit counter and invalidating every published
-///   sidecar. Its magic and declared length stay in the digest, which is what
-///   still catches a region that changed size, since that is the change that
-///   moves `append_log_start` and every record offset with it. For every format
-///   that does not declare the region — which is all of them until one opts in
-///   — the blanking touches nothing and this digest is byte-for-byte what it
-///   was.
-///
-/// Both parts are bounded work: one small read of the leading window plus one
-/// bounded point read of the leading record, regardless of file size. This runs
-/// at create, at open, and on commits only while the window is still filling —
-/// never per record and never per lookup.
-pub(crate) fn primary_generation(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-    len: u64,
-) -> Result<DiskIndexPrimaryGeneration> {
-    crate::disk_index::primary_generation_scan();
-    let len = len.min(PRIMARY_GENERATION_WINDOW);
-    let mut prefix =
-        snapshot.read_vec_at(0, len, PRIMARY_GENERATION_WINDOW, "primary generation")?;
-    let (header_len, extensions) = {
-        let mut file = snapshot.reader();
-        read_file_header_parts(spec, &mut file)?
-    };
-    // STO-01a: the window is a prefix of the file, so it contains the header,
-    // and a header carrying an updatable region is no longer constant for the
-    // file's life. Blanking that region's payload — and only its payload — is
-    // what keeps this a *generation* witness rather than a commit counter.
-    // Everything the window still covers is listed on the helper.
-    blank_mutable_header_bytes(&mut prefix, header_len, &extensions)?;
-    // Matrix storage records are rewritten in place for the file's life; what
-    // the window holds of their payloads is blanked like the header region.
-    blank_in_place_payloads(spec, snapshot, header_len, &mut prefix)?;
-    // A primary that carries no nonce folds in a zero value *and* a zero
-    // presence flag, so "carries no nonce" can never collide with "carries an
-    // all-zero nonce".
-    let (nonce_present, nonce) = match read_stream_creation_nonce(spec, snapshot, header_len) {
-        Some(nonce) => (1u8, nonce),
-        None => (0u8, [0u8; 16]),
-    };
-    let mut digest = [0u8; 32];
-    for lane in 0..8u32 {
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(b"varve-primary-generation-v2");
-        hasher.update(&lane.to_le_bytes());
-        hasher.update(&[nonce_present]);
-        hasher.update(&nonce);
-        hasher.update(&len.to_le_bytes());
-        hasher.update(&prefix);
-        digest[(lane as usize) * 4..(lane as usize + 1) * 4]
-            .copy_from_slice(&hasher.finalize().to_le_bytes());
-    }
-    Ok(DiskIndexPrimaryGeneration {
-        len,
-        digest: DiskIndexDigest::from_bytes(digest),
-    })
-}
-
-/// Zeroes the payload bytes of in-place records inside `prefix`, a window from
-/// the start of the file. Frames headers only, up to the window's end.
-fn blank_in_place_payloads(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-    header_len: u64,
-    prefix: &mut [u8],
-) -> Result<()> {
-    if !spec.has_matrix_blocks() {
-        return Ok(());
-    }
-    let window = prefix.len() as u64;
-    let mut scanner =
-        NativeStreamScanner::from_offset_framing_only(spec, snapshot.clone(), header_len)?;
-    loop {
-        let entry = match scanner.next_entry() {
-            Ok(Some(entry)) if entry.record_offset < window => entry,
-            Ok(_) => break,
-            Err(Error::Io(error)) => return Err(Error::Io(error)),
-            // A window ending in a record that does not frame (yet) has no
-            // in-place payload past what was framed.
-            Err(_) => break,
-        };
-        if crate::sync_marker::rewritten_in_place(entry.block_id) {
-            let start = crate::width::index(entry.payload_offset.min(window))?;
-            let end = crate::width::index(
-                entry
-                    .payload_offset
-                    .saturating_add(entry.payload_len)
-                    .min(window),
-            )?;
-            prefix[start..end].fill(0);
-        }
-    }
-    Ok(())
-}
-
-/// Rejects a sidecar that was published against a different generation of the
-/// same file object: an equal-length in-place rewrite preserves OS identity and
-/// schema hash, but not the recorded leading bytes — excepting a header tail
-/// region's payload, which [`primary_generation`] blanks and which is therefore
-/// the one part of a primary that may change without a new generation.
-pub(crate) fn verify_primary_generation(
-    spec: FormatSpec,
-    recorded: DiskIndexPrimaryGeneration,
-    snapshot: &SnapshotFile,
-) -> Result<()> {
-    if recorded.len > snapshot.len() {
-        return Err(state_error(DiskIndexError::PrimaryGenerationMismatch));
-    }
-    if primary_generation(spec, snapshot, recorded.len)? != recorded {
-        return Err(state_error(DiskIndexError::PrimaryGenerationMismatch));
-    }
-    Ok(())
-}
-
-pub(crate) fn primary_identity(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-) -> Result<crate::disk_index::DiskIndexIdentity> {
-    let mut file = snapshot.reader();
-    let (header_len, extensions) = read_file_header_parts(spec, &mut file)?;
-    let mut header = snapshot.read_vec_at(0, header_len, header_len, "file header")?;
-    // Same reason as `primary_generation`, and here it matters more: this
-    // fingerprint is stored in the sidecar and compared on every open, so
-    // without the blanking one commit would make every published sidecar for
-    // the file permanently unopenable.
-    blank_mutable_header_bytes(&mut header, header_len, &extensions)?;
-    let object_identity = opened_file_identity(snapshot.try_clone_file()?.raw())?;
-    let schema_hash = if spec.schema_hash == 0 {
-        spec.computed_schema_hash()
-    } else {
-        spec.schema_hash
-    };
-    let mut fingerprint = [0u8; 32];
-    for lane in 0..8u32 {
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(&lane.to_le_bytes());
-        hasher.update(&schema_hash.to_le_bytes());
-        hasher.update(&object_identity);
-        hasher.update(&header);
-        fingerprint[(lane as usize) * 4..(lane as usize + 1) * 4]
-            .copy_from_slice(&hasher.finalize().to_le_bytes());
-    }
-    Ok(crate::disk_index::DiskIndexIdentity {
-        schema_hash,
-        primary_fingerprint: fingerprint,
-    })
-}
-
-#[cfg(unix)]
-fn opened_file_identity(file: &std::fs::File) -> Result<Vec<u8>> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = file.metadata()?;
-    let mut bytes = Vec::with_capacity(16);
-    bytes.extend_from_slice(&metadata.dev().to_le_bytes());
-    bytes.extend_from_slice(&metadata.ino().to_le_bytes());
-    Ok(bytes)
-}
-
-#[cfg(windows)]
-#[allow(unsafe_code, reason = "a Windows file identity call")]
-fn opened_file_identity(file: &std::fs::File) -> Result<Vec<u8>> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-    };
-
-    let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
-    // The handle belongs to `file`, the output points to initialized writable storage,
-    // and the OS call does not outlive either value.
-    let ok =
-        unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, information.as_mut_ptr()) };
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    // A successful call initializes every field of BY_HANDLE_FILE_INFORMATION.
-    let information = unsafe { information.assume_init() };
-    let file_index =
-        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
-    let mut bytes = Vec::with_capacity(12);
-    bytes.extend_from_slice(&information.dwVolumeSerialNumber.to_le_bytes());
-    bytes.extend_from_slice(&file_index.to_le_bytes());
-    Ok(bytes)
 }
 
 impl StreamMutationPermit<'_> {
@@ -2718,7 +1919,6 @@ impl StreamMutationPermit<'_> {
             .ok_or(Error::ResourceArithmeticOverflow {
                 resource: "file length",
             })?;
-        self.reserve_state_chunk(records.len())?;
         // Not shadowed, and that is a measurement rather than an oversight.
         // Skipping this seek on the reasoning that the previous write left the
         // offset at `eof` was wrong on every append of a 200-record run, by
@@ -2746,6 +1946,9 @@ impl StreamMutationPermit<'_> {
                     &mut ChunkAnchors {
                         records,
                         end: new_eof,
+                        tails: &self.block_tails,
+                        record_count: self.record_count,
+                        spanning: None,
                     },
                 )
                 .map_err(crate::Error::into_io);
@@ -2753,8 +1956,6 @@ impl StreamMutationPermit<'_> {
             write
         };
         if let Err(error) = write {
-            // Nothing was staged for this chunk yet, so the pending sidecar
-            // transaction still matches the rolled-back native EOF.
             let (truncate_result, seek_result) = if injected_rollback_failure {
                 (
                     Err(std::io::Error::other(
@@ -2810,85 +2011,14 @@ impl StreamMutationPermit<'_> {
             );
         }
         self.immediate_state.advance(records.len() as u64, byte_len);
-        // The records are published in the native file, so any sidecar failure
-        // from here on must poison the writer.
-        if let Err(error) = self.stage_state_records(records, new_eof) {
-            self.poison.poison();
-            return Err(crate::fallible::boxed_error(
-                error,
-                Error::ErrorContextAllocationFailed {
-                    context: crate::AllocationFailureContext::PublishedIndex {
-                        sequence: last_sequence,
-                    },
-                },
-                |source| Error::PublishedButIndexStale {
-                    sequence: last_sequence,
-                    source,
-                },
-            ));
-        }
-        if self
-            .state
-            .as_ref()
-            .is_some_and(|state| state.batch_records >= state.chunk_records)
-        {
-            self.commit_state_chunk()?;
-        }
         Ok(())
-    }
-    /// Opens the writer's dirty generation and makes sure a pending sidecar
-    /// transaction with room for `incoming` coverage items exists. Runs before
-    /// the native write so setup failures leave the record unpublished.
-    fn reserve_state_chunk(&mut self, incoming: usize) -> Result<()> {
-        self.check()?;
-        let Some(state) = self.state.as_mut() else {
-            return Ok(());
-        };
-        if !state.dirty {
-            state.store.begin_generation().map_err(state_error)?;
-            state.dirty = true;
-        }
-        if state.store.batch.is_some()
-            && state.batch_records.saturating_add(incoming) > state.chunk_records
-        {
-            self.commit_state_chunk()?;
-        }
-        if let Some(state) = self.state.as_mut()
-            && state.store.batch.is_none()
-        {
-            state.store.begin_write_batch().map_err(state_error)?;
-        }
-        Ok(())
-    }
-    /// Commits the pending sidecar transaction, classifying *every* failure
-    /// against whether natively published records are staged in it.
-    ///
-    /// Invariant 3: once `batch_last_sequence` is `Some`, the records it names
-    /// are already in the native file, so no failure from here may be reported
-    /// as a bare `Err` - a caller entitled to read that as "nothing happened"
-    /// would retry and append the same records twice. The classification lives
-    /// here, around the whole body, rather than at individual steps, so a
-    /// fallible step added to this path later cannot reopen the defect.
-    fn commit_state_chunk(&mut self) -> Result<()> {
-        self.check()?;
-        // Borrowed, not consumed: this runs *inside* a mutation whose permit
-        // was already taken, so demanding a fresh one would re-check a flag
-        // this very call may be about to set. Holding it is still what proves
-        // the check happened before the sidecar was touched.
-        let staged = self
-            .state
-            .as_ref()
-            .and_then(|state| state.batch_last_sequence);
-        match self.commit_state_chunk_inner() {
-            Ok(()) => Ok(()),
-            Err(error) => Err(self.published_sidecar_error(staged, error)),
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     // The owning form exists for these tests and the in-crate probe; every
     // production path stages through the `_into` form.
     use crate::file::prepare_stream_user_record;
@@ -3092,6 +2222,343 @@ mod tests {
     }
 
     #[test]
+    fn anchors_carry_the_stream_state_before_their_spanning_record() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("summaries.varlit");
+        // 4 KiB spacing, 256-byte anchors: a few hundred records cross many.
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::None)
+            .with_anchors(crate::AnchorPolicy::every(12, true));
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        let records_at_create = writer.record_count;
+        let mut written = Vec::new();
+        for value in 0..600u64 {
+            let info = writer.push_info(&TestBlock(value))?;
+            written.push(info);
+        }
+        writer.sync()?;
+        let mut file = PrimaryFile::new(std::fs::File::open(&path)?, None);
+        let header_len = read_primary_header(spec, &mut file)?.0;
+        let mut bytes = [0u8; 4096];
+        let mut seen = 0;
+        for k in 1.. {
+            let Some((anchor, hole)) = file.anchor_into(k, &mut bytes)? else {
+                break;
+            };
+            let mut tails = Vec::new();
+            let summary = crate::anchor::StreamSummary::decode(
+                &bytes[..hole],
+                header_len,
+                anchor.record_start,
+                |id, offset, sequence| tails.push((id, offset, sequence)),
+            )
+            .expect("every stream anchor carries a summary");
+            let before: Vec<_> = written
+                .iter()
+                .filter(|info| info.record_offset < anchor.record_start)
+                .collect();
+            assert_eq!(summary.next_sequence, anchor.sequence);
+            assert_eq!(
+                summary.records_before,
+                records_at_create + before.len() as u64
+            );
+            let user_tail = tails.iter().find(|(id, ..)| *id == TestBlock::ID).copied();
+            assert_eq!(
+                user_tail,
+                before
+                    .last()
+                    .map(|info| (TestBlock::ID, info.record_offset, info.sequence))
+            );
+            seen += 1;
+        }
+        assert!(seen >= 5, "the test must cross several anchors ({seen})");
+        Ok(())
+    }
+
+    fn anchored_spec() -> FormatSpec {
+        // 4 KiB spacing, 256-byte anchors: a few hundred records cross many.
+        spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter)
+            .with_anchors(crate::AnchorPolicy::every(12, true))
+    }
+
+    type WriterState = (u64, Option<u64>, Vec<(u32, Option<StreamTail>)>);
+
+    fn writer_state(writer: &VarlitStreamWriter) -> WriterState {
+        (
+            writer.record_count,
+            writer.sequence,
+            writer.block_tails.clone(),
+        )
+    }
+
+    /// The state a walk framing every record from the header reaches at `end`.
+    fn framed_state(spec: FormatSpec, path: &Path, end: u64) -> Result<WriterState> {
+        let mut file = PrimaryFile::new(fs::File::open(path)?, None);
+        let header_len = read_primary_header(spec, &mut file)?.0;
+        let len = file.len()?;
+        let physical = SnapshotFile::from_file_with_len(file, len)?;
+        let mut position = StreamPosition::initial(spec);
+        assert_eq!(
+            frame_until(spec, &physical, header_len, end, &mut position)?,
+            end
+        );
+        Ok((
+            position.record_count,
+            position.sequence,
+            position.block_tails,
+        ))
+    }
+
+    fn published_slots_at(spec: FormatSpec, path: &Path) -> Result<u64> {
+        let mut file = PrimaryFile::new(fs::File::open(path)?, None);
+        let (header_len, extensions) = read_primary_header(spec, &mut file)?;
+        Ok(
+            crate::file::published_end_slots_at(header_len, &extensions)?
+                .expect("a stream file carries the published end"),
+        )
+    }
+
+    /// Rewrites `bytes` at `offset`, extending the file when it ends there.
+    fn patch(path: &Path, offset: u64, bytes: &[u8]) -> Result<()> {
+        let mut contents = fs::read(path)?;
+        let at = usize::try_from(offset).expect("test offset");
+        if contents.len() < at + bytes.len() {
+            contents.resize(at + bytes.len(), 0);
+        }
+        contents[at..at + bytes.len()].copy_from_slice(bytes);
+        fs::write(path, contents)?;
+        Ok(())
+    }
+
+    fn flip_byte(path: &Path, offset: u64) -> Result<()> {
+        let byte = fs::read(path)?[usize::try_from(offset).expect("test offset")];
+        patch(path, offset, &[byte ^ 0x40])
+    }
+
+    fn read_values(spec: FormatSpec, path: &Path) -> Result<Vec<u64>> {
+        let reader = VarlitStreamReader::open(spec, path, StreamOptions::default())?;
+        reader
+            .blocks::<TestBlock>()?
+            .map(|block| block.map(|block| block.0))
+            .collect()
+    }
+
+    #[test]
+    fn a_reopened_writer_resumes_from_the_newest_anchor_and_matches_a_full_walk() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("resume.varlit");
+        let spec = anchored_spec();
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        for value in 0..600u64 {
+            writer.push_info(&TestBlock(value))?;
+        }
+        writer.sync()?;
+        let end = writer.snapshot.len();
+        let expected = writer_state(&writer);
+        drop(writer);
+        assert_eq!(framed_state(spec, &path, end)?, expected);
+
+        crate::file::reset_stream_io_counters();
+        let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+        let (_, entries, _) = crate::file::stream_io_counters();
+        assert_eq!(writer_state(&writer), expected);
+        // Framed from the anchor before the end, not from the header.
+        assert!(
+            entries < expected.0 / 4,
+            "open framed {entries} of {} records",
+            expected.0
+        );
+        writer.push_info(&TestBlock(600))?;
+        writer.sync()?;
+        drop(writer);
+        assert_eq!(read_values(spec, &path)?, (0..601).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    #[test]
+    fn damaged_anchors_fall_back_to_an_older_one_and_then_to_the_header() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("damaged-anchor.varlit");
+        let spec = anchored_spec();
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        for value in 0..600u64 {
+            writer.push_info(&TestBlock(value))?;
+        }
+        writer.sync()?;
+        let end = writer.snapshot.len();
+        let layout = writer.file.layout().expect("anchored");
+        let expected = writer_state(&writer);
+        drop(writer);
+        let newest = layout.anchors_before(end);
+        assert!(newest > 6, "the test needs several anchors ({newest})");
+        // The newest anchor first, then every anchor an open looks at.
+        for damaged in [1, 6] {
+            for k in newest + 1 - damaged..=newest {
+                if damaged == 1 || k != newest {
+                    flip_byte(&path, layout.anchor_physical(k).expect("anchor") + 20)?;
+                }
+            }
+            let writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+            assert_eq!(writer_state(&writer), expected, "{damaged} damaged");
+        }
+        assert_eq!(read_values(spec, &path)?, (0..600).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    #[test]
+    fn a_torn_published_slot_leaves_the_other_end_to_verify_from() -> Result<()> {
+        use crate::published_end::{SLOT_LEN, decode_slot};
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("torn-slot.varlit");
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        for value in 0..3u64 {
+            writer.push_info(&TestBlock(value))?;
+            writer.sync()?;
+        }
+        let end = writer.snapshot.len();
+        let expected = writer_state(&writer);
+        drop(writer);
+        let slots_at = published_slots_at(spec, &path)?;
+        let bytes = fs::read(&path)?;
+        let newest = (0..2)
+            .max_by_key(|slot| {
+                let at = slots_at as usize + slot * SLOT_LEN;
+                decode_slot(bytes[at..at + SLOT_LEN].try_into().unwrap()).map(|slot| slot.seq)
+            })
+            .unwrap();
+        flip_byte(&path, slots_at + (newest * SLOT_LEN) as u64 + 3)?;
+        // The other slot names the previous sync's end; the last marker
+        // verifies from there.
+        assert_eq!(read_values(spec, &path)?, [0, 1, 2]);
+        let writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+        assert_eq!(writer.snapshot.len(), end);
+        assert_eq!(writer_state(&writer), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn a_file_without_a_published_end_recovers_from_its_first_marker() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("legacy.varlit");
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        writer.push_info(&TestBlock(1))?;
+        writer.sync()?;
+        writer.push_info(&TestBlock(2))?;
+        writer.sync()?;
+        let synced = writer.snapshot.len();
+        writer.push_info(&TestBlock(3))?;
+        drop(writer);
+        // Blank slots: what a file written before the block existed says.
+        let slots_at = published_slots_at(spec, &path)?;
+        patch(&path, slots_at, &[0u8; 2 * crate::published_end::SLOT_LEN])?;
+        assert_eq!(read_values(spec, &path)?, [1, 2]);
+        let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+        assert_eq!(fs::metadata(&path)?.len(), synced);
+        assert_eq!(writer_state(&writer), framed_state(spec, &path, synced)?);
+        writer.push_info(&TestBlock(4))?;
+        writer.sync()?;
+        drop(writer);
+        assert_eq!(read_values(spec, &path)?, [1, 2, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_file_without_markers_or_a_published_end_keeps_every_record_that_frames() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("unmarked.varlit");
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        writer.push_info(&TestBlock(1))?;
+        writer.push_info(&TestBlock(2))?;
+        drop(writer);
+        // Published at create, never synced since: readers see nothing yet.
+        assert_eq!(read_values(spec, &path)?, Vec::<u64>::new());
+        let slots_at = published_slots_at(spec, &path)?;
+        patch(&path, slots_at, &[0u8; 2 * crate::published_end::SLOT_LEN])?;
+        // And half a record after them, which does not frame.
+        patch(&path, fs::metadata(&path)?.len(), &[0xA5; 7])?;
+        let framed = fs::metadata(&path)?.len() - 7;
+        assert_eq!(read_values(spec, &path)?, [1, 2]);
+        let writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+        assert_eq!(fs::metadata(&path)?.len(), framed);
+        assert_eq!(writer_state(&writer), framed_state(spec, &path, framed)?);
+        Ok(())
+    }
+
+    #[test]
+    fn a_file_cut_below_its_published_end_is_refused() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("cut.varlit");
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        writer.push_info(&TestBlock(1))?;
+        writer.sync()?;
+        let end = writer.snapshot.len();
+        drop(writer);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)?
+            .set_len(end - 1)?;
+        assert!(matches!(
+            VarlitStreamReader::open(spec, &path, StreamOptions::default()),
+            Err(Error::CorruptTail { .. })
+        ));
+        assert!(matches!(
+            VarlitStreamWriter::open(spec, &path, StreamOptions::default()),
+            Err(Error::CorruptTail { .. })
+        ));
+        assert_eq!(fs::metadata(&path)?.len(), end - 1);
+        Ok(())
+    }
+
+    #[test]
+    fn each_sync_publishes_its_end_and_a_native_writer_withdraws_it() -> Result<()> {
+        use crate::published_end::{Published, SLOT_LEN};
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("published.varlit");
+        let spec = spec(IndexPolicy::ScanOnOpen, CommitPolicy::None);
+        let published = |path: &Path| -> Result<Published> {
+            let mut file = PrimaryFile::new(std::fs::File::open(path)?, None);
+            let (header_len, extensions) = read_primary_header(spec, &mut file)?;
+            let slots_at = crate::file::published_end_slots_at(header_len, &extensions)?
+                .expect("a stream file carries the published end");
+            let mut slots = [0u8; 2 * SLOT_LEN];
+            crate::primary_file::read_exact_at(file.raw(), slots_at, &mut slots)?;
+            Ok(crate::published_end::read(&slots))
+        };
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        // Create publishes the start of the chain with the file itself.
+        assert_eq!(published(&path)?, Published::Bounded(writer.snapshot.len()));
+        for round in 0..3u64 {
+            writer.push_info(&TestBlock(round))?;
+            writer.sync()?;
+            assert_eq!(published(&path)?, Published::Bounded(writer.snapshot.len()));
+        }
+        drop(writer);
+        // A native writer of a format without transaction markers bounds no
+        // reader: it withdraws the stream writer's end when it takes over.
+        let mut native = crate::VarlitFile::open(spec, &path)?;
+        assert_eq!(published(&path)?, Published::Unbounded);
+        native.push(&TestBlock(3))?;
+        native.flush()?;
+        drop(native);
+        // The stream writer takes the file back: everything that frames is
+        // kept, the native record included, and the end is published again.
+        let writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+        let end = writer.snapshot.len();
+        assert_eq!(end, fs::metadata(&path)?.len());
+        assert_eq!(published(&path)?, Published::Bounded(end));
+        drop(writer);
+        let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
+        assert_eq!(
+            reader.blocks::<TestBlock>()?.collect::<Result<Vec<_>>>()?,
+            (0..4).map(TestBlock).collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn stream_writer_matches_resident_native_bytes() -> Result<()> {
         #[allow(unused_mut)]
         let mut policies = vec![
@@ -3130,17 +2597,27 @@ mod tests {
             )?;
             let mut stream =
                 VarlitStreamWriter::create(spec, &stream_path, StreamOptions::default())?;
+            // A stream file's header also carries the published end, so its
+            // records start later by exactly that block; relative to each
+            // file's own header they are where the resident writer put them.
+            let resident_header =
+                crate::file::read_file_header(spec, &mut std::fs::File::open(&resident_path)?)?;
+            let stream_header =
+                crate::file::read_file_header(spec, &mut std::fs::File::open(&stream_path)?)?;
             for value in [3, 5, 8, 13] {
                 let block = TestBlock(value);
-                assert_eq!(resident.push_info(&block)?, stream.push_info(&block)?);
+                let (r, s) = (resident.push_info(&block)?, stream.push_info(&block)?);
+                assert_eq!(r.sequence, s.sequence);
+                assert_eq!(
+                    r.record_offset - resident_header,
+                    s.record_offset - stream_header
+                );
+                assert_eq!(r.payload_len, s.payload_len);
             }
             resident.flush()?;
             stream.flush()?;
             let resident_bytes = std::fs::read(&resident_path)?;
             let stream_bytes = std::fs::read(&stream_path)?;
-            assert_eq!(resident_bytes.len(), stream_bytes.len());
-            let mut file = std::fs::File::open(&stream_path)?;
-            let header_len = crate::file::read_file_header(spec, &mut file)?;
             let nonce_record_len = crate::file::RECORD_HEADER_LEN
                 + 16
                 + if spec.spec_needs_record_footer() {
@@ -3148,16 +2625,30 @@ mod tests {
                 } else {
                     0
                 };
-            let user_start = usize::try_from(header_len + nonce_record_len).unwrap();
-            assert_eq!(
-                resident_bytes[..header_len as usize],
-                stream_bytes[..header_len as usize]
+            let resident_user = usize::try_from(resident_header + nonce_record_len).unwrap();
+            let stream_user = usize::try_from(stream_header + nonce_record_len).unwrap();
+            // The published end, plus the extension length a header without
+            // any other block did not carry.
+            let grown = stream_header - resident_header;
+            assert!(
+                grown == crate::published_end::region_len()
+                    || grown == crate::published_end::region_len() + 4,
+                "the stream header is the resident one plus the published end ({grown} bytes)"
             );
             assert_eq!(
-                resident_bytes[user_start..],
-                stream_bytes[user_start..],
-                "user records must encode identically in the resident and streaming writers"
+                resident_bytes.len() - resident_user,
+                stream_bytes.len() - stream_user,
+                "the user records take the same bytes in both writers"
             );
+            if !spec.spec_needs_record_footer() {
+                // Without footers no record names an absolute offset, so the
+                // records are the same bytes.
+                assert_eq!(
+                    resident_bytes[resident_user..],
+                    stream_bytes[stream_user..],
+                    "user records must encode identically in the resident and streaming writers"
+                );
+            }
         }
         Ok(())
     }
@@ -3220,7 +2711,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_open_append_and_sync_construct_no_scanner() -> Result<()> {
+    fn clean_reader_open_and_steady_appends_construct_no_scanner() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("constant-open.varlit");
         let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
@@ -3238,7 +2729,11 @@ mod tests {
         assert_eq!(crate::file::stream_io_counters(), (0, 0, 0));
         drop(reader);
 
+        // The writer frames from the newest anchor (here the header) to the
+        // published end once, at open; appends and syncs after it frame
+        // nothing.
         let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
+        crate::file::reset_stream_io_counters();
         writer
             .push_iter::<TestBlock, _>([TestBlock(64)], BatchOptions::default())
             .map_err(|error| error.source)?;
@@ -3271,8 +2766,7 @@ mod tests {
         }
         assert!(std::fs::metadata(&path)?.len() > base_len);
         // Open recovers instead of refusing: the synced record and its marker
-        // are kept and replayed into the state sidecar, the unsynced record is
-        // cut.
+        // are kept, the unsynced record is cut.
         let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
         assert_eq!(std::fs::metadata(&path)?.len(), base_len);
         writer.push_info(&TestBlock(3))?;
@@ -3288,93 +2782,6 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_refuses_to_promote_an_existing_dirty_generation() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("dirty-bootstrap.varlit");
-        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
-        {
-            let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
-            writer.push_info(&TestBlock(1))?;
-            writer.sync()?;
-            writer.push_info(&TestBlock(2))?;
-        }
-        let dirty_len = fs::metadata(&path)?.len();
-        assert!(matches!(
-            bootstrap_stream_checkpoint(spec, &path, StreamOptions::default()),
-            Err(Error::DiskIndex(_))
-        ));
-        assert_eq!(fs::metadata(&path)?.len(), dirty_len);
-        let store = DiskIndexStore::open(state_sidecar_path(&path), DiskIndexOptions::default())
-            .map_err(state_error)?;
-        assert_eq!(
-            store.read_metadata().map_err(state_error)?.state,
-            crate::disk_index::DiskIndexState::Dirty
-        );
-        Ok(())
-    }
-
-    /// A pathname mutator that ignores `WriterLock` can replace the
-    /// primary after the pre-publication identity check and before the state
-    /// sidecar is visible. The published sidecar then describes a file object
-    /// the pathname no longer names, and leaving it there would displace the
-    /// replacement's own newer sidecar.
-    ///
-    /// The interposition lands in exactly that interval. Bootstrap must return
-    /// a typed mismatch rather than success, and must take the sidecar it
-    /// published back out again rather than leave an old-generation sidecar
-    /// standing.
-    #[test]
-    fn bootstrap_retires_a_sidecar_published_for_a_replaced_primary() -> Result<()> {
-        let directory = crate::diagnostics::private_tempdir()?;
-        let path = directory.path().join("replaced-bootstrap.varlit");
-        let replacement = directory.path().join("replacement.varlit");
-        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
-        for (target, value) in [(&path, 1u64), (&replacement, 2)] {
-            let mut writer = VarlitStreamWriter::create(spec, target, StreamOptions::default())?;
-            writer.push_info(&TestBlock(value))?;
-            writer.sync()?;
-        }
-        // Bootstrap promotes a native file that has no state sidecar yet.
-        fs::remove_file(state_sidecar_path(&path))?;
-        fs::remove_file(state_sidecar_path(&replacement))?;
-
-        let swapped = path.clone();
-        let source = replacement.clone();
-        let interposed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let observed = std::sync::Arc::clone(&interposed);
-        set_publication_interposition(
-            &fs::canonicalize(&path)?,
-            Box::new(move || {
-                // The interval under test only exists once the sidecar is
-                // published, so the test is meaningless if this is not already
-                // true when the swap lands.
-                assert!(
-                    state_sidecar_path(&swapped).exists(),
-                    "the interposition must run after the sidecar is published",
-                );
-                fs::rename(&source, &swapped).expect("replace the primary during publication");
-                observed.store(true, std::sync::atomic::Ordering::SeqCst);
-            }),
-        );
-
-        let result = bootstrap_stream_checkpoint(spec, &path, StreamOptions::default());
-        match result {
-            Err(Error::DiskIndex(error))
-                if matches!(*error, crate::disk_index::DiskIndexError::IdentityMismatch) => {}
-            other => panic!("expected a typed identity mismatch, got {other:?}"),
-        }
-        assert!(
-            interposed.load(std::sync::atomic::Ordering::SeqCst),
-            "the swap never reached the publication interval under test",
-        );
-        assert!(
-            !state_sidecar_path(&path).exists(),
-            "a sidecar published for a replaced primary must not be left behind",
-        );
-        Ok(())
-    }
-
-    #[test]
     fn low_level_stream_methods_cannot_bypass_keyed_chain_indexing() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("keyed-bypass.varlit");
@@ -3382,7 +2789,7 @@ mod tests {
         // Baseline rather than a literal: a fresh primary already holds its
         // internal creation-nonce record. The contract under test is
         // that the rejected calls append nothing on top of it.
-        let baseline = writer.checkpoint().record_count;
+        let baseline = writer.record_count;
         assert!(matches!(
             writer.push_with_prev_key_info(&KeyedTestBlock(1), None),
             Err(Error::StreamingUnsupported)
@@ -3391,7 +2798,7 @@ mod tests {
             writer.delete_with_prev_key_info::<KeyedTestBlock>(&1, None),
             Err(Error::StreamingUnsupported)
         ));
-        assert_eq!(writer.checkpoint().record_count, baseline);
+        assert_eq!(writer.record_count, baseline);
         Ok(())
     }
 
@@ -3402,7 +2809,7 @@ mod tests {
         let mut writer =
             VarlitStreamWriter::create(bounded_encode_spec(), &path, StreamOptions::default())?;
         let clean_len = fs::metadata(&path)?.len();
-        let baseline = writer.checkpoint().record_count;
+        let baseline = writer.record_count;
         assert!(matches!(
             writer.push_info(&OversizedBlock),
             Err(Error::LimitExceeded {
@@ -3412,43 +2819,7 @@ mod tests {
             })
         ));
         assert_eq!(fs::metadata(&path)?.len(), clean_len);
-        assert_eq!(writer.checkpoint().record_count, baseline);
-        writer.sync()?;
-        Ok(())
-    }
-
-    #[test]
-    fn state_sidecar_bound_splits_native_batch() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("bounded-state.varlit");
-        let options = StreamOptions {
-            state: DiskIndexOptions {
-                max_key_bytes: 1024,
-                batch: DiskIndexBatchOptions {
-                    max_records: 2,
-                    max_bytes: 4096,
-                },
-                ..DiskIndexOptions::default()
-            },
-            ..StreamOptions::default()
-        };
-        let values: Vec<_> = (0..5).map(TestBlock).collect();
-        let mut writer = VarlitStreamWriter::create(
-            spec(IndexPolicy::ScanOnOpen, CommitPolicy::None),
-            &path,
-            options,
-        )?;
-        let report = writer
-            .push_iter::<TestBlock, _>(
-                &values,
-                BatchOptions {
-                    max_records: 100,
-                    max_bytes: usize::MAX,
-                },
-            )
-            .map_err(|error| error.source)?;
-        assert_eq!(report.records, 5);
-        assert_eq!(report.write_calls, 3);
+        assert_eq!(writer.record_count, baseline);
         writer.sync()?;
         Ok(())
     }
@@ -3564,7 +2935,7 @@ mod tests {
         let path = directory.path().join("sequence.varlit");
         let spec = spec(IndexPolicy::ScanOnOpen, CommitPolicy::None);
         let mut file: crate::primary_file::PrimaryFile = std::fs::File::create(&path)?.into();
-        write_file_header(spec, &mut file)?;
+        crate::file::write_file_header(spec, &mut file)?;
         let first_offset = file.stream_position()?;
         let first = prepare_stream_user_record(spec, &TestBlock(1), 4, first_offset, None, None)?;
         file.write_all(&first.bytes)?;
@@ -3573,11 +2944,12 @@ mod tests {
         file.write_all(&second.bytes)?;
         drop(file);
 
-        let reader = VarlitStreamReader::open_native(spec, path, StreamOptions::default())?;
-        let mut events = reader.events()?;
-        assert!(events.next().unwrap().is_ok());
+        let mut file = PrimaryFile::new(std::fs::File::open(&path)?, None);
+        read_primary_header(spec, &mut file)?;
+        let mut scanner = NativeStreamScanner::from_snapshot(spec, SnapshotFile::from_file(file)?)?;
+        assert!(scanner.next_entry()?.is_some());
         assert!(matches!(
-            events.next().unwrap(),
+            scanner.next_entry(),
             Err(Error::StreamingUnsupported)
         ));
         Ok(())

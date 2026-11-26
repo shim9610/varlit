@@ -2398,41 +2398,6 @@ pub(super) fn high_cardinality_api_tokens(
                 ::varlit::__core::VarlitStreamWriter::open(Self::spec(), path, options)?,
             ))
         }
-
-        pub fn restore_stream_writer<P: AsRef<::std::path::Path>>(
-            path: P,
-            options: ::varlit::__core::StreamOptions,
-        ) -> ::varlit::__core::Result<#stream_writer_name> {
-            ::core::result::Result::Ok(#stream_writer_name::from_inner(
-                ::varlit::__core::VarlitStreamWriter::restore_checkpoint_and_open(
-                    Self::spec(),
-                    path,
-                    options,
-                )?,
-            ))
-        }
-
-        pub fn bootstrap_stream_checkpoint<P: AsRef<::std::path::Path>>(
-            path: P,
-            options: ::varlit::__core::StreamOptions,
-        ) -> ::varlit::__core::Result<::varlit::__core::StreamBootstrapReport> {
-            ::varlit::__core::bootstrap_stream_checkpoint(Self::spec(), path, options)
-        }
-
-        pub fn bootstrap_stream_checkpoint_with_progress<P, F>(
-            path: P,
-            options: ::varlit::__core::StreamOptions,
-            scan: ::varlit::__core::ScanOptions<'_>,
-            observer: F,
-        ) -> ::varlit::__core::Result<::varlit::__core::StreamBootstrapReport>
-        where
-            P: AsRef<::std::path::Path>,
-            F: ::core::ops::FnMut(::varlit::__core::ScanProgress),
-        {
-            ::varlit::__core::bootstrap_stream_checkpoint_with_progress(
-                Self::spec(), path, options, scan, observer,
-            )
-        }
     };
     let stream_api = quote! {
         #vis struct #stream_reader_name {
@@ -2453,8 +2418,6 @@ pub(super) fn high_cardinality_api_tokens(
             }
 
             pub fn committed_len(&self) -> u64 { self.inner.committed_len() }
-
-            pub fn release_snapshot(&mut self) -> bool { self.inner.release_snapshot() }
 
             pub fn snapshot_status(&self) -> ::varlit::__core::Result<::varlit::__core::SnapshotStatus> {
                 self.inner.snapshot_status()
@@ -2524,11 +2487,6 @@ pub(super) fn high_cardinality_api_tokens(
 
             pub fn set_immediate_policy(&mut self, policy: ::varlit::__core::ImmediatePolicy) -> ::varlit::__core::Result<()> {
                 self.inner.set_immediate_policy(policy)
-            }
-
-            /// Reclaim sidecar pages after an explicit sync; readers do not block it.
-            pub fn compact_index(&mut self) -> ::varlit::__core::Result<::varlit::__core::IndexCompaction> {
-                self.inner.compact_index()
             }
 
 

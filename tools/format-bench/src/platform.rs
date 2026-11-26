@@ -185,76 +185,268 @@ pub fn peak_rss_mb() -> u64 {
 }
 
 /// Whether [`evict`] drops files from the page cache, so that "cold" reads
-/// read the disk. Linux and FreeBSD can (`posix_fadvise(DONTNEED)` on clean
-/// pages, no privilege needed). macOS and Windows have no unprivileged
-/// equivalent: their "cold" reads are the first read after the write and may
-/// be served from the cache.
-pub const EVICTS: bool = cfg!(any(
+/// read the disk. Every supported platform can, without privileges:
+///
+/// - Linux, Android, FreeBSD: `posix_fadvise(POSIX_FADV_DONTNEED)` on the
+///   synced (clean) file;
+/// - macOS, iOS: map the file and `msync(MS_INVALIDATE)` the mapping, which
+///   drops its cached pages (what `vmtouch -e` does there);
+/// - Windows: open the file once without buffering (`FILE_FLAG_NO_BUFFERING`),
+///   which makes the cache manager flush and purge that file's cached data.
+pub const EVICTS: bool = true;
+
+/// How [`evict`] drops pages on this platform; recorded with every result.
+pub const EVICTION: &str = if cfg!(any(
     target_os = "linux",
     target_os = "android",
     target_os = "freebsd"
-));
+)) {
+    "posix_fadvise(DONTNEED)"
+} else if cfg!(any(target_os = "macos", target_os = "ios")) {
+    "mmap + msync(MS_INVALIDATE)"
+} else if cfg!(windows) {
+    "FILE_FLAG_NO_BUFFERING open"
+} else {
+    "none"
+};
+
+/// Evict every file under `root` from the page cache. Files are synced first,
+/// so only clean pages remain to drop. See [`EVICTS`].
+pub fn evict(root: &Path) {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            evict(&p);
+        } else if let Ok(f) = std::fs::OpenOptions::new().read(true).open(&p) {
+            let _ = f.sync_all();
+            evict_file(&p, &f);
+        }
+    }
+}
 
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
 unsafe extern "C" {
     fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int) -> c_int;
 }
 
-/// Evict every file under `root` from the page cache (clean pages only, so
-/// files are synced first). See [`EVICTS`].
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
-pub fn evict(root: &Path) {
+fn evict_file(_path: &Path, f: &std::fs::File) {
     use std::os::fd::AsRawFd;
     const DONTNEED: c_int = 4; // POSIX_FADV_DONTNEED on Linux and FreeBSD
-    let Ok(rd) = std::fs::read_dir(root) else {
+    unsafe { posix_fadvise(f.as_raw_fd(), 0, 0, DONTNEED) };
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+unsafe extern "C" {
+    fn mmap(addr: *mut u8, len: usize, prot: c_int, flags: c_int, fd: c_int, off: i64) -> *mut u8;
+    fn msync(addr: *mut u8, len: usize, flags: c_int) -> c_int;
+    fn munmap(addr: *mut u8, len: usize) -> c_int;
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn evict_file(_path: &Path, f: &std::fs::File) {
+    use std::os::fd::AsRawFd;
+    const PROT_READ: c_int = 0x1;
+    const MAP_SHARED: c_int = 0x1;
+    const MS_INVALIDATE: c_int = 0x2;
+    let Ok(len) = f.metadata().map(|m| m.len()) else {
         return;
     };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            evict(&p);
-        } else if let Ok(f) = std::fs::OpenOptions::new().read(true).open(&p) {
-            let _ = f.sync_all();
-            unsafe { posix_fadvise(f.as_raw_fd(), 0, 0, DONTNEED) };
+    let Ok(len) = usize::try_from(len) else {
+        return;
+    };
+    if len == 0 {
+        return;
+    }
+    // SAFETY: a fresh read-only shared mapping of an open file, never
+    // dereferenced here; it is invalidated and unmapped before returning.
+    unsafe {
+        let addr = mmap(
+            std::ptr::null_mut(),
+            len,
+            PROT_READ,
+            MAP_SHARED,
+            f.as_raw_fd(),
+            0,
+        );
+        if addr as isize == -1 {
+            return;
         }
+        msync(addr, len, MS_INVALIDATE);
+        munmap(addr, len);
     }
 }
 
-/// Syncs every file under `root` so the read that follows starts from the
-/// same durable state as on Linux; nothing is evicted (see [`EVICTS`]).
-#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "freebsd")))]
-pub fn evict(root: &Path) {
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            evict(&p);
-        } else if let Ok(f) = std::fs::OpenOptions::new().read(true).open(&p) {
-            let _ = f.sync_all();
+#[cfg(windows)]
+fn evict_file(path: &Path, _f: &std::fs::File) {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_NO_BUFFERING: u32 = 0x2000_0000;
+    // Opening (and closing) a non-cached handle purges the file's cached
+    // pages; nothing is read through it.
+    let _ = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_NO_BUFFERING)
+        .open(path);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn evict_file(_path: &Path, _f: &std::fs::File) {}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos",
+        target_os = "ios"
+    ))
+))]
+fn evict_file(_path: &Path, _f: &std::fs::File) {}
+
+/// Fraction of `path`'s pages resident in memory, measured with `mincore`
+/// over a fresh mapping; `None` where the platform has no `mincore`
+/// (Windows). Lets CI check that [`evict`] really drops pages.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos",
+    target_os = "ios"
+))]
+pub fn resident_fraction(path: &Path) -> Option<f64> {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        #[link_name = "mmap"]
+        fn mmap2(
+            addr: *mut u8,
+            len: usize,
+            prot: c_int,
+            flags: c_int,
+            fd: c_int,
+            off: i64,
+        ) -> *mut u8;
+        #[link_name = "munmap"]
+        fn munmap2(addr: *mut u8, len: usize) -> c_int;
+        fn mincore(addr: *mut u8, len: usize, vec: *mut u8) -> c_int;
+        fn getpagesize() -> c_int;
+    }
+    const PROT_READ: c_int = 0x1;
+    const MAP_SHARED: c_int = 0x1;
+    let f = std::fs::File::open(path).ok()?;
+    let len = usize::try_from(f.metadata().ok()?.len()).ok()?;
+    if len == 0 {
+        return Some(0.0);
+    }
+    let page = unsafe { getpagesize() } as usize;
+    let pages = len.div_ceil(page);
+    let mut vec = vec![0u8; pages];
+    // SAFETY: a read-only mapping that is never dereferenced; mincore writes
+    // one byte per page into `vec`, which has exactly that many.
+    unsafe {
+        let addr = mmap2(
+            std::ptr::null_mut(),
+            len,
+            PROT_READ,
+            MAP_SHARED,
+            f.as_raw_fd(),
+            0,
+        );
+        if addr as isize == -1 {
+            return None;
         }
+        let ok = mincore(addr, len, vec.as_mut_ptr()) == 0;
+        munmap2(addr, len);
+        if !ok {
+            return None;
+        }
+    }
+    Some(vec.iter().filter(|b| **b & 1 != 0).count() as f64 / pages as f64)
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos",
+    target_os = "ios"
+)))]
+pub fn resident_fraction(_path: &Path) -> Option<f64> {
+    None
+}
+
+/// Writes a file, reads it back, evicts it and reports how much of it stayed
+/// resident before and after: `evict-check <dir>` prints one JSON line.
+pub fn evict_check(dir: &Path) -> std::io::Result<serde_json::Value> {
+    use std::io::{Read, Write};
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("evict-check.bin");
+    {
+        let mut f = std::fs::File::create(&path)?;
+        let block = vec![0x5au8; 1 << 20];
+        for _ in 0..64 {
+            f.write_all(&block)?;
+        }
+        f.sync_all()?;
+    }
+    let mut sink = Vec::new();
+    std::fs::File::open(&path)?.read_to_end(&mut sink)?;
+    let before = resident_fraction(&path);
+    evict(dir);
+    let after = resident_fraction(&path);
+    std::fs::remove_file(&path)?;
+    Ok(
+        serde_json::json!({ "eviction": EVICTION, "resident_before": before, "resident_after": after }),
+    )
+}
+
+/// How every engine makes a write durable, chosen with `FB_DEVICE_FLUSH`:
+/// `full` (the default) also flushes the drive's write cache, `os` stops
+/// where the operating system's own sync stops. The two only differ on Apple
+/// platforms, where `fsync(2)` leaves the drive cache and `F_FULLFSYNC`
+/// flushes it; elsewhere both are the platform's ordinary sync.
+pub fn device_flush() -> varlit::DeviceFlush {
+    match std::env::var("FB_DEVICE_FLUSH").as_deref() {
+        Ok("os") => varlit::DeviceFlush::Os,
+        Ok("full") | Err(_) => varlit::DeviceFlush::Full,
+        Ok(other) => panic!("FB_DEVICE_FLUSH must be `full` or `os`, not {other:?}"),
     }
 }
 
-/// SQLite settings that make its durable commits match the Rust engines'.
-///
-/// Rust's `File::sync_data`/`sync_all` on Apple platforms are `F_FULLFSYNC`,
-/// which also flushes the drive's write cache; SQLite's `fsync` there is a
-/// plain `fsync(2)` unless `fullfsync` is on. Without these pragmas SQLite
-/// would be measured with a weaker durability guarantee than Varlit, HDF5 and
-/// Parquet on the same Mac. Elsewhere the defaults already match.
-pub const SQLITE_DURABILITY: &str = if cfg!(any(target_os = "macos", target_os = "ios")) {
-    "PRAGMA fullfsync=ON; PRAGMA checkpoint_fullfsync=ON;"
-} else {
-    ""
-};
+/// Makes `file` durable under [`device_flush`]: what the Rust engines other
+/// than Varlit (Parquet, the HDF5 adapter's fsync, the tile prototype) use.
+pub fn sync_file(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if device_flush() == varlit::DeviceFlush::Os {
+        use std::os::fd::AsRawFd;
+        unsafe extern "C" {
+            fn fsync(fd: i32) -> i32;
+        }
+        // SAFETY: the descriptor belongs to `file`, which outlives the call.
+        return if unsafe { fsync(file.as_raw_fd()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        };
+    }
+    // `F_FULLFSYNC` on Apple platforms, the ordinary sync elsewhere.
+    file.sync_all()
+}
 
-/// Opens a SQLite database for writing with [`SQLITE_DURABILITY`] applied.
+/// Whether SQLite is set to flush the drive cache: on Apple platforms with
+/// [`device_flush`] `full`, where SQLite's own `fsync` would not.
+pub fn sqlite_fullfsync() -> bool {
+    cfg!(any(target_os = "macos", target_os = "ios")) && device_flush() == varlit::DeviceFlush::Full
+}
+
+/// Opens a SQLite database for writing under [`device_flush`].
 pub fn sqlite_open(p: &Path) -> rusqlite::Result<rusqlite::Connection> {
     let c = rusqlite::Connection::open(p)?;
-    if !SQLITE_DURABILITY.is_empty() {
-        c.execute_batch(SQLITE_DURABILITY)?;
+    if sqlite_fullfsync() {
+        c.execute_batch("PRAGMA fullfsync=ON; PRAGMA checkpoint_fullfsync=ON;")?;
     }
     Ok(c)
 }
@@ -265,8 +457,13 @@ pub fn caveats() -> serde_json::Value {
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "cold_reads_evicted": EVICTS,
+        "eviction": EVICTION,
         "peak_rss_measured": PEAK_RSS,
         "process_cpu_measured": PROCESS_CPU,
-        "sqlite_fullfsync": !SQLITE_DURABILITY.is_empty(),
+        "device_flush": match device_flush() {
+            varlit::DeviceFlush::Full => "full",
+            varlit::DeviceFlush::Os => "os",
+        },
+        "sqlite_fullfsync": sqlite_fullfsync(),
     })
 }

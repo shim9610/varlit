@@ -734,7 +734,7 @@ impl VarlitFile {
         if !self.pending_pathname_parent_sync {
             return Ok(());
         }
-        match sync_parent_directory(&self.path) {
+        match sync_parent_directory(&self.path, self.spec.device_flush) {
             Ok(()) => {
                 self.pending_pathname_parent_sync = false;
                 Ok(())
@@ -1345,6 +1345,14 @@ impl VarlitFile {
             return Ok(());
         };
         self.file.adopt_published_end(slots_at)?;
+        // Outside a transaction-marker policy a record is visible once
+        // written, so a native writer bounds no reader. The block is there
+        // for stream writers, which publish the end of each durable sync
+        // (their recovery root); a native writer that takes the file over
+        // withdraws it, and its own recovery has already cut any torn tail.
+        if !self.spec.commit_policy.is_transaction_marker() {
+            return self.file.withdraw_published_end();
+        }
         let end = self.snapshot.len();
         if self.file.published_end() != Some(end) {
             self.file.sync_data()?;
@@ -1362,7 +1370,7 @@ impl VarlitFile {
     /// written leaves readers at the previous end until the next publication
     /// or writer open moves it; they never see more than was published.
     pub(super) fn publish_visible_end(&mut self) {
-        if self.mode == OpenMode::ReadWrite {
+        if self.mode == OpenMode::ReadWrite && self.spec.commit_policy.is_transaction_marker() {
             let end = self.snapshot.len();
             let _ = self.file.publish_end(end);
         }

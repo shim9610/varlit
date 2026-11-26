@@ -1,15 +1,11 @@
 #[path = "support/pages.rs"]
 mod pages;
 
-use std::path::{Path, PathBuf};
-
 use varlit::{
-    BatchOptions, BlockDescriptor, BlockKind, CommitPolicy, Decoder, DiskIndexBatchOptions,
-    DiskIndexError, DiskIndexOptions, Encoder, Endian, Error, FormatSpec, IndexPolicy,
-    IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result, ScanOptions,
-    ScanProgressPhase, StreamOptions, StreamingBlocks, VarlitBlock, VarlitDecode, VarlitEmpty,
-    VarlitEncode, VarlitStreamReader, VarlitStreamWriter, WireType,
-    bootstrap_stream_checkpoint_with_progress,
+    BatchOptions, BlockDescriptor, BlockKind, CommitPolicy, Decoder, Encoder, Endian, FormatSpec,
+    IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result,
+    StreamOptions, StreamingBlocks, VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode,
+    VarlitStreamReader, VarlitStreamWriter, WireType,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,28 +122,6 @@ fn chain_spec(integrity: IntegrityPolicy) -> FormatSpec {
     .with_read_limits(ReadLimits::finite_all(u64::MAX))
 }
 
-/// Bounds the writer's sidecar transaction at two coverage items so a small
-/// number of scalar pushes crosses several `chunk_records` boundaries.
-fn small_chunk_options() -> StreamOptions {
-    StreamOptions {
-        state: DiskIndexOptions {
-            max_key_bytes: 1024,
-            batch: DiskIndexBatchOptions {
-                max_records: 2,
-                max_bytes: 4096,
-            },
-            ..DiskIndexOptions::default()
-        },
-        ..StreamOptions::default()
-    }
-}
-
-fn state_sidecar(path: &Path) -> PathBuf {
-    let mut value = path.as_os_str().to_owned();
-    value.push(".vks");
-    PathBuf::from(value)
-}
-
 fn last_offset_of_block(reader: &VarlitStreamReader, block_id: u32) -> Result<Option<u64>> {
     let mut last = None;
     for event in reader.events()? {
@@ -166,7 +140,7 @@ fn scalar_pushes_survive_sync_and_reopen() -> Result<()> {
     let spec = chain_spec(IntegrityPolicy::None);
     let mut previous = None;
     {
-        let mut writer = VarlitStreamWriter::create(spec, &path, small_chunk_options())?;
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
         for value in 0..5 {
             let info = writer.push_info(&Value(value))?;
             assert_eq!(info.prev_same_block_offset, previous);
@@ -181,20 +155,20 @@ fn scalar_pushes_survive_sync_and_reopen() -> Result<()> {
         writer.sync()?;
     }
     {
-        let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
+        let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
         let values = collect_blocks(reader.blocks::<Value>()?)?;
         assert_eq!(values, (0..7).map(Value).collect::<Vec<_>>());
         assert_eq!(last_offset_of_block(&reader, Value::ID)?, previous);
     }
     {
-        // The reopened writer rebuilds its block tails from the sidecar, so the
-        // collapsed per-chunk tails must still name the true final record.
-        let mut writer = VarlitStreamWriter::open(spec, &path, small_chunk_options())?;
+        // The reopened writer rebuilds its block tails from the file, so the
+        // tails must still name the true final record.
+        let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
         let info = writer.push_info(&Value(7))?;
         assert_eq!(info.prev_same_block_offset, previous);
         writer.sync()?;
     }
-    let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
+    let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
     let values = collect_blocks(reader.blocks::<Value>()?)?;
     assert_eq!(values, (0..8).map(Value).collect::<Vec<_>>());
     Ok(())
@@ -206,15 +180,15 @@ fn interleaved_scalar_and_plural_appends_stay_consistent() -> Result<()> {
     let path = directory.path().join("interleaved.varlit");
     let spec = chain_spec(IntegrityPolicy::None);
     {
-        let mut writer = VarlitStreamWriter::create(spec, &path, small_chunk_options())?;
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
         writer.push_info(&Value(0))?;
-        // Five records with a state bound of two coverage items force the
-        // native batch to split into multiple prepared chunks.
+        // Five records with a bound of two per chunk force the native batch
+        // to split into multiple prepared chunks.
         let report = writer
             .push_iter::<Value, _>(
                 (1..=5).map(Value).collect::<Vec<_>>(),
                 BatchOptions {
-                    max_records: 100,
+                    max_records: 2,
                     max_bytes: usize::MAX,
                 },
             )
@@ -226,7 +200,7 @@ fn interleaved_scalar_and_plural_appends_stay_consistent() -> Result<()> {
         writer.sync()?;
     }
     let (last_value, last_extra) = {
-        let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
+        let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
         let values = collect_blocks(reader.blocks::<Value>()?)?;
         assert_eq!(values, (0..7).map(Value).collect::<Vec<_>>());
         let extras = collect_blocks(reader.blocks::<Extra>()?)?;
@@ -236,7 +210,7 @@ fn interleaved_scalar_and_plural_appends_stay_consistent() -> Result<()> {
             last_offset_of_block(&reader, Extra::ID)?,
         )
     };
-    let mut writer = VarlitStreamWriter::open(spec, &path, small_chunk_options())?;
+    let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
     assert_eq!(
         writer.push_info(&Value(7))?.prev_same_block_offset,
         last_value
@@ -256,7 +230,7 @@ fn crc_typed_scan_decodes_all_values() -> Result<()> {
     let path = directory.path().join("crc-scan.varlit");
     let spec = chain_spec(IntegrityPolicy::Crc32WithHeader);
     {
-        let mut writer = VarlitStreamWriter::create(spec, &path, small_chunk_options())?;
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
         for value in 0..4 {
             writer.push_info(&Value(value))?;
         }
@@ -268,7 +242,7 @@ fn crc_typed_scan_decodes_all_values() -> Result<()> {
             .map_err(|error| error.source)?;
         writer.sync()?;
     }
-    let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
+    let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
     // 20 user records, the internal creation-nonce record and the sync
     // marker that closed them.
     assert_eq!(reader.verify_all()?, 22);
@@ -287,7 +261,7 @@ fn crc_typed_scan_skips_foreign_payloads_and_gates_decode() -> Result<()> {
     let path = directory.path().join("crc-single-read.varlit");
     let spec = chain_spec(IntegrityPolicy::Crc32WithHeader);
     {
-        let mut writer = VarlitStreamWriter::create(spec, &path, small_chunk_options())?;
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
         // The corrupted record must sit past the primary generation witness
         // window ; a byte flipped inside that window is a generation
         // change refused at open, which is a different contract from the
@@ -302,7 +276,7 @@ fn crc_typed_scan_skips_foreign_payloads_and_gates_decode() -> Result<()> {
         writer.sync()?;
     }
     let extra_payload_offset = {
-        let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
+        let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
         let mut offset = None;
         for event in reader.events()? {
             let event = event?;
@@ -331,7 +305,7 @@ fn crc_typed_scan_skips_foreign_payloads_and_gates_decode() -> Result<()> {
         file.sync_all()?;
     }
 
-    let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
+    let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
     // A typed scan of another block must not read (or checksum) the corrupt
     // foreign payload; before the single-read contract this scan failed with
     // a checksum mismatch on the skipped record.
@@ -341,54 +315,18 @@ fn crc_typed_scan_skips_foreign_payloads_and_gates_decode() -> Result<()> {
     // feeds typed decode is also the checksum verification.
     let extra_error = collect_blocks(reader.blocks::<Extra>()?)
         .expect_err("decoding the corrupted record must fail");
-    assert!(matches!(extra_error, Error::ChecksumMismatch { .. }));
+    assert!(matches!(
+        extra_error,
+        varlit::Error::ChecksumMismatch { .. }
+    ));
     // Whole-file verification keeps its payload checksum pre-pass.
     let verify_error = reader
         .verify_all()
         .expect_err("verify_all must observe the corrupted payload");
-    assert!(matches!(verify_error, Error::ChecksumMismatch { .. }));
-    Ok(())
-}
-
-#[test]
-fn bootstrap_aborts_when_pathname_identity_changes_before_publish() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("swap.varlit");
-    let decoy = directory.path().join("decoy.varlit");
-    let moved = directory.path().join("moved.varlit");
-    let spec = chain_spec(IntegrityPolicy::None);
-    for (target, seed) in [(&path, 0u64), (&decoy, 90u64)] {
-        let mut writer = VarlitStreamWriter::create(spec, target, small_chunk_options())?;
-        for value in seed..seed + 3 {
-            writer.push_info(&Value(value))?;
-        }
-        writer.sync()?;
-        drop(writer);
-        std::fs::remove_file(state_sidecar(target))?;
-    }
-    let error = bootstrap_stream_checkpoint_with_progress(
-        spec,
-        &path,
-        small_chunk_options(),
-        ScanOptions::default(),
-        |progress| {
-            // The scan is finished but the checkpoint is not yet published:
-            // swap another same-spec generation into the scanned pathname.
-            if progress.phase == ScanProgressPhase::Complete {
-                std::fs::rename(&path, &moved).expect("move scanned generation aside");
-                std::fs::rename(&decoy, &path).expect("swap decoy into the pathname");
-            }
-        },
-    )
-    .expect_err("bootstrap must not publish a checkpoint for a swapped pathname");
     assert!(matches!(
-        &error,
-        Error::DiskIndex(source) if matches!(**source, DiskIndexError::IdentityMismatch)
+        verify_error,
+        varlit::Error::ChecksumMismatch { .. }
     ));
-    assert!(
-        !state_sidecar(&path).exists(),
-        "no state sidecar may be published after the identity mismatch"
-    );
     Ok(())
 }
 
@@ -406,16 +344,15 @@ mod commit_contract {
     const CHILD_ENV: &str = "VARLIT_STREAM_PERF_CONTRACT_CHILD";
     const ROOT_ENV: &str = "VARLIT_STREAM_PERF_CONTRACT_ROOT";
     const CHILD_RECORDS: u64 = 10;
-    const CHUNK_RECORDS: u64 = 2;
 
     fn native_path(root: &Path) -> PathBuf {
         root.join("commit-contract.varlit")
     }
 
-    /// N scalar pushes with a sidecar bound of K coverage items must produce at
-    /// most ceil(N/K)+1 sidecar batch commits, not one commit per record.
+    /// N scalar pushes and one sync must reach storage with exactly one
+    /// barrier: the pushes issue none, and the sync issues one.
     #[test]
-    fn scalar_appends_bound_sidecar_commits() -> Result<()> {
+    fn scalar_appends_and_one_sync_issue_one_barrier() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let trace = directory.path().join("trace.tsv");
         let status = Command::new(env::current_exe().expect("locate test executable"))
@@ -434,8 +371,8 @@ mod commit_contract {
             .expect("run commit contract child");
         assert!(status.success(), "commit contract child failed: {status}");
 
-        let mut batch_commit_events = 0u64;
-        let mut clean_publish_events = 0u64;
+        let mut sync_events = 0u64;
+        let mut append_events = 0u64;
         for line in fs::read_to_string(&trace)
             .expect("read fault trace")
             .lines()
@@ -443,30 +380,21 @@ mod commit_contract {
             let mut fields = line.split('\t');
             assert_eq!(fields.next(), Some("v1"), "unexpected trace line {line:?}");
             match fields.next() {
-                Some("append.sidecar_batch_commit") => batch_commit_events += 1,
-                Some("publish.clean_commit") => clean_publish_events += 1,
+                Some("sync.native_sync") => sync_events += 1,
+                Some("append.native_chunk_write") => append_events += 1,
                 _ => {}
             }
         }
-        // Every commit is bracketed by one before-hook and one after-hook.
-        assert_eq!(batch_commit_events % 2, 0, "unpaired commit hooks in trace");
-        let commits = batch_commit_events / 2;
-        let bound = CHILD_RECORDS.div_ceil(CHUNK_RECORDS) + 1;
-        assert!(
-            (1..=bound).contains(&commits),
-            "expected between 1 and {bound} sidecar batch commits for \
-             {CHILD_RECORDS} scalar pushes with chunk bound {CHUNK_RECORDS}, got {commits}"
-        );
-        assert!(
-            clean_publish_events >= 2,
-            "sync() no longer publishes a durable clean sidecar state"
-        );
+        // Every point is bracketed by one before-hook and one after-hook.
+        assert_eq!(sync_events, 2, "expected one barrier for one sync");
+        // The pushes and the marker that closes them.
+        assert_eq!(append_events, 2 * (CHILD_RECORDS + 1));
 
-        // The batched sidecar must still describe a clean, fully readable file.
+        // The file must still be fully readable.
         let reader = VarlitStreamReader::open(
             chain_spec(IntegrityPolicy::None),
             native_path(directory.path()),
-            small_chunk_options(),
+            StreamOptions::default(),
         )?;
         let values = collect_blocks(reader.blocks::<Value>()?)?;
         assert_eq!(values, (0..CHILD_RECORDS).map(Value).collect::<Vec<_>>());
@@ -483,7 +411,7 @@ mod commit_contract {
         let mut writer = VarlitStreamWriter::create(
             chain_spec(IntegrityPolicy::None),
             native_path(&root),
-            small_chunk_options(),
+            StreamOptions::default(),
         )
         .expect("create commit contract writer");
         let guard = arm_from_env().expect("arm scalable fault tracing");
@@ -496,31 +424,4 @@ mod commit_contract {
         drop(writer);
         drop(guard);
     }
-}
-
-#[cfg(feature = "scalable-fault-injection")]
-#[test]
-fn primary_generation_witness_stops_scanning_once_its_window_is_full() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("generation-window.varlit");
-    let spec = chain_spec(IntegrityPolicy::None);
-    let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
-
-    // Fill well past the witness window, then measure only the steady state.
-    for index in 0..4096u64 {
-        writer.push_info(&Value(index))?;
-    }
-    writer.sync()?;
-
-    VarlitStreamWriter::reset_scaling_counters();
-    for index in 4096..8192u64 {
-        writer.push_info(&Value(index))?;
-    }
-    writer.sync()?;
-    assert_eq!(
-        VarlitStreamWriter::primary_generation_scans(),
-        0,
-        "the frozen generation witness was recomputed during steady-state appends"
-    );
-    Ok(())
 }

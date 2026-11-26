@@ -22,15 +22,12 @@ pub fn fill_payload(seq: u64, out: &mut [u8]) {
 }
 
 pub fn fsync_dir(dir: &Path) -> Result<()> {
-    std::fs::File::open(dir)?.sync_all()?;
+    crate::platform::sync_file(&std::fs::File::open(dir)?)?;
     Ok(())
 }
 
 pub fn fsync_file(path: &Path) -> Result<()> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .open(path)?
-        .sync_all()?;
+    crate::platform::sync_file(&std::fs::OpenOptions::new().read(true).open(path)?)?;
     Ok(())
 }
 
@@ -112,13 +109,12 @@ pub fn vl_limits() -> varlit::ReadLimits {
 pub fn vl_spec(spec: varlit::FormatSpec) -> varlit::FormatSpec {
     spec.with_resource_limits(vl_limits())
 }
-pub fn vl_dio(mut o: varlit::DiskIndexOptions) -> varlit::DiskIndexOptions {
-    o.limits = o.limits.overlay(vl_limits());
-    o
+/// `spec` as a writer uses it: syncing under the run's `FB_DEVICE_FLUSH`.
+pub fn vl_write(spec: varlit::FormatSpec) -> varlit::FormatSpec {
+    spec.with_device_flush(crate::platform::device_flush())
 }
 pub fn vl_stream(mut o: varlit::StreamOptions) -> varlit::StreamOptions {
     o.limits = o.limits.overlay(vl_limits());
-    o.state = vl_dio(o.state);
     o
 }
 

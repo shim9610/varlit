@@ -90,10 +90,7 @@ fn limits(p: ReadValidation) -> ReadLimits {
     ReadLimits::STANDARD.with_read_validation(p)
 }
 fn options(p: ReadValidation) -> StreamOptions {
-    StreamOptions {
-        limits: limits(p),
-        ..StreamOptions::default()
-    }
+    StreamOptions { limits: limits(p) }
 }
 fn flip(path: &std::path::Path, at: u64) -> Result<()> {
     let old = std::fs::read(path)?[at as usize];

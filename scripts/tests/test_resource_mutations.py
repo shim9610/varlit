@@ -54,7 +54,7 @@ fn unrelated() {}"""
     def test_executable_contract_and_consumer_cannot_be_omitted(self):
         for prefix in ['chunks::contract_proofs::',
                        'compression_buffers::resource_steps::contract_proofs::',
-                       'disk_index::tree::contract_proofs::',
+                       'scratch_index::tree::contract_proofs::',
                        'chunks::resource_proofs::incomplete_chunk_table_']:
             manifest = json.loads(json.dumps(self.manifest))
             for family in manifest['contracts']:

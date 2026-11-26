@@ -261,6 +261,11 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
 
     /// Reopens after a crash: replays every whole journal frame of the
     /// current epoch into the main file, makes it durable, resets the journal.
+    /// The benchmark always creates a fresh file; the crash tests reopen.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the crash tests reopen a tile file")
+    )]
     pub fn open(p: &Path) -> Result<Self> {
         let (jp, lp) = paths(p);
         let main = OpenOptions::new().read(true).write(true).open(p)?;
@@ -274,10 +279,10 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
         }
         let journal = OpenOptions::new().read(true).write(true).open(&jp)?;
         let epoch = recover(&main, &journal)?;
-        main.sync_data()?;
+        crate::platform::sync_file(&main)?;
         write_journal_header(&journal, epoch + 1)?;
         journal.set_len(JOURNAL_HEADER)?;
-        journal.sync_data()?;
+        crate::platform::sync_file(&journal)?;
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -406,7 +411,7 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
             self.out.flush(journal)?;
             // Visibility waits for durability: a page the OS writes back
             // before its journal frame is durable could not be undone.
-            journal.sync_data()?;
+            crate::platform::sync_file(&journal)?;
             self.barriers += 1;
         }
         self.lock.lock()?;
@@ -416,7 +421,7 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
         self.pending.clear();
         if self.journal.is_none() {
             if durable {
-                self.main.sync_data()?;
+                crate::platform::sync_file(&self.main)?;
                 self.barriers += 1;
             }
         } else if self.jlen > checkpoint_len() {
@@ -426,12 +431,12 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
     }
 
     fn checkpoint(&mut self) -> Result<()> {
-        self.main.sync_data()?;
+        crate::platform::sync_file(&self.main)?;
         let journal = self.journal.as_ref().unwrap();
         self.epoch += 1;
         write_journal_header(journal, self.epoch)?;
         journal.set_len(JOURNAL_HEADER)?;
-        journal.sync_data()?;
+        crate::platform::sync_file(&journal)?;
         self.barriers += 2;
         self.jlen = JOURNAL_HEADER;
         Ok(())
@@ -442,11 +447,11 @@ impl<const TR: u64, const TC: u64> TileWriter<TR, TC> {
     pub fn finish_load(&mut self) -> Result<()> {
         self.commit(true)?;
         self.loading = false;
-        self.main.sync_data()?;
+        crate::platform::sync_file(&self.main)?;
         self.main.write_all_at(MAGIC, 0)?;
-        self.main.sync_data()?;
+        crate::platform::sync_file(&self.main)?;
         if let Some(j) = &self.journal {
-            j.sync_data()?;
+            crate::platform::sync_file(&j)?;
         }
         Ok(())
     }

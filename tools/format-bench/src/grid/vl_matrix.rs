@@ -53,7 +53,7 @@ pub struct Wr {
     buf: Vec<u8>,
 }
 pub fn create(p: &Path, ck: Ck) -> Result<Box<dyn GridWrite>> {
-    let w = spec(&ck).create_with_dims(
+    let w = vl_write(spec(&ck)).create_with_dims(
         p,
         varlit::MatrixDimensions::from_pairs([("cs", rows(&ck) as u64), ("cc", cc(&ck) as u64)]),
     )?;

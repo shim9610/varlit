@@ -68,6 +68,8 @@ def main():
     ap.add_argument("--only", help="comma list of plan labels")
     ap.add_argument("--out", type=Path, default=HERE / "target/ab")
     ap.add_argument("--summary", type=Path, help="append the markdown table here")
+    ap.add_argument("--device-flush", choices=["full", "os"], default="full",
+                    help="durable syncs flush the drive cache (full) or stop at the OS sync (os)")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     work = a.out / "work"
@@ -81,7 +83,8 @@ def main():
             if rep % 2:
                 sides.reverse()
             for side, binary in sides:
-                m = run_once(binary, side, scenario, env_extra, a.data_gb, work)
+                m = run_once(binary, side, scenario,
+                             {**env_extra, "FB_DEVICE_FLUSH": a.device_flush}, a.data_gb, work)
                 results.setdefault((label, side), []).append(m)
                 raw.write(json.dumps({"rep": rep, "label": label, "side": side, "m": m}) + "\n")
                 raw.flush()

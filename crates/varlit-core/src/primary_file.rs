@@ -183,8 +183,59 @@ impl PrimaryFile {
         self.published
     }
 
-    pub(crate) fn set_writer_published(&mut self, published: WriterPublished) {
+    /// Takes over the `VPUB` slots at `slots_at`: later
+    /// [`Self::write_published_end`] calls continue after the newest slot.
+    pub(crate) fn adopt_writer_published(&mut self, slots_at: u64) -> Result<()> {
+        use crate::published_end::{ACTIVE, SLOT_LEN, decode_slot};
+        let mut slots = [0u8; 2 * SLOT_LEN];
+        read_exact_at(&self.file, slots_at, &mut slots)?;
+        let mut seq = 0u64;
+        let mut end = None;
+        for bytes in slots.as_chunks::<SLOT_LEN>().0 {
+            if let Some(slot) = decode_slot(bytes)
+                && slot.seq >= seq
+            {
+                seq = slot.seq;
+                end = (slot.flags & ACTIVE != 0).then_some(slot.end);
+            }
+        }
+        self.published = Some(WriterPublished { slots_at, seq, end });
+        Ok(())
+    }
+
+    /// Writes the slot after the newest: publishing `Some(end)`, or
+    /// withdrawing with `None`. Nothing when the handle owns no `VPUB` block
+    /// or the newest slot already says so. One positional write of 24 bytes
+    /// in the header, no barrier: a slot torn by a crash fails its checksum
+    /// and leaves the previous one.
+    pub(crate) fn write_published_end(&mut self, end: Option<u64>) -> Result<()> {
+        use crate::published_end::{ACTIVE, SLOT_LEN, Slot, encode_slot};
+        let Some(mut published) = self.published else {
+            return Ok(());
+        };
+        if published.end == end {
+            return Ok(());
+        }
+        let seq = published
+            .seq
+            .checked_add(1)
+            .ok_or(crate::Error::LengthOverflow {
+                value: published.seq,
+            })?;
+        let bytes = encode_slot(Slot {
+            end: end.unwrap_or(0),
+            seq,
+            flags: if end.is_some() { ACTIVE } else { 0 },
+        });
+        // The slot after the newest: a torn write leaves the newest standing.
+        let slot = crate::publication_protocol::slot_after(published.seq);
+        let at = published.slots_at + (slot * SLOT_LEN) as u64;
+        // The header precedes every anchor: a physical write.
+        write_all_at(&self.file, at, &bytes)?;
+        published.seq = seq;
+        published.end = end;
         self.published = Some(published);
+        Ok(())
     }
 
     /// Makes [`Self::len`] stop at the published end the `VPUB` slots at
@@ -566,28 +617,45 @@ impl PrimaryFile {
     }
 
     pub(crate) fn anchor(&self, k: u64) -> Result<Option<Anchor>> {
+        let mut bytes = [0u8; 4096];
+        Ok(self.anchor_into(k, &mut bytes)?.map(|(anchor, _)| anchor))
+    }
+
+    /// Anchor `k` and its whole reserved range, read into `bytes`: the
+    /// decoded anchor and the range's length, or `None` when the file has no
+    /// intact anchor `k`. The range holds any summary the anchor carries.
+    pub(crate) fn anchor_into(
+        &self,
+        k: u64,
+        bytes: &mut [u8; 4096],
+    ) -> Result<Option<(Anchor, usize)>> {
         let Some(layout) = self.layout else {
             return Ok(None);
         };
         let Some(physical) = layout.anchor_physical(k) else {
             return Ok(None);
         };
-        let hole = usize::try_from(layout.hole()).expect("anchor fits memory");
+        let Some(hole) = usize::try_from(layout.hole())
+            .ok()
+            .filter(|hole| *hole <= bytes.len())
+        else {
+            return Ok(None);
+        };
         let end = physical.saturating_add(layout.hole());
         if self.file.metadata()?.len() < end {
             return Ok(None);
         }
-        let mut bytes = vec![0u8; hole];
+        let range = &mut bytes[..hole];
         let mut done = 0;
         while done < hole {
-            match crate::snapshot::read_at(&self.file, &mut bytes[done..], physical + done as u64) {
+            match crate::snapshot::read_at(&self.file, &mut range[done..], physical + done as u64) {
                 Ok(0) => return Ok(None),
                 Ok(n) => done += n,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error.into()),
             }
         }
-        Ok(Anchor::decode(&layout, k, &bytes))
+        Ok(Anchor::decode(&layout, k, range).map(|anchor| (anchor, hole)))
     }
 }
 

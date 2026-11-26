@@ -232,7 +232,7 @@ impl VarlitFile {
             old_physical_len: bytes_before,
             new_physical_len: 0,
         };
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => {
                 self.rebind_replacement_generation(info, new_index)?;
             }
@@ -454,7 +454,7 @@ impl VarlitFile {
         }
         drop(temp_file);
 
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => self.rebind_replacement_generation(info, new_index),
             Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
                 // Publication already happened: the pathname resolves to the
@@ -929,7 +929,7 @@ impl VarlitFile {
         }
         drop(temp_file);
 
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => self.rebind_published_generation(sequence, new_index),
             Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
                 // Publication already happened: the pathname resolves to the
@@ -1243,7 +1243,7 @@ impl VarlitFile {
         }
         drop(temp_file);
 
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => {
                 self.rebind_published_generation(sequence, Some(new_index))
             }

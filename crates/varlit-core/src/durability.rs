@@ -92,17 +92,18 @@ mod tests {
 
     #[test]
     fn both_settings_sync_a_written_file() -> std::io::Result<()> {
-        let dir = std::env::temp_dir().join(format!("varlit-durability-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("f");
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("f");
         std::fs::write(&path, b"bytes")?;
-        let file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)?;
         for flush in [DeviceFlush::Full, DeviceFlush::Os] {
             sync_data(&file, flush)?;
             sync_all(&file, flush)?;
         }
-        drop(file);
-        std::fs::remove_dir_all(&dir)
+        Ok(())
     }
 
     #[test]

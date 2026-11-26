@@ -64,7 +64,7 @@ fn write_file(
     let tmp = dir.join("tmp.parquet");
     let mut w = ArrowWriter::try_new(std::fs::File::create(&tmp)?, schema, Some(props(rg)))?;
     fill(&mut w)?;
-    w.into_inner()?.sync_all()?;
+    crate::platform::sync_file(&w.into_inner()?)?;
     std::fs::rename(&tmp, dir.join(name))?;
     fsync_dir(dir)?;
     Ok(())

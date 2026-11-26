@@ -97,14 +97,8 @@ pub fn spec() -> FormatSpec {
         Head::IDENTITY,
     ])
 }
-pub fn stream_options(cache: usize) -> StreamOptions {
-    StreamOptions {
-        state: DiskIndexOptions {
-            cache_bytes: cache,
-            ..Default::default()
-        },
-        ..Default::default()
-    }
+pub fn stream_options(_cache: usize) -> StreamOptions {
+    StreamOptions::default()
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Config {

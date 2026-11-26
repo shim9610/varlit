@@ -16,6 +16,19 @@ pub(crate) fn write_file_header(
     Ok(extensions)
 }
 
+/// [`write_file_header`] for a stream writer's new file, which also carries
+/// the published end (see `stream_file_header_extensions`).
+pub(crate) fn write_stream_file_header(
+    spec: FormatSpec,
+    file: &mut crate::primary_file::PrimaryFile,
+) -> Result<Vec<u8>> {
+    let extensions = stream_file_header_extensions(spec)?;
+    file.set_layout(None);
+    let header_len = write_native_file_header(file, spec, &extensions)?;
+    file.set_layout(spec.effective_anchors().layout(header_len));
+    Ok(extensions)
+}
+
 pub(crate) fn read_file_header(spec: FormatSpec, file: &mut (impl Read + Seek)) -> Result<u64> {
     Ok(read_file_header_parts(spec, file)?.0)
 }

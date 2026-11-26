@@ -592,22 +592,6 @@ mod tests {
             assert_eq!(try_display_path(path).unwrap(), path.display().to_string());
         }
     }
-
-    #[test]
-    fn disk_error_wrapper_refusal_keeps_publication_facts() {
-        let source = Error::ErrorContextAllocationFailed {
-            context: crate::AllocationFailureContext::Committed { sequence: 31 },
-        };
-        let error = with_allocation_refusal(1, || {
-            crate::disk_index::index_error(crate::DiskIndexError::Primary(source))
-        });
-        assert!(matches!(
-            error,
-            Error::ErrorContextAllocationFailed {
-                context: crate::AllocationFailureContext::Committed { sequence: 31 }
-            }
-        ));
-    }
 }
 
 #[cfg(kani)]

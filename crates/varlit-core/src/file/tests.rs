@@ -101,102 +101,6 @@ fn derived_state_matches_the_three_rules_it_replaced() {
     }
 }
 
-/// What the two sidecar identity windows must stop covering, and what they
-/// must keep covering.
-///
-/// Both windows hash the file's leading bytes to bind a derived artefact to
-/// the primary. That was sound while the header was written once; the
-/// header tail region makes it false, and without this blanking one commit
-/// would permanently invalidate every published sidecar for the file.
-///
-/// The relaxation has to be exactly as narrow as that. This asserts three
-/// things a looser version would get wrong: the magic and the declared
-/// length stay in the window (they are what move `append_log_start`, so a
-/// change to either has to keep failing); a block that is *not* mutable is
-/// untouched even when it sits beside one that is; and a caller whose
-/// window ends inside the region blanks what it holds rather than
-/// overrunning or refusing.
-#[test]
-fn blanking_covers_the_mutable_payload_and_nothing_else() {
-    const PAYLOAD_LEN: usize = 40;
-    const HEADER_PREAMBLE: usize = 20;
-    let mut extensions = Vec::new();
-    // `VCHD` first: it predates the framing and carries no length prefix,
-    // so it also checks that the walk's offsets survive a block of a
-    // different shape sitting in front of the mutable one.
-    extensions.extend_from_slice(FILE_COMPRESSION_MAGIC);
-    extensions.extend_from_slice(&[0x11; FILE_COMPRESSION_PAYLOAD_LEN]);
-    let vchd_len = extensions.len();
-    extensions.extend_from_slice(HEADER_TAILS_MAGIC);
-    extensions.extend_from_slice(&(PAYLOAD_LEN as u32).to_le_bytes());
-    extensions.extend_from_slice(&[0x22; PAYLOAD_LEN]);
-    // And a block *after* the mutable one, which the walk skips because it
-    // does not know the magic. Without it the mutable payload runs to the
-    // end of the region and "everything after it is untouched" asserts over
-    // an empty slice — true of any implementation, including one that
-    // blanked to the end.
-    const TRAILING_LEN: usize = 12;
-    extensions.extend_from_slice(b"VZZZ");
-    extensions.extend_from_slice(&(TRAILING_LEN as u32).to_le_bytes());
-    extensions.extend_from_slice(&[0x33; TRAILING_LEN]);
-
-    let header_len = (HEADER_PREAMBLE + extensions.len()) as u64;
-    let payload_start = HEADER_PREAMBLE + vchd_len + 8;
-    assert!(
-        payload_start + PAYLOAD_LEN < header_len as usize,
-        "the assertion below has to have bytes to be about",
-    );
-
-    let mut prefix = vec![0xAAu8; header_len as usize];
-    let blanked = blank_mutable_header_bytes(&mut prefix, header_len, &extensions)
-        .expect("a well-framed region blanks");
-    assert_eq!(blanked, PAYLOAD_LEN as u64);
-    assert!(
-        prefix[payload_start..payload_start + PAYLOAD_LEN]
-            .iter()
-            .all(|byte| *byte == 0),
-        "the mutable payload is blanked",
-    );
-    assert!(
-        prefix[..payload_start].iter().all(|byte| *byte == 0xAA),
-        "everything before it — including `VBTT`'s own magic and declared \
-         length — stays in the window",
-    );
-    assert!(
-        prefix[payload_start + PAYLOAD_LEN..]
-            .iter()
-            .all(|byte| *byte == 0xAA),
-        "and everything after it",
-    );
-
-    // A window that stops inside the region blanks its own tail and no more.
-    let short = payload_start + 5;
-    let mut clipped = vec![0xAAu8; short];
-    let blanked = blank_mutable_header_bytes(&mut clipped, header_len, &extensions)
-        .expect("a clipped window is not an error");
-    assert_eq!(blanked, 5);
-    assert!(clipped[payload_start..].iter().all(|byte| *byte == 0));
-
-    // A window that ends before the region touches nothing.
-    let mut early = vec![0xAAu8; HEADER_PREAMBLE];
-    assert_eq!(
-        blank_mutable_header_bytes(&mut early, header_len, &extensions).expect("no overrun"),
-        0,
-    );
-    assert!(early.iter().all(|byte| *byte == 0xAA));
-
-    // A region with no mutable block is left exactly as it is.
-    let immutable = &extensions[..vchd_len];
-    assert!(!immutable.is_empty());
-    let header_len = (HEADER_PREAMBLE + immutable.len()) as u64;
-    let mut untouched = vec![0xAAu8; header_len as usize];
-    assert_eq!(
-        blank_mutable_header_bytes(&mut untouched, header_len, immutable).expect("no block"),
-        0,
-    );
-    assert!(untouched.iter().all(|byte| *byte == 0xAA));
-}
-
 use super::*;
 // Only the fixtures below need it, so importing it at module scope
 // would be an unused import in the non-test build — which is what it
@@ -1645,35 +1549,6 @@ fn windows_sharing_violation_preserves_generation_and_allows_retry() -> Result<(
 
 #[cfg(windows)]
 #[test]
-fn windows_open_generation_rename_handles_every_utf16_alignment() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    // Four adjacent ASCII lengths cover every UTF-16 tail alignment in the
-    // u64-backed FILE_RENAME_INFO allocation, including no padding at all.
-    for suffix_len in 0..4 {
-        let target = directory
-            .path()
-            .join(format!("generation{}", "x".repeat(suffix_len)));
-        std::fs::write(&target, b"old")?;
-        let mut old = File::open(&target)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(directory.path())?;
-        std::io::Write::write_all(temporary.as_file_mut(), b"new")?;
-        temporary.as_file().sync_all()?;
-        let mut new = temporary.as_file().try_clone()?;
-        std::io::Seek::seek(&mut new, std::io::SeekFrom::Start(0))?;
-        let _durability =
-            crate::file::publish_open_temp_path_atomically(temporary.into_temp_path(), &target)?;
-        assert_eq!(std::fs::read(&target)?, b"new");
-        let mut bytes = [0; 3];
-        std::io::Read::read_exact(&mut old, &mut bytes)?;
-        assert_eq!(&bytes, b"old");
-        std::io::Read::read_exact(&mut new, &mut bytes)?;
-        assert_eq!(&bytes, b"new");
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-#[test]
 fn windows_concurrent_replacefilew_keeps_whole_generations_and_old_handle() -> Result<()> {
     use std::sync::{Arc, Barrier};
 
@@ -1695,13 +1570,13 @@ fn windows_concurrent_replacefilew_keeps_whole_generations_and_old_handle() -> R
         let first_target = target.clone();
         let first = std::thread::spawn(move || {
             first_barrier.wait();
-            replace_path_atomically(&replacement_a, &first_target)
+            replace_path_atomically(&replacement_a, &first_target, crate::DeviceFlush::Full)
         });
         let second_barrier = Arc::clone(&barrier);
         let second_target = target.clone();
         let second = std::thread::spawn(move || {
             second_barrier.wait();
-            replace_path_atomically(&replacement_b, &second_target)
+            replace_path_atomically(&replacement_b, &second_target, crate::DeviceFlush::Full)
         });
         barrier.wait();
         let first = first.join().expect("first ReplaceFileW thread panicked");
@@ -1768,7 +1643,7 @@ fn windows_replacefilew_rejects_retained_replacement_handle() -> Result<()> {
         .open(&replacement)?;
 
     assert!(matches!(
-        replace_path_atomically(&replacement, &target),
+        replace_path_atomically(&replacement, &target, crate::DeviceFlush::Full),
         Err(Error::Io(_))
     ));
     assert_eq!(std::fs::read(&target)?, old);
@@ -1777,7 +1652,7 @@ fn windows_replacefilew_rejects_retained_replacement_handle() -> Result<()> {
     retained.read_to_end(&mut retained_bytes)?;
     assert_eq!(retained_bytes, new);
     drop(retained);
-    replace_path_atomically(&replacement, &target)?;
+    replace_path_atomically(&replacement, &target, crate::DeviceFlush::Full)?;
     assert_eq!(std::fs::read(&target)?, new);
     Ok(())
 }
@@ -1995,7 +1870,7 @@ fn atomic_replace_invokes_parent_directory_sync() -> Result<()> {
         .sync_all()?;
 
     reset_parent_directory_sync_calls();
-    replace_path_atomically(&replacement, &target)?;
+    replace_path_atomically(&replacement, &target, crate::DeviceFlush::Full)?;
 
     assert_eq!(parent_directory_sync_calls(), 1);
     assert_eq!(std::fs::read(target)?, b"new");
@@ -2008,7 +1883,7 @@ fn atomic_replace_invokes_parent_directory_sync() -> Result<()> {
         .open(&new_replacement)?
         .sync_all()?;
     reset_parent_directory_sync_calls();
-    replace_path_atomically(&new_replacement, &new_target)?;
+    replace_path_atomically(&new_replacement, &new_target, crate::DeviceFlush::Full)?;
 
     assert_eq!(parent_directory_sync_calls(), 1);
     assert_eq!(std::fs::read(new_target)?, b"first");
@@ -2248,7 +2123,7 @@ fn keyed_tail_spill_allocation_failures_preserve_entries_and_retry() -> Result<(
     let mut completed = false;
     for at in 1..128 {
         let mut tails = KeyedTailMap {
-            spilled: Some(crate::disk_index::ScratchIndex::new(0)?),
+            spilled: Some(crate::scratch_index::ScratchIndex::new(0)?),
             ..Default::default()
         };
         for key in 0..8u64 {

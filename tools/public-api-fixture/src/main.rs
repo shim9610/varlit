@@ -555,14 +555,12 @@ fn check_scalable_roundtrip(dir: &std::path::Path) {
         .unwrap();
     let dirty = ScalableFixture::open_stream_reader(&path, options).unwrap();
     assert_eq!(scalable_values(&dirty), [1]);
-    assert!(reader.release_snapshot());
     writer.immediate().unwrap();
+    assert_eq!(reader.snapshot_status().unwrap().records_behind, 2);
     reader.follow().unwrap();
     assert_eq!(scalable_values(&reader), [1, 2]);
-    assert!(reader.snapshot_status().unwrap().pinned);
-    println!(
-        "  scalable OK: stream handles, unpublished append, release/follow, reader-local status"
-    );
+    assert_eq!(reader.snapshot_status().unwrap().records_behind, 0);
+    println!("  scalable OK: stream handles, unpublished append, follow, reader-local status");
 }
 
 fn main() {

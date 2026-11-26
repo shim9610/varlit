@@ -87,7 +87,7 @@ pub(super) fn write_matrix_sidecar_file<P: AsRef<Path>>(
     }
     drop(temp_file);
 
-    match replace_path_atomically(&temp_path, sidecar_path) {
+    match replace_path_atomically(&temp_path, sidecar_path, spec.device_flush) {
         Ok(ReplaceDurability::Durable) => Ok(manifest),
         Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
             // The replacement is already visible at `sidecar_path`; only the

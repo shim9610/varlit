@@ -17,15 +17,15 @@ mod pages;
 #[cfg(feature = "scalable-fault-injection")]
 mod enabled {
     use std::cell::Cell;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::{Mutex, MutexGuard};
 
     use varlit::{
-        BatchOptions, BlockDescriptor, BlockKind, CommitPolicy, Decoder, DiskIndexBatchOptions,
-        DiskIndexOptions, Encoder, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
-        ManifestPolicy, ReadLimits, RecoveryPolicy, Result, StreamOptions, TransactionMarkerMode,
-        VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitFile, VarlitKeyedBlock,
-        VarlitStreamReader, VarlitStreamWriter, WireType,
+        BatchOptions, BlockDescriptor, BlockKind, CommitPolicy, Decoder, Encoder, Endian, Error,
+        FormatSpec, IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy,
+        Result, StreamOptions, TransactionMarkerMode, VarlitBlock, VarlitDecode, VarlitEmpty,
+        VarlitEncode, VarlitFile, VarlitKeyedBlock, VarlitStreamReader, VarlitStreamWriter,
+        WireType,
     };
 
     /// The injected-failure counters are process-global, so any test in this
@@ -144,21 +144,8 @@ mod enabled {
         .with_read_limits(ReadLimits::STANDARD)
     }
 
-    fn disk_options() -> DiskIndexOptions {
-        DiskIndexOptions {
-            batch: DiskIndexBatchOptions {
-                max_records: 4,
-                max_bytes: 1024 * 1024,
-            },
-            ..DiskIndexOptions::default()
-        }
-    }
-
     fn stream_options() -> StreamOptions {
-        StreamOptions {
-            state: disk_options(),
-            ..StreamOptions::default()
-        }
+        StreamOptions::default()
     }
 
     /// One record per chunk, so every record before the poisoned one is
@@ -168,12 +155,6 @@ mod enabled {
             max_records: 1,
             max_bytes: usize::MAX,
         }
-    }
-
-    fn state_sidecar_path(native: &Path) -> PathBuf {
-        let mut sidecar = native.as_os_str().to_os_string();
-        sidecar.push(".vks");
-        PathBuf::from(sidecar)
     }
 
     fn read_stream(path: &Path) -> Result<Vec<FaultRecord>> {
@@ -187,14 +168,13 @@ mod enabled {
         Ok(records)
     }
 
-    /// Reads the durable stream contents, restoring the checkpoint first when
-    /// the writer left an uncommitted tail behind.
+    /// Reads the durable stream contents, recovering first when the writer
+    /// left an unsynced tail behind.
     fn read_stream_after_recovery(path: &Path) -> Result<Vec<FaultRecord>> {
         if let Ok(values) = read_stream(path) {
             return Ok(values);
         }
-        let writer =
-            VarlitStreamWriter::restore_checkpoint_and_open(stream_spec(), path, stream_options())?;
+        let writer = VarlitStreamWriter::open(stream_spec(), path, stream_options())?;
         drop(writer);
         read_stream(path)
     }
@@ -394,12 +374,8 @@ mod enabled {
         ));
         drop(writer);
         // All eight old readers and cursors still exist. They must not retain
-        // the writer lock or prevent restoring the confirmed checkpoint.
-        let mut recovered = VarlitStreamWriter::restore_checkpoint_and_open(
-            stream_spec(),
-            &path,
-            stream_options(),
-        )?;
+        // the writer lock or prevent recovering the synced prefix.
+        let mut recovered = VarlitStreamWriter::open(stream_spec(), &path, stream_options())?;
         recovered.push_info(&FaultRecord::ok(4))?;
         recovered.sync()?;
         barrier.wait();
@@ -424,8 +400,8 @@ mod enabled {
         match VarlitStreamWriter::create(stream_spec(), &path, stream_options()) {
             Err(Error::PublishedButParentSyncPending { path: reported, .. }) => {
                 assert!(
-                    reported.ends_with(".vks"),
-                    "the pending publication must name the state sidecar, got {reported}"
+                    reported.ends_with("stream-create-pending.varlit"),
+                    "the pending publication must name the created file, got {reported}"
                 );
             }
             other => panic!(
@@ -434,9 +410,8 @@ mod enabled {
             ),
         }
 
-        // The state sidecar is published: only its parent-directory entry is
-        // not yet known to be durable, so a plain open resumes writing.
-        assert!(state_sidecar_path(&path).exists());
+        // The file is complete and durable: only its parent-directory entry
+        // is not yet known to be durable, so a plain open resumes writing.
         let mut writer = VarlitStreamWriter::open(stream_spec(), &path, stream_options())?;
         writer.push_info(&FaultRecord::ok(1))?;
         writer.sync()?;
@@ -534,66 +509,6 @@ mod enabled {
         writer.sync()?;
         drop(writer);
         assert_eq!(read_stream(&path)?, retried);
-        Ok(())
-    }
-
-    // --- round 11, invariant 3: the native chunk write is the authoritative
-    // commit for a prepared chunk, so *every* fallible sidecar step after it
-    // must be a typed published outcome. The primary-generation restamp inside
-    // the chunk commit used to return a bare `Err`, which entitles the caller
-    // to believe nothing happened and re-append the same records.
-
-    /// The single-record stream path: `push_info` -> `append_prepared_chunk`
-    /// -> `commit_state_chunk`. The restamp runs after the record is in the
-    /// file.
-    #[test]
-    fn a_restamp_failure_after_a_published_stream_chunk_is_reported_as_published() -> Result<()> {
-        let _gate = fault_gate();
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("stream-restamp.varlit");
-        let mut writer = VarlitStreamWriter::create(stream_spec(), &path, stream_options())?;
-
-        // `disk_options` commits a sidecar chunk every four records, so the
-        // fourth append is the one that reaches the restamp.
-        let mut last = writer.push_info(&FaultRecord::ok(0))?;
-        for key in 1..3 {
-            last = writer.push_info(&FaultRecord::ok(key))?;
-        }
-        let published_len = std::fs::metadata(&path)?.len();
-
-        VarlitStreamWriter::inject_generation_restamp_failures(1);
-        let error = writer
-            .push_info(&FaultRecord::ok(3))
-            .expect_err("the armed restamp failure must not be reported as success");
-        VarlitStreamWriter::inject_generation_restamp_failures(0);
-
-        match error {
-            Error::PublishedButIndexStale { sequence, .. } => assert!(
-                sequence > last.sequence,
-                "the reported sequence must name the record this call published, got {sequence} \
-                 after {}",
-                last.sequence
-            ),
-            other => panic!(
-                "a sidecar failure after the record was published must be typed, got {other:?}"
-            ),
-        }
-
-        // The claim the variant makes must be true: the record really is in
-        // the native file, which is why the call is not retryable.
-        assert!(
-            std::fs::metadata(&path)?.len() > published_len,
-            "the record whose failure was reported as published must be in the file"
-        );
-        assert!(
-            matches!(writer.flush(), Err(Error::WriterPoisoned("stream"))),
-            "a published-but-unindexed record must poison the writer so the caller cannot \
-             silently append it twice"
-        );
-        assert!(matches!(
-            writer.push_info(&FaultRecord::ok(4)),
-            Err(Error::WriterPoisoned("stream"))
-        ));
         Ok(())
     }
 

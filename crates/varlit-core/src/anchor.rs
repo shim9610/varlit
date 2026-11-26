@@ -478,6 +478,122 @@ pub(crate) fn reseal(out: &mut [u8]) {
 }
 
 /// Clears a summary in place (the anchor itself stays valid) and reseals.
+/// A stream writer's summary: what a stream handle resumes from, which is
+/// not what a native open needs (a stream counts its own records and keeps a
+/// tail with its sequence per block it tracks). Its flag is unknown to
+/// [`AnchorSummary::decode`], which therefore treats it as no summary, so a
+/// native open of a stream file scans as it always did.
+const SUMMARY_STREAM: u16 = 0x0008;
+/// flags(2) + reserved(2) + tail count(4) + records before(8) + next sequence(8).
+const STREAM_SUMMARY_PREFIX: usize = 24;
+/// block id(4) + record offset(8) + sequence(8).
+const STREAM_SUMMARY_TAIL: usize = 20;
+
+/// Encodes a stream writer's summary into a reserved range that already holds
+/// the anchor's fixed fields: `records_before` records precede the record
+/// spanning the anchor, which carries `next_sequence`, and `tails` are the
+/// newest record `(block id, offset, sequence)` of each tracked block before
+/// it, ascending by id. `false` (range untouched) when they do not fit.
+pub(crate) fn encode_stream_summary(
+    out: &mut [u8],
+    records_before: u64,
+    next_sequence: u64,
+    tails: impl ExactSizeIterator<Item = (u32, u64, u64)>,
+) -> bool {
+    let room = out
+        .len()
+        .saturating_sub(SUMMARY_AT + STREAM_SUMMARY_PREFIX + 4);
+    let count = tails.len();
+    let Ok(count_field) = u32::try_from(count) else {
+        return false;
+    };
+    if count.saturating_mul(STREAM_SUMMARY_TAIL) > room {
+        return false;
+    }
+    let at = SUMMARY_AT;
+    out[at..at + 2].copy_from_slice(&SUMMARY_STREAM.to_le_bytes());
+    out[at + 2..at + 4].fill(0);
+    out[at + 4..at + 8].copy_from_slice(&count_field.to_le_bytes());
+    out[at + 8..at + 16].copy_from_slice(&records_before.to_le_bytes());
+    out[at + 16..at + 24].copy_from_slice(&next_sequence.to_le_bytes());
+    let mut cursor = at + STREAM_SUMMARY_PREFIX;
+    for (id, offset, sequence) in tails {
+        out[cursor..cursor + 4].copy_from_slice(&id.to_le_bytes());
+        out[cursor + 4..cursor + 12].copy_from_slice(&offset.to_le_bytes());
+        out[cursor + 12..cursor + 20].copy_from_slice(&sequence.to_le_bytes());
+        cursor += STREAM_SUMMARY_TAIL;
+    }
+    true
+}
+
+/// A stream summary's scalar fields; its tails are handed to the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StreamSummary {
+    pub(crate) records_before: u64,
+    pub(crate) next_sequence: u64,
+}
+
+impl StreamSummary {
+    /// The stream summary an intact anchor's range carries, or `None` when it
+    /// holds none or one this build cannot trust. Every tail is checked
+    /// before any is handed to `tail`, so a rejected summary hands none:
+    /// offsets inside the log and before `record_start`, sequences below
+    /// `next_sequence`, ids strictly ascending. Allocates nothing.
+    pub(crate) fn decode(
+        bytes: &[u8],
+        append_start: u64,
+        record_start: u64,
+        mut tail: impl FnMut(u32, u64, u64),
+    ) -> Option<Self> {
+        let at = SUMMARY_AT;
+        if bytes.len() < at + STREAM_SUMMARY_PREFIX + 4 {
+            return None;
+        }
+        let flags = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        if flags != SUMMARY_STREAM || bytes[at + 2..at + 4] != [0; 2] {
+            return None;
+        }
+        let read = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight"));
+        let count = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().expect("four")) as usize;
+        let room = bytes.len() - 4 - at - STREAM_SUMMARY_PREFIX;
+        if count.checked_mul(STREAM_SUMMARY_TAIL)? > room {
+            return None;
+        }
+        let summary = Self {
+            records_before: read(at + 8),
+            next_sequence: read(at + 16),
+        };
+        if summary.records_before > record_start.saturating_sub(append_start) / 16 {
+            return None;
+        }
+        let entry = |index: usize| {
+            let base = at + STREAM_SUMMARY_PREFIX + index * STREAM_SUMMARY_TAIL;
+            (
+                u32::from_le_bytes(bytes[base..base + 4].try_into().expect("four")),
+                read(base + 4),
+                read(base + 12),
+            )
+        };
+        let mut previous: Option<u32> = None;
+        for index in 0..count {
+            let (id, offset, sequence) = entry(index);
+            if previous.is_some_and(|last| id <= last)
+                || offset < append_start
+                || offset >= record_start
+                || sequence >= summary.next_sequence
+            {
+                return None;
+            }
+            previous = Some(id);
+        }
+        for index in 0..count {
+            let (id, offset, sequence) = entry(index);
+            tail(id, offset, sequence);
+        }
+        Some(summary)
+    }
+}
+
 pub(crate) fn clear_summary(out: &mut [u8]) {
     let end = out.len() - 4;
     out[SUMMARY_AT..end].fill(0);

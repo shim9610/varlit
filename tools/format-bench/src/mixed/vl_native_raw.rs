@@ -49,7 +49,7 @@ fn to_raw(b: &BA) -> ARaw {
 }
 pub struct W(VarlitFile);
 pub fn create(p: &Path) -> Result<Box<dyn AcqWriter>> {
-    let mut f = VarlitFile::create(MixedRaw::spec(), p)?;
+    let mut f = VarlitFile::create(vl_write(MixedRaw::spec()), p)?;
     f.commit_durable()?;
     Ok(Box::new(W(f)))
 }

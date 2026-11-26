@@ -55,14 +55,21 @@ fails there. What differs by platform is recorded in every result under
 
 | | Linux / FreeBSD | macOS | Windows |
 | --- | --- | --- | --- |
-| Cold reads (`cold_*`, `grid`) | page cache evicted (`posix_fadvise`) | not evicted: the first read after the write, may be cached | not evicted |
-| `grid` 4 GiB memory cap | systemd scope or cgroup (Linux) | none (`memcap: none`) | none |
+| Cold reads (`cold_*`, `grid`): page cache evicted by | `posix_fadvise(DONTNEED)` | `mmap` + `msync(MS_INVALIDATE)` | a `FILE_FLAG_NO_BUFFERING` open, which purges the file's cached pages |
+| `grid` 4 GiB memory cap | process and page cache (systemd scope or cgroup, Linux) | none: macOS enforces no memory limit for an unprivileged process; reads still start evicted | process committed memory (Job Object); the page cache is system-wide, reads start evicted |
 | Peak RSS | `getrusage` | `getrusage` | `GetProcessMemoryInfo` |
-| Durable sync | `fdatasync`/`fsync` | `F_FULLFSYNC` for the Rust engines, and SQLite with `fullfsync` and `checkpoint_fullfsync` on, so every engine flushes the drive cache | `FlushFileBuffers` |
+| Durable sync | `fdatasync`/`fsync` | `--device-flush full` (default): `F_FULLFSYNC` for every Rust engine and SQLite with `fullfsync` and `checkpoint_fullfsync` on; `--device-flush os`: a plain `fsync(2)` for all of them, SQLite's default | `FlushFileBuffers` |
 
-Without `fullfsync`, SQLite on macOS would commit with a plain `fsync(2)`,
-which does not flush the drive's write cache, while the Rust engines pay
-`F_FULLFSYNC`: the engines would be measured under different durability.
+`varlit-format-bench evict-check <dir>` writes a file, reads it, evicts it
+and reports the resident fraction before and after (`mincore` on Unix); CI
+runs it on every platform and requires the file to leave the cache.
+
+`--device-flush` (environment `FB_DEVICE_FLUSH`, recorded in every result
+under `platform.device_flush`) applies one durability level to every engine:
+Varlit through `FormatSpec::with_device_flush`, SQLite through `fullfsync`,
+Parquet, the HDF5 adapter's fsync and the tile prototype through one sync
+helper. Mixing them, SQLite with a plain `fsync(2)` against Rust engines
+paying `F_FULLFSYNC`, would measure the engines under different durability.
 Numbers from different operating systems or machines are not comparable row
 by row.
 
@@ -173,7 +180,7 @@ loss interval, with its cheapest mechanism for each:
 
 | format | visible | durable |
 |---|---|---|
-| varlit (stream) | `sync()` (stream followers advance on the generation `sync` publishes; `flush()` is not visible to them, so visibility and durability cannot be separated) | same `sync()` |
+| varlit (stream) | `sync()` (stream followers advance on the end `sync` publishes; `flush()` is not visible to them, so visibility and durability cannot be separated) | same `sync()` |
 | varlit-native | `commit()` (transaction marker, no fsync) | `commit_durable()`, single-barrier commit (`transaction_marker(explicit, single_barrier)`, one `sync_all`) |
 | sqlite | WAL `COMMIT` with `synchronous=NORMAL` | `synchronous=FULL` for that transaction; WAL checkpoints only at durable commits once ~4 MB accumulated (`wal_autocheckpoint=0`) |
 | hdf5 | SWMR `H5Fflush` | `H5Fflush` + fsync |
@@ -210,10 +217,15 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 
 ## Results
 
-The latest results, at 10 GB per scenario with the current harness and the
-hardware stated, are in
+[docs/benchmarks.md](../../docs/benchmarks.md) summarizes the purpose, method and
+latest results. The latest run is macOS (Apple M4, 1 GB per scenario,
+sidecar-free streams):
+[results-mac/20261127.md](results-mac/20261127.md). The latest Linux results,
+at 10 GB per scenario with the hardware stated, are in
 [results-10gb-20261118.md](results-10gb-20261118.md).
-The tables below are older runs on other hosts and smaller data.
+The tables below are older runs on other hosts and smaller data. All of
+these results, the linked ones included, were measured while stream files
+still had the former `.vks` state sidecar; the varlit (stream) rows reflect it.
 
 2026-11-11, Linux 7.0, 24 cores, NVMe ext4, rustc 1.98.1, release build, branch
 `perf/bulk-primitive-codec` (Varlit 0.13.0 plus the bulk codec, single-barrier
@@ -402,9 +414,10 @@ three repeats. Growth = file growth during the 2000 batches (logical updates:
 - Integrity: Varlit stores CRC32 over header+payload (verified unless `+trusted`);
   the others store no data checksums here.
 - Publication: SQLite WAL and Varlit transaction markers commit atomically.
-  Varlit stream `sync()` also publishes a crash-recoverable sidecar
-  generation (two fsync-class calls per publication). HDF5 flush + fsync is
-  not transactional across datasets. Parquet relies on rename.
+  Varlit stream `sync()` makes its records durable with one fsync-class call
+  and then publishes their end in the file header (recovery keeps every sync
+  whose marker verifies). HDF5 flush + fsync is not transactional across
+  datasets. Parquet relies on rename.
 - Loss bound: with a non-zero bound, SQLite (`synchronous=NORMAL`), Varlit
   (`commit()`), HDF5 (flush without fsync) and Parquet (no fsync) may all lose
   the not-yet-durable publications on power loss; each still recovers to a

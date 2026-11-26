@@ -156,7 +156,7 @@ impl AcqWriter for W {
         let marker = std::fs::File::create(&tmp)?;
         let done = self.dir.join(format!("{:06}.done", self.n));
         if durable {
-            marker.sync_all()?;
+            crate::platform::sync_file(&marker)?;
         }
         std::fs::rename(&tmp, &done)?;
         if durable {

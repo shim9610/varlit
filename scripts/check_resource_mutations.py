@@ -22,10 +22,10 @@ def baseline_harnesses(manifest):
         ('file::resident_index::uniform_prefix_proofs::', 'uniform::uniform_prefix_proofs::'),
         ('compression_buffers::resource_steps::proofs::', 'compression_steps::proofs::'),
         ('compression_buffers::resource_steps::contract_proofs::', 'compression_steps::contract_proofs::'),
-        ('disk_index::tree::contract_proofs::', 'tree::contract_proofs::'),
+        ('scratch_index::tree::contract_proofs::', 'tree::contract_proofs::'),
         ('chunks::contract_proofs::', 'chunks::contract_proofs::'),
         ('spill_file::proofs::', 'spill_file::proofs::'),
-        ('disk_index::tree::resource_proofs::', 'tree::resource_proofs::'),
+        ('scratch_index::tree::resource_proofs::', 'tree::resource_proofs::'),
         ('codec::resource_proofs::', 'decoder::resource_proofs::'),
         ('decode_state::proofs::', 'decode_state::proofs::'),
     ]
@@ -116,8 +116,8 @@ def bindings():
               ('compression_buffers.rs', 'resource_steps::block_extent(', 1),
               ('compression_buffers.rs', 'resource_steps::stream_progress(', 1),
               ('spill_file.rs', 'limited_write_all(&mut self.position', 1),
-              ('disk_index/tree.rs', 'take_visit(remaining)', 1),
-              ('disk_index/tree.rs', '!height_matches(', 2),
+              ('scratch_index/tree.rs', 'take_visit(remaining)', 1),
+              ('scratch_index/tree.rs', '!height_matches(', 2),
               ('chunks.rs', 'table_extent(header.chunk_count as usize, encoded.len())', 1)]
     for path, text, count in checks:
         if (SRC/path).read_text().count(text) != count:
@@ -218,7 +218,7 @@ def main():
         'spill_file.rs': 'use std::io;\n'+function(spill,'check_extent')+'\n'+function(spill,'limited_write_all')+'\n#[cfg(kani)]\n#[path="verification/spill.rs"]\nmod proofs;\n',
         'uniform.rs': prefix,
         'chunks.rs': chunk_fixture(),
-        'tree.rs': 'static mut CONTRACT_WITNESS:bool=false;\n'+function((SRC/'disk_index/tree.rs').read_text(),'height_matches')+'\n'+function((SRC/'disk_index/tree.rs').read_text(),'take_visit')+'\n#[cfg(kani)]\n#[path="verification/traversal.rs"]\nmod resource_proofs;\n#[cfg(kani)]\n#[path="verification/traversal_contracts.rs"]\nmod contract_proofs;\n',
+        'tree.rs': 'static mut CONTRACT_WITNESS:bool=false;\n'+function((SRC/'scratch_index/tree.rs').read_text(),'height_matches')+'\n'+function((SRC/'scratch_index/tree.rs').read_text(),'take_visit')+'\n#[cfg(kani)]\n#[path="verification/traversal.rs"]\nmod resource_proofs;\n#[cfg(kani)]\n#[path="verification/traversal_contracts.rs"]\nmod contract_proofs;\n',
     }
     # Only the named full production bodies are extracted; no algorithm model.
     report['sources'] = {k: hashlib.sha256(v.encode()).hexdigest() for k,v in originals.items()}

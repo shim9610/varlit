@@ -104,7 +104,11 @@ pub fn sink_c_parts(s: &mut Sink, w: u64, t0: u64, t: &[u64], code: &[u32], msg:
 
 pub struct W(MixedStreamWriter);
 pub fn create(p: &Path) -> Result<Box<dyn AcqWriter>> {
-    let mut w = Mixed::create_stream_writer(p, StreamOptions::default())?;
+    let mut w = MixedStreamWriter::from_inner(varlit::VarlitStreamWriter::create(
+        vl_write(Mixed::spec()),
+        p,
+        StreamOptions::default(),
+    )?);
     w.sync()?;
     Ok(Box::new(W(w)))
 }

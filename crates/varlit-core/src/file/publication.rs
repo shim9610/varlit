@@ -4,10 +4,9 @@ use super::*;
 /// Folds the native matrix file's OS-object identity and schema hash into a
 /// 32-byte fingerprint.
 ///
-/// Mirrors the scalable sidecar identity machinery
-/// (`stream::primary_identity` / `opened_file_identity`). Matrix companions
-/// retain their own fingerprint encoding. Uses the CRC helper so it honors the same
-/// `integrity` gate the rest of the sidecar envelope requires.
+/// Matrix companions use this fingerprint encoding. Uses the CRC helper so it
+/// honors the same `integrity` gate the rest of the companion envelope
+/// requires.
 pub(super) fn native_object_fingerprint(spec: FormatSpec, file: &File) -> Result<[u8; 32]> {
     let object_identity = opened_file_identity(file)?;
     let schema_hash = if spec.schema_hash == 0 {
@@ -383,161 +382,11 @@ pub(crate) enum ReplaceDurability {
     ParentSyncPending(Error),
 }
 
-/// Publishes a [`tempfile::TempPath`]-guarded replacement at `target` via
-/// [`replace_path_atomically`], taking ownership of the RAII guard so its
-/// pathname deletion can be disarmed when the publication outcome is
-/// indeterminate.
-///
-/// After [`Error::ReplacePublicationIndeterminate`] the replacement temp may
-/// be the only surviving copy of the new generation and must be preserved for
-/// out-of-band reconciliation, so the guard is disarmed before the error
-/// propagates. Every other `Err` is a documented pre-publication
-/// failure ??the target pathname is untouched ??so dropping the guard deletes
-/// the unpublished temp as usual; on `Ok` the rename already consumed the temp
-/// pathname and the guard's drop is a no-op.
-pub(crate) fn publish_temp_path_atomically(
-    temporary: tempfile::TempPath,
-    target: &Path,
-) -> Result<ReplaceDurability> {
-    publish_temp_path_with(temporary, target, replace_path_atomically)
-}
-
-pub(super) fn publish_temp_path_with(
-    temporary: tempfile::TempPath,
-    target: &Path,
-    replace: fn(&Path, &Path) -> Result<ReplaceDurability>,
-) -> Result<ReplaceDurability> {
-    match replace(&temporary, target) {
-        Err(error) => {
-            if matches!(error, Error::ReplacePublicationIndeterminate { .. }) {
-                // `keep` only forgets the guard; if it ever reports an error
-                // it hands the guard back, so forget it manually rather than
-                // letting the drop delete the replacement we must preserve.
-                if let Err(persist_error) = temporary.keep() {
-                    std::mem::forget(persist_error.path);
-                }
-            }
-            Err(error)
-        }
-        published => published,
-    }
-}
-
-/// Publishes an immutable companion generation with pinned old/new handles.
-/// Windows needs a POSIX rename: `ReplaceFileW` exclusively opens the new file,
-/// while ordinary `MoveFileExW` refuses an open target even with delete sharing.
-/// Ordinary rewrites retain `ReplaceFileW` and its attribute/ACL inheritance.
-pub(crate) fn publish_open_temp_path_atomically(
-    temporary: tempfile::TempPath,
-    target: &Path,
-) -> Result<ReplaceDurability> {
-    #[cfg(not(windows))]
-    {
-        publish_temp_path_atomically(temporary, target)
-    }
-    #[cfg(windows)]
-    {
-        publish_temp_path_with(temporary, target, replace_open_path_atomically)
-    }
-}
-
-#[cfg(windows)]
-#[allow(unsafe_code, reason = "Windows file calls for atomic replacement")]
-pub(super) fn replace_open_path_atomically(
-    replacement: &Path,
-    target: &Path,
-) -> Result<ReplaceDurability> {
-    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
-    use windows_sys::Win32::Storage::FileSystem::{
-        DELETE, FILE_ATTRIBUTE_NORMAL, FILE_RENAME_INFO, FileRenameInfoEx, SetFileAttributesW,
-        SetFileInformationByHandle,
-    };
-    use windows_sys::Win32::System::WindowsProgramming::{
-        FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
-    };
-
-    #[cfg(feature = "scalable-fault-injection")]
-    take_injected_replace_indeterminate(replacement, target)?;
-
-    let file = OpenOptions::new().access_mode(DELETE).open(replacement)?;
-    let name: Vec<u16> = std::path::absolute(target)?
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let name_bytes = (name.len() - 1).checked_mul(2).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "replacement path too long",
-        )
-    })?;
-    let name_bytes = u32::try_from(name_bytes).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "replacement path too long",
-        )
-    })?;
-    // FileNameLength counts only the path, but the Win32 path conversion also
-    // receives a terminated name. Reserve/copy the NUL explicitly instead of
-    // relying on zeroed alignment padding, which disappears for some lengths.
-    let size = (std::mem::offset_of!(FILE_RENAME_INFO, FileName)
-        + name_bytes as usize
-        + std::mem::size_of::<u16>())
-    .max(std::mem::size_of::<FILE_RENAME_INFO>());
-    let size = u32::try_from(size).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "replacement path too long",
-        )
-    })?;
-    // u64 storage provides the alignment and initialized flexible-tail capacity
-    // required by FILE_RENAME_INFO on supported Windows targets.
-    let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
-    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-    // SAFETY: the aligned allocation covers the header plus the UTF-16 name.
-    unsafe {
-        (*info).Anonymous.Flags =
-            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
-        (*info).FileNameLength = name_bytes;
-        std::ptr::copy_nonoverlapping(name.as_ptr(), (*info).FileName.as_mut_ptr(), name.len());
-    }
-    // Companion files inherit their new directory's permissions. Clear the
-    // NamedTempFile temporary attribute before publishing the generation.
-    let temporary_name: Vec<u16> = replacement
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // SAFETY: temporary_name is a live, NUL-terminated UTF-16 path.
-    if unsafe { SetFileAttributesW(temporary_name.as_ptr(), FILE_ATTRIBUTE_NORMAL) } == 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    crate::scalable_fault_point("replace.atomic");
-    // SAFETY: file is a live DELETE-capable handle, and buffer contains a valid
-    // FILE_RENAME_INFO followed by FileNameLength bytes of UTF-16 path data.
-    let ok = unsafe {
-        SetFileInformationByHandle(
-            file.as_raw_handle() as _,
-            FileRenameInfoEx,
-            info.cast(),
-            size,
-        )
-    };
-    crate::scalable_fault_point("replace.atomic");
-    if ok == 0 {
-        // Do not fall back to a non-atomic remove/rename or wait for readers.
-        return Err(std::io::Error::last_os_error().into());
-    }
-    match sync_parent_directory(target) {
-        Ok(()) => Ok(ReplaceDurability::Durable),
-        Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
-    }
-}
-
 #[cfg(not(windows))]
 pub(crate) fn replace_path_atomically(
     replacement: &Path,
     target: &Path,
+    flush: crate::DeviceFlush,
 ) -> Result<ReplaceDurability> {
     #[cfg(feature = "scalable-fault-injection")]
     take_injected_replace_indeterminate(replacement, target)?;
@@ -545,7 +394,7 @@ pub(crate) fn replace_path_atomically(
     let replace = std::fs::rename(replacement, target);
     crate::scalable_fault_point("replace.atomic");
     replace?;
-    match sync_parent_directory(target) {
+    match sync_parent_directory(target, flush) {
         Ok(()) => Ok(ReplaceDurability::Durable),
         Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
     }
@@ -556,6 +405,7 @@ pub(crate) fn replace_path_atomically(
 pub(crate) fn replace_path_atomically(
     replacement: &Path,
     target: &Path,
+    flush: crate::DeviceFlush,
 ) -> Result<ReplaceDurability> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
@@ -568,7 +418,7 @@ pub(crate) fn replace_path_atomically(
         let replace = std::fs::rename(replacement, target);
         crate::scalable_fault_point("replace.atomic");
         replace?;
-        return match sync_parent_directory(target) {
+        return match sync_parent_directory(target, flush) {
             Ok(()) => Ok(ReplaceDurability::Durable),
             Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
         };
@@ -620,7 +470,7 @@ pub(crate) fn replace_path_atomically(
                 {
                     // Reconciled: the replacement object now owns the target
                     // pathname, so the publication effectively happened.
-                    match sync_parent_directory(target) {
+                    match sync_parent_directory(target, flush) {
                         Ok(()) => Ok(ReplaceDurability::Durable),
                         Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
                     }
@@ -637,7 +487,7 @@ pub(crate) fn replace_path_atomically(
             }
         };
     }
-    match sync_parent_directory(target) {
+    match sync_parent_directory(target, flush) {
         Ok(()) => Ok(ReplaceDurability::Durable),
         Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
     }
@@ -656,7 +506,7 @@ pub(super) fn path_resolves_to_object(path: &Path, identity: &[u8]) -> bool {
 }
 
 #[cfg(unix)]
-pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_parent_directory(path: &Path, flush: crate::DeviceFlush) -> Result<()> {
     #[cfg(test)]
     record_parent_directory_sync();
     #[cfg(test)]
@@ -672,14 +522,15 @@ pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
     crate::scalable_fault_point("replace.parent_sync");
     #[cfg(feature = "scalable-fault-injection")]
     take_injected_parent_sync_failure()?;
-    let sync = File::open(parent).and_then(|directory| directory.sync_all());
+    let sync =
+        File::open(parent).and_then(|directory| crate::durability::sync_all(&directory, flush));
     crate::scalable_fault_point("replace.parent_sync");
     sync?;
     Ok(())
 }
 
 #[cfg(windows)]
-pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_parent_directory(path: &Path, flush: crate::DeviceFlush) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -711,7 +562,7 @@ pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
     crate::scalable_fault_point("replace.parent_sync");
     #[cfg(feature = "scalable-fault-injection")]
     take_injected_parent_sync_failure()?;
-    let sync = directory.sync_all();
+    let sync = crate::durability::sync_all(&directory, flush);
     crate::scalable_fault_point("replace.parent_sync");
     sync?;
     Ok(())

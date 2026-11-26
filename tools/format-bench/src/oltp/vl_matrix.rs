@@ -83,7 +83,7 @@ pub struct W {
     a: Acct,
 }
 pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
-    let f = BankMatrix::spec().create_with_dims(
+    let f = vl_write(BankMatrix::spec()).create_with_dims(
         p,
         MatrixDimensions::from_pairs([("row", accounts().div_ceil(COLS)), ("col", COLS)]),
     )?;

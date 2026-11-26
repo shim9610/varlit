@@ -24,7 +24,6 @@ mod decode_state;
 mod diagnostics;
 mod primary_file;
 
-mod disk_index;
 mod durability;
 mod error;
 mod fallible;
@@ -32,6 +31,7 @@ mod file;
 mod format;
 mod immediate;
 mod keyed_heap;
+mod scratch_index;
 
 #[cfg(feature = "experimental-matrix-reuse")]
 pub mod experimental_matrix;
@@ -119,10 +119,7 @@ pub use diagnostics::{
 };
 
 pub use anchor::{Anchor, AnchorLayout, AnchorPolicy};
-pub use disk_index::{
-    DiskIndexBatchOptions, DiskIndexConfirmPolicy, DiskIndexDigest, DiskIndexError, DiskIndexMode,
-    DiskIndexOptions, IndexCompaction, SnapshotStatus,
-};
+pub use durability::DeviceFlush;
 pub use error::{AllocationFailureContext, Error, Result};
 pub use fallible::{TryClone, try_box};
 pub use fallible::{try_box_uninit, try_box_with};
@@ -142,7 +139,6 @@ pub use file::{
     compact_keyed_files_with_key_limit, estimate_keyed_merge, merge_keyed_files,
     merge_keyed_files_with_key_limit, view_set, view_wire_mismatch,
 };
-pub use durability::DeviceFlush;
 #[cfg(feature = "mmap")]
 pub use file::{MmapMatrix, MmapPayloadWindow, MmapPayloads};
 pub use format::{
@@ -187,9 +183,8 @@ pub use scan_control::{
 pub(crate) use snapshot::SnapshotFile;
 
 pub use stream::{
-    BatchAppendError, BatchAppendInfo, BatchOptions, StreamBootstrapReport, StreamEvents,
-    StreamOptions, StreamResidentState, StreamingBlocks, VarlitStreamReader, VarlitStreamWriter,
-    bootstrap_stream_checkpoint, bootstrap_stream_checkpoint_with_progress,
+    BatchAppendError, BatchAppendInfo, BatchOptions, SnapshotStatus, StreamEvents, StreamOptions,
+    StreamResidentState, StreamingBlocks, VarlitStreamReader, VarlitStreamWriter,
 };
 pub use traits::{
     VarlitBlock, VarlitKey, VarlitKeyedBlock, VarlitMatrixBlock, VarlitMigration,

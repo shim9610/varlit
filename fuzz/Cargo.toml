@@ -65,22 +65,15 @@ doc = false
 bench = false
 
 [[bin]]
-name = "sidecar_arbitrary"
-path = "fuzz_targets/sidecar_arbitrary.rs"
+name = "stream_damage"
+path = "fuzz_targets/stream_damage.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "sidecar_mutation"
-path = "fuzz_targets/sidecar_mutation.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "sidecar_state_machine"
-path = "fuzz_targets/sidecar_state_machine.rs"
+name = "stream_state_machine"
+path = "fuzz_targets/stream_state_machine.rs"
 test = false
 doc = false
 bench = false

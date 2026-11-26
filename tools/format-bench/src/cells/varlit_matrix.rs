@@ -42,7 +42,7 @@ pub struct W(VarlitFile);
 pub fn create(p: &Path) -> Result<Box<dyn CellWriter>> {
     let dims =
         varlit::MatrixDimensions::from_pairs([("r", (cells() / COLS) as u64), ("c", COLS as u64)]);
-    Ok(Box::new(W(CellGrid::spec().create_with_dims(p, dims)?)))
+    Ok(Box::new(W(vl_write(CellGrid::spec()).create_with_dims(p, dims)?)))
 }
 impl CellWriter for W {
     fn load(&mut self, first: u32, data: &[u8]) -> Result<()> {

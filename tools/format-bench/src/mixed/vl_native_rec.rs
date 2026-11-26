@@ -48,7 +48,7 @@ varlit_format! {
 
 pub struct W(VarlitFile);
 pub fn create(p: &Path) -> Result<Box<dyn AcqWriter>> {
-    let mut f = VarlitFile::create(MixedRec::spec(), p)?;
+    let mut f = VarlitFile::create(vl_write(MixedRec::spec()), p)?;
     f.commit_durable()?;
     Ok(Box::new(W(f)))
 }
