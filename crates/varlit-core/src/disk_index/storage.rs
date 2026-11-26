@@ -81,6 +81,8 @@ pub(super) struct Store {
     /// checked, as its checkpoint offset (0 for none). Heads only move forward,
     /// so a generation is read for its checksum once per handle.
     verified_head: std::sync::atomic::AtomicU64,
+    /// Whether the writer's syncs also flush the drive's write cache.
+    flush: crate::DeviceFlush,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -302,6 +304,7 @@ impl Store {
             version: VERSION_REUSE,
             reuse: None,
             verified_head: std::sync::atomic::AtomicU64::new(0),
+            flush: crate::DeviceFlush::Full,
         };
         if create {
             let writer = result.writer()?;
@@ -339,6 +342,10 @@ impl Store {
         }
         Ok(result)
     }
+    pub(crate) fn set_device_flush(&mut self, flush: crate::DeviceFlush) {
+        self.flush = flush;
+    }
+
     pub fn writer(&self) -> DiskIndexResult<&File> {
         self.writer
             .as_ref()
@@ -717,7 +724,7 @@ impl Store {
             if RECONCILE_SYNC_FAILURE.with(|flag| flag.replace(false)) {
                 return Err(std::io::Error::other("injected head reconciliation failure").into());
             }
-            self.writer()?.sync_data()?;
+            crate::durability::sync_data(self.writer()?, self.flush)?;
             Ok(())
         })
     }
@@ -875,7 +882,7 @@ impl Store {
                 }
                 CheckpointStep::HeadSync => {
                     crate::scalable_fault_point("checkpoint.head_sync");
-                    file.sync_data()?;
+                    crate::durability::sync_data(&file, self.flush)?;
                     crate::scalable_fault_point("checkpoint.head_sync");
                 }
                 // Version 5 confirms with one barrier, over the region CRC.
@@ -1250,7 +1257,7 @@ impl Store {
                     }
                     CheckpointStep::BodySync => {
                         crate::scalable_fault_point("checkpoint.body_sync");
-                        file.sync_data()?;
+                        crate::durability::sync_data(&file, self.flush)?;
                         crate::scalable_fault_point("checkpoint.body_sync");
                     }
                     CheckpointStep::SelectHead => {
@@ -1280,7 +1287,7 @@ impl Store {
                     }
                     CheckpointStep::HeadSync => {
                         crate::scalable_fault_point("checkpoint.head_sync");
-                        file.sync_data()?;
+                        crate::durability::sync_data(&file, self.flush)?;
                         crate::scalable_fault_point("checkpoint.head_sync");
                     }
                 }

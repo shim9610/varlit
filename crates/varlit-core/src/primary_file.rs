@@ -70,6 +70,8 @@ pub(crate) struct PrimaryFile {
     /// A writer's `VPUB` block, which `RecordFile::publish_end` moves after
     /// each publication. Never copied to a clone: one writer per file.
     published: Option<WriterPublished>,
+    /// Whether syncs also flush the drive's write cache.
+    flush: crate::DeviceFlush,
 }
 
 /// A writer's published end.
@@ -172,6 +174,7 @@ impl PrimaryFile {
             summary: None,
             bound: None,
             published: None,
+            flush: crate::DeviceFlush::Full,
         }
     }
 
@@ -286,6 +289,7 @@ impl PrimaryFile {
                 ),
             }),
             published: None,
+            flush: self.flush,
         })
     }
 
@@ -324,12 +328,18 @@ impl PrimaryFile {
             .map_or(physical, |layout| layout.logical_len(physical)))
     }
 
+    /// Syncs under `flush` from now on; see [`crate::DeviceFlush`].
+    pub(crate) fn with_device_flush(mut self, flush: crate::DeviceFlush) -> Self {
+        self.flush = flush;
+        self
+    }
+
     pub(crate) fn sync_all(&self) -> std::io::Result<()> {
-        self.file.sync_all()
+        crate::durability::sync_all(&self.file, self.flush)
     }
 
     pub(crate) fn sync_data(&self) -> std::io::Result<()> {
-        self.file.sync_data()
+        crate::durability::sync_data(&self.file, self.flush)
     }
 
     /// Truncates or extends the log to logical length `len`. Anchors before

@@ -1021,7 +1021,7 @@ impl VarlitStreamWriter {
             &checkpoint_disk_tails(&checkpoint),
         )?;
         writer.state = Some(StreamWriterState::new(
-            store,
+            store.with_device_flush(writer.spec.device_flush),
             state_chunk_records(writer.spec, state_options(options).batch),
         ));
         writer.install_state_chain();
@@ -1044,7 +1044,7 @@ impl VarlitStreamWriter {
             DiskIndexMode::StateOnly,
         )?;
         writer.state = Some(StreamWriterState::new(
-            store,
+            store.with_device_flush(writer.spec.device_flush),
             state_chunk_records(writer.spec, state_options(options).batch),
         ));
         writer.install_state_chain();
@@ -1108,7 +1108,8 @@ impl VarlitStreamWriter {
                 &path,
             )?,
             None,
-        );
+        )
+        .with_device_flush(spec.device_flush);
         // Bind the authoritative object lock onto the freshly created file. The
         // acquire-time probe cannot lock a file that did not exist yet, so
         // without this a hard-link alias opened after creation would win a
@@ -1213,7 +1214,7 @@ impl VarlitStreamWriter {
                 ))
             })?;
         writer.state = Some(StreamWriterState::new(
-            store,
+            store.with_device_flush(writer.spec.device_flush),
             state_chunk_records(writer.spec, state_options(options).batch),
         ));
         writer.install_state_chain();
@@ -1236,7 +1237,8 @@ impl VarlitStreamWriter {
         let mut file = PrimaryFile::new(
             crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
             None,
-        );
+        )
+        .with_device_flush(spec.device_flush);
         let header_len = read_primary_header(spec, &mut file)?.0;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;
@@ -1295,7 +1297,8 @@ impl VarlitStreamWriter {
         let mut file = PrimaryFile::new(
             crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
             None,
-        );
+        )
+        .with_device_flush(spec.device_flush);
         let header_len = read_primary_header(spec, &mut file)?.0;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;

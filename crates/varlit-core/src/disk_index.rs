@@ -956,6 +956,12 @@ impl DiskIndexStore {
         store.initialize(metadata, tails)?;
         Ok(store)
     }
+    /// Syncs the sidecar under `flush` from now on; see [`crate::DeviceFlush`].
+    pub(crate) fn with_device_flush(mut self, flush: crate::DeviceFlush) -> Self {
+        self.storage.set_device_flush(flush);
+        self
+    }
+
     fn from_storage(storage: IndexStorage, options: DiskIndexOptions) -> DiskIndexResult<Self> {
         let identity = opened_sidecar_identity(&storage.file)?;
         Ok(Self {

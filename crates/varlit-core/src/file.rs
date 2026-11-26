@@ -595,17 +595,28 @@ pub trait MatrixDurabilityBarrier {
     fn sync_matrix_commit(&mut self, file: &mut File) -> Result<()>;
 }
 
+/// The barrier `write_matrix_cell_durable` uses: syncs the primary file, with
+/// the format's [`crate::DeviceFlush`]. `Default` flushes the drive cache.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct FileMatrixDurabilityBarrier;
+pub struct FileMatrixDurabilityBarrier {
+    flush: crate::DeviceFlush,
+}
+
+impl FileMatrixDurabilityBarrier {
+    /// A barrier that syncs under `flush`.
+    pub const fn with_device_flush(flush: crate::DeviceFlush) -> Self {
+        Self { flush }
+    }
+}
 
 impl MatrixDurabilityBarrier for FileMatrixDurabilityBarrier {
     fn sync_matrix_data(&mut self, file: &mut File) -> Result<()> {
-        file.sync_data()?;
+        crate::durability::sync_data(file, self.flush)?;
         Ok(())
     }
 
     fn sync_matrix_commit(&mut self, file: &mut File) -> Result<()> {
-        file.sync_all()?;
+        crate::durability::sync_all(file, self.flush)?;
         Ok(())
     }
 }

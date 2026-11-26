@@ -29,12 +29,32 @@
       "covered_by": "native tests and ASan with the feature enabled"
     },
     {
-      "source": "crates/varlit-core/src/file/mmap_views.rs",
+      "source": "crates/varlit-core/src/diagnostics.rs",
+      "reason": "Operating-system calls (openat, unlinkat, geteuid, Windows equivalents) Miri does not support.",
+      "covered_by": "native tests and ASan"
+    },
+    {
+      "source": "crates/varlit-core/src/disk_index.rs",
+      "reason": "A Windows file identity call; not compiled on the Miri host.",
+      "covered_by": "native tests on Windows"
+    },
+    {
+      "source": "crates/varlit-core/src/durability.rs",
+      "reason": "Calls fsync(2) through libc on Apple platforms, a system call Miri does not execute.",
+      "covered_by": "native tests on macOS (macos-native CI job) and the device_flush integration test"
+    },
+    {
+      "source": "crates/varlit-core/src/file/locks.rs",
+      "reason": "Operating-system calls for file identity, locks and process liveness.",
+      "covered_by": "native tests on Linux, Windows and macOS; ASan on Linux"
+    },
+    {
+      "source": "crates/varlit-core/src/file/mapped_access.rs",
       "reason": "Memory mapping is a system call Miri refuses; behind the mmap feature.",
       "covered_by": "native tests and ASan with the feature enabled"
     },
     {
-      "source": "crates/varlit-core/src/file/mapped_access.rs",
+      "source": "crates/varlit-core/src/file/mmap_views.rs",
       "reason": "Memory mapping is a system call Miri refuses; behind the mmap feature.",
       "covered_by": "native tests and ASan with the feature enabled"
     },
@@ -44,9 +64,24 @@
       "covered_by": "native tests"
     },
     {
-      "source": "crates/varlit-core/src/traits.rs",
-      "reason": "Unsafe trait declarations for raw views; implementations are in user code, behind the zero-copy feature.",
-      "covered_by": "native tests and ASan with the feature enabled"
+      "source": "crates/varlit-core/src/file/publication.rs",
+      "reason": "Windows file calls; not compiled on the Miri host.",
+      "covered_by": "native tests on Windows"
+    },
+    {
+      "source": "crates/varlit-core/src/file/reader.rs",
+      "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
+      "covered_by": "native tests and ASan with the mmap feature"
+    },
+    {
+      "source": "crates/varlit-core/src/file/writer.rs",
+      "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
+      "covered_by": "native tests and ASan with the mmap feature"
+    },
+    {
+      "source": "crates/varlit-core/src/lib.rs",
+      "reason": "Allows unsafe for the test-only pib_probe module, which probes platform I/O calls.",
+      "covered_by": "native tests"
     },
     {
       "source": "crates/varlit-core/src/primary_file.rs",
@@ -59,44 +94,14 @@
       "covered_by": "native tests and ASan"
     },
     {
-      "source": "crates/varlit-core/src/diagnostics.rs",
-      "reason": "Operating-system calls (openat, unlinkat, geteuid, Windows equivalents) Miri does not support.",
-      "covered_by": "native tests and ASan"
-    },
-    {
-      "source": "crates/varlit-core/src/file/locks.rs",
-      "reason": "Operating-system calls for file identity, locks and process liveness.",
-      "covered_by": "native tests on Linux, Windows and macOS; ASan on Linux"
-    },
-    {
-      "source": "crates/varlit-core/src/file/publication.rs",
-      "reason": "Windows file calls; not compiled on the Miri host.",
-      "covered_by": "native tests on Windows"
-    },
-    {
-      "source": "crates/varlit-core/src/disk_index.rs",
-      "reason": "A Windows file identity call; not compiled on the Miri host.",
-      "covered_by": "native tests on Windows"
-    },
-    {
       "source": "crates/varlit-core/src/stream.rs",
       "reason": "A Windows file identity call; not compiled on the Miri host.",
       "covered_by": "native tests on Windows"
     },
     {
-      "source": "crates/varlit-core/src/lib.rs",
-      "reason": "Allows unsafe for the test-only pib_probe module, which probes platform I/O calls.",
-      "covered_by": "native tests"
-    },
-    {
-      "source": "crates/varlit-core/src/file/reader.rs",
-      "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
-      "covered_by": "native tests and ASan with the mmap feature"
-    },
-    {
-      "source": "crates/varlit-core/src/file/writer.rs",
-      "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
-      "covered_by": "native tests and ASan with the mmap feature"
+      "source": "crates/varlit-core/src/traits.rs",
+      "reason": "Unsafe trait declarations for raw views; implementations are in user code, behind the zero-copy feature.",
+      "covered_by": "native tests and ASan with the feature enabled"
     },
     {
       "source": "crates/varlit-core/src/verification/chunks.rs",

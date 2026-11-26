@@ -25,6 +25,7 @@ mod diagnostics;
 mod primary_file;
 
 mod disk_index;
+mod durability;
 mod error;
 mod fallible;
 mod file;
@@ -141,6 +142,7 @@ pub use file::{
     compact_keyed_files_with_key_limit, estimate_keyed_merge, merge_keyed_files,
     merge_keyed_files_with_key_limit, view_set, view_wire_mismatch,
 };
+pub use durability::DeviceFlush;
 #[cfg(feature = "mmap")]
 pub use file::{MmapMatrix, MmapPayloadWindow, MmapPayloads};
 pub use format::{

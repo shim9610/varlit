@@ -108,7 +108,7 @@ impl VarlitFile {
         T: VarlitMatrixBlock,
         F: FnOnce(MatrixCommitEvent) -> Result<()>,
     {
-        let mut barrier = FileMatrixDurabilityBarrier;
+        let mut barrier = FileMatrixDurabilityBarrier::with_device_flush(self.spec.device_flush);
         self.write_matrix_cell_durable_with_barrier(key, value, &mut barrier, hook)
     }
 

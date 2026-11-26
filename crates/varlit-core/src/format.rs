@@ -1381,6 +1381,10 @@ pub struct FormatSpec {
     /// the schema: a file's own header says whether it is anchored, and that is
     /// how it is read and appended to. See [`crate::AnchorPolicy`].
     pub anchors: crate::AnchorPolicy,
+    /// Whether a durable sync also flushes the drive's write cache. Runtime
+    /// policy, not part of the schema; it matters only on Apple platforms.
+    /// See [`crate::DeviceFlush`].
+    pub device_flush: crate::DeviceFlush,
 }
 
 /// How a format stores its keyed blocks when it declares bounded keyed

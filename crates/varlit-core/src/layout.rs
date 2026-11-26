@@ -1166,7 +1166,7 @@ impl LayoutWriter {
 
     pub fn sync(&mut self) -> Result<()> {
         let _permit = self.ensure_not_poisoned()?;
-        self.file.sync_all()?;
+        crate::durability::sync_all(&self.file, self.spec.device_flush)?;
         Ok(())
     }
 
