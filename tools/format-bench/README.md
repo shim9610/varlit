@@ -218,14 +218,15 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 ## Results
 
 [docs/benchmarks.md](../../docs/benchmarks.md) summarizes the purpose, method and
-latest results. The latest run is macOS (Apple M4, 1 GB per scenario,
-sidecar-free streams):
-[results-mac/20261127.md](results-mac/20261127.md). The latest Linux results,
-at 10 GB per scenario with the hardware stated, are in
-[results-10gb-20261118.md](results-10gb-20261118.md).
-The tables below are older runs on other hosts and smaller data. All of
-these results, the linked ones included, were measured while stream files
-still had the former `.vks` state sidecar; the varlit (stream) rows reflect it.
+latest results. The latest runs, both with sidecar-free streams, are macOS
+(Apple M4, 1 GB per scenario):
+[results-mac/20261127.md](results-mac/20261127.md), and Linux (4 vCPU cloud
+VM, 10 GB per scenario):
+[results-10gb-20261127.md](results-10gb-20261127.md). The previous Linux
+10 GB pass is [results-10gb-20261118.md](results-10gb-20261118.md).
+The tables below are older runs on other hosts and smaller data. They, and
+the 2026-11-18 pass, were measured while stream files still had the former
+`.vks` state sidecar; the varlit (stream) rows reflect it.
 
 2026-11-11, Linux 7.0, 24 cores, NVMe ext4, rustc 1.98.1, release build, branch
 `perf/bulk-primitive-codec` (Varlit 0.13.0 plus the bulk codec, single-barrier
