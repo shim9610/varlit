@@ -78,19 +78,46 @@ metric flagged. oltp and analytics are within 2 %; mixed (+97 %) and cells
 not established. Varlit's `mixed` throughput varies from 3.2x to 10.4x real
 time between runs on both revisions.
 
-### Linux, 4 vCPU cloud VM, 10 GB per scenario (2026-11-18)
+### Linux, 4 vCPU cloud VM, 10 GB per scenario (2026-11-27)
 
-Measured before the sidecar removal:
-[results-10gb-20261118.md](../tools/format-bench/results-10gb-20261118.md).
-Varlit led oltp transactions (1.7x SQLite, p99 1 ms vs 20 ms) and mixed; HDF5
-led grid; Parquet led analytics (Varlit Q2 33 % slower); SQLite led cells.
+Intel Xeon 2.10 GHz (4 vCPUs, 15.7 GiB), virtio disk, ext4, one run per
+engine and scenario, ungated, sidecar-free streams. Full tables with the
+previous pass beside them:
+[results-10gb-20261127.md](../tools/format-bench/results-10gb-20261127.md).
+
+| Scenario | Best | Varlit |
+| --- | --- | --- |
+| grid | HDF5 (all reads 1.20 s, write 19.9 s) | 1.57 s reads, 23.1 s write: 1.3x HDF5, level with SQLite |
+| oltp | **Varlit** (1000 txn 0.46 s, p99 1.1 ms) | SQLite 1.25 s, p99 22 ms; SQLite faster on cold points (1.93 vs 2.30 s) and branch sums |
+| oltp-sparse | Varlit and SQLite level (1.91 vs 1.80 s) | lower p99 (13 vs 24 ms); SQLite faster on cold points and sums |
+| analytics | Varlit on Q1 (3.86 vs 4.14 s), Parquet on Q2 (0.067 s) | Q2 0.089 s: 1.3x Parquet |
+| mixed | **Varlit** (4.58x real time, 0 inconsistent views) | HDF5 4.12x with 58 inconsistent views |
+| mixed-live | **Varlit** among engines that never expose undurable data (5.4 % late, 0 % seen before durable) | HDF5 2.0 % late but 91 % seen before durable and 140 inconsistent views |
+| cells | SQLite (373 updates/s) | 269 updates/s, 0 torn reads, 4.6x faster load; HDF5 3333 torn reads |
+
+All 26 runs passed the oracle; the page cache check went from 100 % to 0 %
+resident. Against the previous pass on this kind of host (2026-11-18, before
+the sidecar removal; the host differs between sessions): Varlit's mixed-live
+windows are no longer visible before they are durable (95.6 % then, 0 % now)
+at the cost of more late windows (2.3 % then) and a doubled publish p99;
+this comes from publishing stream data only once durable, which the macOS
+A/B shows on both sides of the sidecar removal. oltp-sparse transfers took
+48 % longer for Varlit and 37 % longer for SQLite; whether part of that is a
+Varlit regression is open.
 
 ## Where Varlit is behind
 
-- **grid:** reads and writes about 1.7x HDF5.
+- **grid:** reads 1.3x (Linux) to 1.7x (macOS) HDF5, writes 1.2x to 1.4x.
 - **oltp cold point reads and aggregates:** SQLite is faster on both machines.
-- **oltp-sparse load:** about 10x HDF5's load time.
-- **mixed variance:** throughput swings by 3x between runs; the cause is open.
+- **analytics range queries (Q2):** Parquet is about 25 % faster on Linux.
+- **cells on Linux:** SQLite updates 1.4x faster with lower follower lag.
+- **oltp-sparse load:** about 5x (Linux) to 10x HDF5's load time.
+- **mixed-live lateness:** waiting for durability makes 5.4 % of windows late
+  on Linux, against HDF5's 2.0 % (which shows undurable data).
+- **mixed variance:** throughput swings by 3x between runs on macOS; the
+  cause is open.
+- **oltp-sparse transfers on Linux:** 48 % slower than the previous pass; no
+  same-host A/B covers this scenario yet.
 
 ## Rerunning
 
