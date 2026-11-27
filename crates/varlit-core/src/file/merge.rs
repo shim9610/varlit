@@ -261,7 +261,7 @@ fn write_keyed_values_atomically(
         return Err(error);
     }
 
-    let published = match replace_path_atomically(&temp_path, output) {
+    let published = match replace_path_atomically(&temp_path, output, spec.device_flush) {
         // The rename consumed the temp pathname; there is nothing left to
         // unlink and the guard must not try.
         Ok(ReplaceDurability::Durable) => {

@@ -79,7 +79,8 @@ impl VarlitFile {
         let mut segment_start = 0usize;
         let mut segment_covered_start: Option<u64> = None;
         let mut dropped = 0usize;
-        let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
+        let (temp_path, temp_file) = create_rewrite_temp_file(&self.path)?;
+        let mut temp_file = temp_file.with_device_flush(self.spec.device_flush);
         let prepare_result = (|| -> Result<()> {
             if let Ok(permissions) = self.file.permissions() {
                 temp_file.raw().set_permissions(permissions)?;
@@ -231,7 +232,7 @@ impl VarlitFile {
             old_physical_len: bytes_before,
             new_physical_len: 0,
         };
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => {
                 self.rebind_replacement_generation(info, new_index)?;
             }
@@ -334,7 +335,8 @@ impl VarlitFile {
         // writer's `SegmentCursor` tracks it in the old one.
         let mut segment_start = 0usize;
         let mut segment_covered_start: Option<u64> = None;
-        let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
+        let (temp_path, temp_file) = create_rewrite_temp_file(&self.path)?;
+        let mut temp_file = temp_file.with_device_flush(self.spec.device_flush);
         let prepare_result = (|| -> Result<()> {
             if let Ok(permissions) = self.file.permissions() {
                 temp_file.raw().set_permissions(permissions)?;
@@ -452,7 +454,7 @@ impl VarlitFile {
         }
         drop(temp_file);
 
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => self.rebind_replacement_generation(info, new_index),
             Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
                 // Publication already happened: the pathname resolves to the
@@ -860,7 +862,8 @@ impl VarlitFile {
         // `header_tails_invalidation`.
         let cold_tails = self.header_tails_invalidation()?;
 
-        let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
+        let (temp_path, temp_file) = create_rewrite_temp_file(&self.path)?;
+        let mut temp_file = temp_file.with_device_flush(self.spec.device_flush);
         let prepare_result = (|| -> Result<()> {
             if let Ok(permissions) = self.file.permissions() {
                 temp_file.raw().set_permissions(permissions)?;
@@ -926,7 +929,7 @@ impl VarlitFile {
         }
         drop(temp_file);
 
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => self.rebind_published_generation(sequence, new_index),
             Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
                 // Publication already happened: the pathname resolves to the
@@ -1141,7 +1144,8 @@ impl VarlitFile {
 
         let mut new_index = RewriteDirectory::new(self.spec);
 
-        let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
+        let (temp_path, temp_file) = create_rewrite_temp_file(&self.path)?;
+        let mut temp_file = temp_file.with_device_flush(self.spec.device_flush);
         let prepare_result = (|| -> Result<()> {
             if let Ok(permissions) = self.file.permissions() {
                 temp_file.raw().set_permissions(permissions)?;
@@ -1239,7 +1243,7 @@ impl VarlitFile {
         }
         drop(temp_file);
 
-        match replace_path_atomically(&temp_path, &self.path) {
+        match replace_path_atomically(&temp_path, &self.path, self.spec.device_flush) {
             Ok(ReplaceDurability::Durable) => {
                 self.rebind_published_generation(sequence, Some(new_index))
             }
@@ -1326,7 +1330,7 @@ impl VarlitFile {
 
         match rebind {
             Ok((file, snapshot)) => {
-                self.file = RecordFile::new(file);
+                self.file = RecordFile::new(file.with_device_flush(self.spec.device_flush));
                 self.snapshot = snapshot;
                 let Some(new_index) = new_index else {
                     // Same-size, same-place: offsets, tails and the segment
@@ -1440,7 +1444,7 @@ impl VarlitFile {
 
         match rebind {
             Ok((file, snapshot)) => {
-                self.file = RecordFile::new(file);
+                self.file = RecordFile::new(file.with_device_flush(self.spec.device_flush));
                 self.snapshot = snapshot;
                 let last_resident_block_id = new_index.last().map(|entry| entry.block_id);
                 // Rebinding succeeded and the complete new directory is ready.

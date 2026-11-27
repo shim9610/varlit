@@ -684,7 +684,7 @@ impl VarlitStreamWriter {
         sync?;
         // The file is durable; its name is once the directory holding it is.
         // A failure here leaves a complete file a plain open resumes.
-        crate::file::sync_parent_directory(&path).map_err(|error| {
+        crate::file::sync_parent_directory(&path, writer.spec.device_flush).map_err(|error| {
             crate::fallible::boxed_path_error(
                 error,
                 &path,
@@ -716,7 +716,8 @@ impl VarlitStreamWriter {
                 &path,
             )?,
             None,
-        );
+        )
+        .with_device_flush(spec.device_flush);
         // Bind the authoritative object lock onto the freshly created file. The
         // acquire-time probe cannot lock a file that did not exist yet, so
         // without this a hard-link alias opened after creation would win a
@@ -809,7 +810,8 @@ impl VarlitStreamWriter {
         let mut file = PrimaryFile::new(
             crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
             None,
-        );
+        )
+        .with_device_flush(spec.device_flush);
         let (header_len, extensions) = read_primary_header(spec, &mut file)?;
         let root = RootSource {
             header_len,

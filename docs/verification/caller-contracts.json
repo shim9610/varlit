@@ -131,7 +131,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:4be1fdb216a6f48f]",
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:8f7f424c88d37757]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -328,7 +328,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:4be1fdb216a6f48f]",
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:8f7f424c88d37757]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -572,7 +572,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::open_recovered(_1: format::FormatSpec, _2: &std::path::Path, _3: StreamOptions) -> std::result::Result<VarlitStreamWriter, error::Error> [body:b1a9e6106e774df7]",
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::open_recovered(_1: format::FormatSpec, _2: &std::path::Path, _3: StreamOptions) -> std::result::Result<VarlitStreamWriter, error::Error> [body:affd9304323216eb]",
             "target": "restore",
             "result": "model/caller-specific"
           },
@@ -594,7 +594,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::open_recovered(_1: format::FormatSpec, _2: &std::path::Path, _3: StreamOptions) -> std::result::Result<VarlitStreamWriter, error::Error> [body:b1a9e6106e774df7]",
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::open_recovered(_1: format::FormatSpec, _2: &std::path::Path, _3: StreamOptions) -> std::result::Result<VarlitStreamWriter, error::Error> [body:affd9304323216eb]",
             "target": "restore",
             "result": "model/caller-specific"
           },
@@ -1020,7 +1020,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:4be1fdb216a6f48f]",
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:8f7f424c88d37757]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1207,7 +1207,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:4be1fdb216a6f48f]",
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:8f7f424c88d37757]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1914,17 +1914,17 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:2828d5717bacd5d1]",
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:309f5a6657336a49]",
             "target": "try_arc",
             "result": "model/caller-specific"
           },
           {
-            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:2828d5717bacd5d1]",
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:309f5a6657336a49]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
           {
-            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:2828d5717bacd5d1]",
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:309f5a6657336a49]",
             "target": "try_box",
             "result": "model/caller-specific"
           },

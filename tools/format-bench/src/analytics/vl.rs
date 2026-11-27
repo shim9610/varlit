@@ -104,7 +104,7 @@ macro_rules! adapter {
             }
             pub fn create(p: &Path, chunk: usize) -> Result<Box<dyn Writer>> {
                 Ok(Box::new(W {
-                    w: $F::create_writer(p)?,
+                    w: f::$W::from_inner(vl_write($F::spec()).create_writer(p)?)?,
                     buf: Batch::default(),
                     chunk,
                     rg: 0,

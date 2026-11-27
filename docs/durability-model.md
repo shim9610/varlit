@@ -666,6 +666,27 @@ an OS OOM kill or a power loss cannot be converted to an ordinary Rust error by
 these helpers. Other allocation errors also retain their existing writer
 poison/recovery rules; there is no blanket promise that retrying is safe.
 
+## Drive Cache Flush (`DeviceFlush`)
+
+Every durable sync in the library (native commits, stream `sync()`, matrix
+and keyed publications, rewrites, created-pathname and parent-directory
+syncs) runs under the format's `DeviceFlush`:
+
+| Setting | Sync on Apple platforms | Elsewhere | A completed sync survives |
+| --- | --- | --- | --- |
+| `Full` (default) | `fcntl(F_FULLFSYNC)`: flushes the drive's write cache | the platform's sync | power loss, on drives that honour the flush |
+| `Os` | plain `fsync(2)`: the data has left the OS but may sit in the drive's volatile cache | same as `Full` | a process or OS crash; a power loss can lose or reorder writes the sync reported complete |
+
+`Os` is what SQLite does on macOS by default (`PRAGMA fullfsync=OFF`). It
+trades that power-loss window for latency: on the Apple M4 the benchmark ran
+on, one `F_FULLFSYNC` took about 4 ms. Declare it in the DSL with
+`device_flush: os;` or set it on a spec with
+`spec.with_device_flush(DeviceFlush::Os)`. It is runtime policy, like read
+limits: it is not stored in the file and not part of the schema hash, so a
+file written under one setting opens under the other and the bytes are the
+same. `DeviceFlush::differs_on_this_platform()` says whether it changes
+anything on the build target.
+
 ## Sync Granularity
 
 The first implementation may use file-handle `sync_data`/`sync_all` primitives

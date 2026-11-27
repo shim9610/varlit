@@ -974,6 +974,24 @@ fn stream_lag(synced: u64) -> Result<(varlit::SnapshotStatus, u64), Box<dyn std:
     Ok((status, held))
 }
 
+/// Writes three `Probe`s under `flush`, syncs, and returns how many records a
+/// fresh read-only open of the file reports.
+fn flushed_probe(flush: varlit::DeviceFlush) -> Result<usize, Box<dyn std::error::Error>> {
+    let dir = private_tempdir::private_tempdir()?;
+    let path = dir.path().join("flush.varlit");
+    let spec = ProbeFormat::spec().with_device_flush(flush);
+    assert_eq!(spec.device_flush, flush);
+    {
+        let mut file = spec.create(&path)?;
+        for value in 0..3 {
+            file.push(&Probe { value })?;
+        }
+        file.sync()?;
+    }
+    let reader = ProbeFormat::spec().open_readonly(&path)?;
+    Ok(crate::pages::all_entries!(reader).len())
+}
+
 const CONTRACTS: &[Contract] = &[
     contract!("core/codec.rs::codec::VarlitDecode::const:__VARLIT_BULK@0849371dcc74d2a2",
         valid { let (_d, path) = walk_fixture()?; let h = WalkFmt::spec().open_reader(&path)?; let mut entries = Vec::new(); h.block_entries_into::<WalkRow>(&mut entries)?; let mut scratch = Vec::new(); let mut row = <WalkRow as varlit::VarlitEmpty>::empty(); h.decode_block_into(&entries[0], &mut scratch, &mut row)?; assert_eq!(row, walk_row()); assert!(scratch.capacity() < 4096); let bulk: Option<varlit::__core::BulkCodec<Vec<u32>>> = <Vec<u32> as varlit::VarlitDecode>::__VARLIT_BULK; assert!(bulk.is_some()); let unfilled: Option<fn(&mut varlit::__core::BulkField<'_>)> = None; assert!(unfilled.is_none()); let codec: Option<varlit::__core::FieldsCodec<WalkRow>> = <WalkRow as varlit::VarlitBlock>::__VARLIT_FIELDS; assert!(codec.is_some_and(|codec| codec.decode_into as usize != 0)); let walked = walk_with(&path, |out: &mut WalkRow, fields: &mut varlit::__core::RecordFields<'_>| { let mut seen = 0; while let Some(field) = fields.next()? { let field: varlit::__core::RecordField = field; seen += 1; assert_eq!(field.id(), seen); match field.id() { 1 => { assert_eq!(field.wire_type(), <u64 as varlit::VarlitDecode>::WIRE_TYPE); fields.decode_into(&field, &mut out.id)? } 2 => fields.decode_into(&field, &mut out.samples)?, 3 => fields.decode_into(&field, &mut out.text)?, _ => fields.decode_into(&field, &mut out.flags)?, } } assert_eq!(seen, 4); Ok(()) })?; assert_eq!(walked, walk_row()); Ok(()) },
@@ -1191,7 +1209,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let dir = private_tempdir::private_tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[<Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let v = <Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
     ),
-    contract!("macros/modules/format_emit.rs::format_emit::generator:expand_format@8108588aa455b952", generated "check_file",
+    contract!("macros/modules/format_emit.rs::format_emit::generator:expand_format@5aa0ad711593defc", generated "check_file",
         valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let r = QualificationProbe::check_file_with_resource_limits(&path, varlit::ReadLimits::STANDARD)?; assert!(r.passed(), "{r:#?}"); let r = QualificationProbe::check_file(&path)?; assert!(r.passed()); let file = QualificationProbe::open_readonly(&path)?; let entry = crate::pages::all_entries!(file)[0].clone(); let mut stored = Vec::new(); file.read_payload_into(&entry, &mut stored)?; assert_eq!(QualificationProbe::read_payload(&entry, &path)?, stored); assert_eq!(QualificationProbe::read_payload_limited(&entry, &path, entry.payload_len)?, stored); let mut logical = Vec::new(); file.read_logical_payload_into(&entry, &mut logical)?; assert_eq!(QualificationProbe::read_logical_payload(&entry, &path)?, logical); assert_eq!(QualificationProbe::read_logical_payload_limited(&entry, &path, entry.payload_len, logical.len() as u64)?, logical); assert_eq!(QualificationProbe::read_logical_payload_with_resource_limits(&entry, &path, varlit::ReadLimits::STANDARD)?, logical); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let r = QualificationProbe::check_file(dir.path().join("missing"))?; assert!(!r.passed()); let r = QualificationProbe::check_file_with_resource_limits(dir.path().join("missing"), varlit::ReadLimits::STANDARD)?; assert!(!r.passed()); let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let entry = crate::pages::all_entries!(QualificationProbe::open_readonly(&path)?)[0].clone(); assert!(entry.payload_len > 0); assert!(matches!(QualificationProbe::read_payload_limited(&entry, &path, entry.payload_len - 1), Err(varlit::Error::LimitExceeded { .. }))); assert!(matches!(QualificationProbe::read_logical_payload_limited(&entry, &path, entry.payload_len, 0), Err(varlit::Error::LimitExceeded { .. }))); assert!(QualificationProbe::read_payload(&entry, dir.path().join("missing")).is_err()); assert!(QualificationProbe::read_logical_payload(&entry, dir.path().join("missing")).is_err()); Ok(()) }
     ),
@@ -3153,6 +3171,38 @@ const CONTRACTS: &[Contract] = &[
     contract!("core/stream.rs::stream::macro:thread_local@d0bd4d1f626ec35c", generated "inject_append_rollback_failures",
         valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; varlit::VarlitStreamWriter::inject_append_rollback_failures(1); let failed = w.push_stream_entry(&StreamEntry { id: 1, value: 1 }); varlit::VarlitStreamWriter::inject_append_rollback_failures(0); assert!(matches!(failed, Err(varlit::Error::WriteRollbackFailed { .. }))); assert!(matches!(w.push_stream_entry(&StreamEntry { id: 2, value: 2 }), Err(varlit::Error::WriterPoisoned(_)))); } Ok(()) },
         invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; varlit::VarlitStreamWriter::inject_append_rollback_failures(0); assert!(w.push_stream_entry(&StreamEntry { id: 1, value: 1 }).is_ok()); w.sync()?; } Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:DeviceFlush@220fe79e3e4df634",
+        valid { let flush: varlit::DeviceFlush = varlit::DeviceFlush::Os; assert_eq!(flushed_probe(flush)?, 3); Ok(()) },
+        invalid { let flush: varlit::DeviceFlush = varlit::DeviceFlush::default(); assert_ne!(flush, varlit::DeviceFlush::Os, "the default must flush the drive cache"); Ok(()) }
+    ),
+    contract!("core/durability.rs::durability::enum:DeviceFlush@cbf29ce484222325",
+        valid { for flush in [varlit::DeviceFlush::Full, varlit::DeviceFlush::Os] { assert_eq!(flushed_probe(flush)?, 3); } Ok(()) },
+        invalid { let spec = ProbeFormat::spec(); assert_eq!(spec.computed_schema_hash(), spec.with_device_flush(varlit::DeviceFlush::Os).computed_schema_hash(), "DeviceFlush is runtime policy, never part of the schema"); Ok(()) }
+    ),
+    contract!("core/durability.rs::durability::DeviceFlush::variant:Full@b0e97584dc715a5c",
+        valid { assert_eq!(varlit::DeviceFlush::default(), varlit::DeviceFlush::Full); assert_eq!(flushed_probe(varlit::DeviceFlush::Full)?, 3); Ok(()) },
+        invalid { assert_ne!(varlit::DeviceFlush::Full, varlit::DeviceFlush::Os); Ok(()) }
+    ),
+    contract!("core/durability.rs::durability::DeviceFlush::variant:Os@091d5507b5b33037",
+        valid { assert_eq!(flushed_probe(varlit::DeviceFlush::Os)?, 3); Ok(()) },
+        invalid { assert_ne!(ProbeFormat::spec().device_flush, varlit::DeviceFlush::Os, "a format chooses Os only by declaring it"); Ok(()) }
+    ),
+    contract!("core/durability.rs::durability::DeviceFlush::fn:differs_on_this_platform@bb39fb6f03796f08",
+        valid { assert_eq!(varlit::DeviceFlush::differs_on_this_platform(), cfg!(any(target_os = "macos", target_os = "ios"))); Ok(()) },
+        invalid { if !cfg!(any(target_os = "macos", target_os = "ios")) { assert!(!varlit::DeviceFlush::differs_on_this_platform()); } Ok(()) }
+    ),
+    contract!("core/format.rs::format::FormatSpec::field:device_flush@96f4210c10a6ab30",
+        valid { let spec = ProbeFormat::spec().with_device_flush(varlit::DeviceFlush::Os); assert_eq!(spec.device_flush, varlit::DeviceFlush::Os); Ok(()) },
+        invalid { assert_eq!(ProbeFormat::spec().device_flush, varlit::DeviceFlush::Full); Ok(()) }
+    ),
+    contract!("core/format.rs::format::FormatSpec::fn:with_device_flush@73b8e8c73557cd7c",
+        valid { let spec = ProbeFormat::spec().with_device_flush(varlit::DeviceFlush::Os); assert_eq!(spec.device_flush, varlit::DeviceFlush::Os); assert_eq!(flushed_probe(varlit::DeviceFlush::Os)?, 3); Ok(()) },
+        invalid { let spec = ProbeFormat::spec().with_device_flush(varlit::DeviceFlush::Os).with_device_flush(varlit::DeviceFlush::Full); assert_eq!(spec.device_flush, varlit::DeviceFlush::Full, "the last setting wins"); Ok(()) }
+    ),
+    contract!("core/file.rs::file::FileMatrixDurabilityBarrier::fn:with_device_flush@0335b12f1f65ad09",
+        valid { use varlit::MatrixDurabilityBarrier; let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("barrier"); std::fs::write(&path, b"cells")?; let mut file = std::fs::OpenOptions::new().read(true).write(true).open(&path)?; let mut barrier = varlit::FileMatrixDurabilityBarrier::with_device_flush(varlit::DeviceFlush::Os); barrier.sync_matrix_data(&mut file)?; barrier.sync_matrix_commit(&mut file)?; assert_eq!(std::fs::read(&path)?, b"cells"); Ok(()) },
+        invalid { let os = varlit::FileMatrixDurabilityBarrier::with_device_flush(varlit::DeviceFlush::Os); let full = varlit::FileMatrixDurabilityBarrier::default(); assert_ne!(format!("{os:?}"), format!("{full:?}"), "the default barrier flushes the drive cache"); Ok(()) }
     ),
 ];
 

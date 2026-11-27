@@ -139,6 +139,9 @@ def main():
     ap.add_argument("--out", default=str(HERE / "target/runs"))
     ap.add_argument("--only", help="comma list of plan labels")
     ap.add_argument("--formats", help="comma list; run only these engines")
+    ap.add_argument("--device-flush", choices=["full", "os"], default="full",
+                    help="durable syncs flush the drive cache (full) or stop at the OS sync (os); "
+                         "differs only on macOS")
     ap.add_argument("--gate", action="store_true",
                     help="wait for a healthy disk before each repeat; redo a repeat if the disk degraded during it")
     a = ap.parse_args()
@@ -159,7 +162,7 @@ def main():
                     continue
                 d = out / f"{label}-{fmt}-{rep}"
                 shutil.rmtree(d, ignore_errors=True)
-                env = dict(os.environ, FB_DATA_GB=str(a.data_gb), **extra)
+                env = dict(os.environ, FB_DATA_GB=str(a.data_gb), FB_DEVICE_FLUSH=a.device_flush, **extra)
                 cmd = [str(BIN), "bench", scen, fmt, str(d)]
                 cap = None
                 if scen in MEMCAP:

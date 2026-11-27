@@ -551,6 +551,11 @@ the newest transaction's records before trusting it. It requires
 `integrity: crc32_with_header` and refuses `recovery: mark_tail`. See
 [single-barrier commit](durability-model.md#single-barrier-commit).
 
+`device_flush: os;` makes every durable sync stop at the operating system's
+plain sync instead of also flushing the drive's write cache; it changes
+anything only on Apple platforms and is not part of the schema. See
+[drive cache flush](durability-model.md#drive-cache-flush-deviceflush).
+
 `commit()` is a logical visibility marker, not a hidden fsync. Use
 `commit_durable()` when records covered by an explicit marker must be flushed
 and synced before the marker is published and synced.

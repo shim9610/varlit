@@ -58,15 +58,18 @@ fails there. What differs by platform is recorded in every result under
 | Cold reads (`cold_*`, `grid`): page cache evicted by | `posix_fadvise(DONTNEED)` | `mmap` + `msync(MS_INVALIDATE)` | a `FILE_FLAG_NO_BUFFERING` open, which purges the file's cached pages |
 | `grid` 4 GiB memory cap | process and page cache (systemd scope or cgroup, Linux) | none: macOS enforces no memory limit for an unprivileged process; reads still start evicted | process committed memory (Job Object); the page cache is system-wide, reads start evicted |
 | Peak RSS | `getrusage` | `getrusage` | `GetProcessMemoryInfo` |
-| Durable sync | `fdatasync`/`fsync` | `F_FULLFSYNC` for the Rust engines, and SQLite with `fullfsync` and `checkpoint_fullfsync` on, so every engine flushes the drive cache | `FlushFileBuffers` |
+| Durable sync | `fdatasync`/`fsync` | `--device-flush full` (default): `F_FULLFSYNC` for every Rust engine and SQLite with `fullfsync` and `checkpoint_fullfsync` on; `--device-flush os`: a plain `fsync(2)` for all of them, SQLite's default | `FlushFileBuffers` |
 
 `varlit-format-bench evict-check <dir>` writes a file, reads it, evicts it
 and reports the resident fraction before and after (`mincore` on Unix); CI
 runs it on every platform and requires the file to leave the cache.
 
-Without `fullfsync`, SQLite on macOS would commit with a plain `fsync(2)`,
-which does not flush the drive's write cache, while the Rust engines pay
-`F_FULLFSYNC`: the engines would be measured under different durability.
+`--device-flush` (environment `FB_DEVICE_FLUSH`, recorded in every result
+under `platform.device_flush`) applies one durability level to every engine:
+Varlit through `FormatSpec::with_device_flush`, SQLite through `fullfsync`,
+Parquet, the HDF5 adapter's fsync and the tile prototype through one sync
+helper. Mixing them, SQLite with a plain `fsync(2)` against Rust engines
+paying `F_FULLFSYNC`, would measure the engines under different durability.
 Numbers from different operating systems or machines are not comparable row
 by row.
 

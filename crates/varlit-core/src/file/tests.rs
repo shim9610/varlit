@@ -1570,13 +1570,13 @@ fn windows_concurrent_replacefilew_keeps_whole_generations_and_old_handle() -> R
         let first_target = target.clone();
         let first = std::thread::spawn(move || {
             first_barrier.wait();
-            replace_path_atomically(&replacement_a, &first_target)
+            replace_path_atomically(&replacement_a, &first_target, crate::DeviceFlush::Full)
         });
         let second_barrier = Arc::clone(&barrier);
         let second_target = target.clone();
         let second = std::thread::spawn(move || {
             second_barrier.wait();
-            replace_path_atomically(&replacement_b, &second_target)
+            replace_path_atomically(&replacement_b, &second_target, crate::DeviceFlush::Full)
         });
         barrier.wait();
         let first = first.join().expect("first ReplaceFileW thread panicked");
@@ -1643,7 +1643,7 @@ fn windows_replacefilew_rejects_retained_replacement_handle() -> Result<()> {
         .open(&replacement)?;
 
     assert!(matches!(
-        replace_path_atomically(&replacement, &target),
+        replace_path_atomically(&replacement, &target, crate::DeviceFlush::Full),
         Err(Error::Io(_))
     ));
     assert_eq!(std::fs::read(&target)?, old);
@@ -1652,7 +1652,7 @@ fn windows_replacefilew_rejects_retained_replacement_handle() -> Result<()> {
     retained.read_to_end(&mut retained_bytes)?;
     assert_eq!(retained_bytes, new);
     drop(retained);
-    replace_path_atomically(&replacement, &target)?;
+    replace_path_atomically(&replacement, &target, crate::DeviceFlush::Full)?;
     assert_eq!(std::fs::read(&target)?, new);
     Ok(())
 }
@@ -1870,7 +1870,7 @@ fn atomic_replace_invokes_parent_directory_sync() -> Result<()> {
         .sync_all()?;
 
     reset_parent_directory_sync_calls();
-    replace_path_atomically(&replacement, &target)?;
+    replace_path_atomically(&replacement, &target, crate::DeviceFlush::Full)?;
 
     assert_eq!(parent_directory_sync_calls(), 1);
     assert_eq!(std::fs::read(target)?, b"new");
@@ -1883,7 +1883,7 @@ fn atomic_replace_invokes_parent_directory_sync() -> Result<()> {
         .open(&new_replacement)?
         .sync_all()?;
     reset_parent_directory_sync_calls();
-    replace_path_atomically(&new_replacement, &new_target)?;
+    replace_path_atomically(&new_replacement, &new_target, crate::DeviceFlush::Full)?;
 
     assert_eq!(parent_directory_sync_calls(), 1);
     assert_eq!(std::fs::read(new_target)?, b"first");

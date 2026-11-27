@@ -63,7 +63,7 @@ impl GridWrite for Wr {
             FixedSizeBinaryArray::try_new(CB as i32, std::mem::take(&mut self.buf).into(), None)?;
         let cols: Vec<ArrayRef> = vec![Arc::new(idc), Arc::new(data)];
         w.write(&RecordBatch::try_new(schema(), cols)?)?;
-        w.into_inner()?.sync_all()?;
+        crate::platform::sync_file(&w.into_inner()?)?;
         std::fs::rename(&tmp, self.dir.join(format!("step_{t:05}.parquet")))?;
         fsync_dir(&self.dir)?;
         Ok(())

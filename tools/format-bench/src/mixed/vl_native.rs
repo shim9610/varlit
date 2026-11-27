@@ -57,7 +57,7 @@ pub fn native_spec() -> varlit::FormatSpec {
 
 pub struct W(VarlitFile);
 pub fn create(p: &Path) -> Result<Box<dyn AcqWriter>> {
-    let mut f = VarlitFile::create(native_spec(), p)?;
+    let mut f = VarlitFile::create(vl_write(native_spec()), p)?;
     f.commit_durable()?;
     Ok(Box::new(W(f)))
 }

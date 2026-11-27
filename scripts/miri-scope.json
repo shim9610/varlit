@@ -97,6 +97,11 @@
       "source": "crates/varlit-core/src/verification/decoder_callers.rs",
       "reason": "A Kani proof module, compiled only under cfg(kani): its unsafe code models the allocator or stubs an unsafe function for the model checker.",
       "covered_by": "the Kani harnesses that use it"
+    },
+    {
+      "source": "crates/varlit-core/src/durability.rs",
+      "reason": "Calls fsync(2) through libc on Apple platforms, a system call Miri does not execute.",
+      "covered_by": "native tests on macOS (macos-native CI job) and the device_flush integration test"
     }
   ],
   "exclusions": []

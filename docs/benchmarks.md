@@ -36,9 +36,11 @@ in-memory oracle, and a mismatch fails the run instead of producing a figure.
 
 Rules that apply to every engine:
 
-- **Same durability.** A write counts only once it is durable. On macOS every
-  engine flushes the drive cache (`F_FULLFSYNC` for the Rust engines, SQLite
-  with `fullfsync` and `checkpoint_fullfsync`).
+- **Same durability.** A write counts only once it is durable, and every
+  engine syncs at the same level, chosen with `--device-flush`: `full` (the
+  default) flushes the drive cache (`F_FULLFSYNC` on macOS, SQLite with
+  `fullfsync`), `os` stops at the operating system's sync for all of them.
+  The two differ only on macOS.
 - **Cold reads are cold.** The page cache is evicted before cold reads
   (`posix_fadvise` on Linux, `msync(MS_INVALIDATE)` on macOS, an unbuffered
   open on Windows); `varlit-format-bench evict-check` proves it on the host.

@@ -94,7 +94,7 @@ impl VarlitFile {
         let mut file = Self {
             spec,
             path,
-            file: RecordFile::new(file),
+            file: RecordFile::new(file.with_device_flush(spec.device_flush)),
             index: ResidentIndex::none_retained_created(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
@@ -224,7 +224,7 @@ impl VarlitFile {
         let mut file = Self {
             spec,
             path,
-            file: RecordFile::new(file),
+            file: RecordFile::new(file.with_device_flush(spec.device_flush)),
             index: ResidentIndex::none_retained_created(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
@@ -385,7 +385,7 @@ impl VarlitFile {
         let mut opened = Self {
             spec,
             path,
-            file: RecordFile::new(file),
+            file: RecordFile::new(file.with_device_flush(spec.device_flush)),
             index: ResidentIndex::none_retained_opened(
                 snapshot.clone(),
                 spec,
@@ -540,7 +540,7 @@ impl VarlitFile {
         let mut opened = Self {
             spec,
             path,
-            file: RecordFile::new(file),
+            file: RecordFile::new(file.with_device_flush(spec.device_flush)),
             index: match retention {
                 // Not "built and then dropped": a caller that asked for no
                 // directory never has one allocated on its behalf. `N` slots is
@@ -830,7 +830,7 @@ impl VarlitFile {
         let mut opened = Self {
             spec,
             path: path.to_path_buf(),
-            file: RecordFile::new(file),
+            file: RecordFile::new(file.with_device_flush(spec.device_flush)),
             index: ResidentIndex::none_retained(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
@@ -901,7 +901,7 @@ impl VarlitFile {
         let mut opened = Self {
             spec,
             path: path.to_path_buf(),
-            file: RecordFile::new(file),
+            file: RecordFile::new(file.with_device_flush(spec.device_flush)),
             index: ResidentIndex::none_retained(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadOnly,
@@ -1012,7 +1012,7 @@ impl VarlitFile {
         let mut opened = Self {
             spec,
             path,
-            file: RecordFile::new(file),
+            file: RecordFile::new(file.with_device_flush(spec.device_flush)),
             index: ResidentIndex::none_retained_opened(
                 snapshot.clone(),
                 spec,

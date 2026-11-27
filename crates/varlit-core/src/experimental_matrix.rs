@@ -753,10 +753,10 @@ impl MatrixWriter {
             write_at(&file, 2 * PAGE, &head_bytes(head, creation_id))?;
             for f in [&stage, &journal] {
                 write_at(f, 0, &sidecar_header(creation_id))?;
-                f.sync_all()?;
+                crate::durability::sync_all(f, spec.device_flush)?;
             }
-            file.sync_all()?;
-            crate::file::sync_parent_directory(&path)?;
+            crate::durability::sync_all(&file, spec.device_flush)?;
+            crate::file::sync_parent_directory(&path, spec.device_flush)?;
             WriterInner::Reuse(crate::fallible::try_box(ReuseWriter {
                 file,
                 stage,
@@ -1234,7 +1234,7 @@ impl ReuseWriter {
         // The complete old intent stays durable until every rollback write (or
         // the new publication) is durable. A reset never precedes that barrier.
         write_at(&self.journal, 0, &sidecar_header(self.creation_id))?;
-        self.journal.sync_all()?;
+        crate::durability::sync_all(&self.journal, self.geometry.spec.device_flush)?;
         self.journal.set_len(PAGE)?;
         self.stage.set_len(PAGE)?;
         self.count = 0;
@@ -1292,7 +1292,7 @@ impl ReuseWriter {
                     write_at(&self.file, old_at, &old)?;
                 }
             }
-            self.file.sync_all()?;
+            crate::durability::sync_all(&self.file, self.geometry.spec.device_flush)?;
         }
         self.reset()
     }
@@ -1310,7 +1310,7 @@ impl ReuseWriter {
         put(&mut intent, 40, self.count);
         seal(&mut intent);
         write_at(&self.journal, 0, &intent)?;
-        self.journal.sync_all()?;
+        crate::durability::sync_all(&self.journal, self.geometry.spec.device_flush)?;
         fault("matrix_reuse.intent_durable")?;
         let mut buffer = alloc(self.geometry.bytes)?;
         for i in 0..self.count {
@@ -1356,7 +1356,7 @@ impl ReuseWriter {
             write_at(&self.file, old_at + 40, &retired[40..])?;
             fault("matrix_reuse.retirement_written")?;
         }
-        self.file.sync_all()?;
+        crate::durability::sync_all(&self.file, self.geometry.spec.device_flush)?;
         fault("matrix_reuse.data_durable")?;
         let head = Head {
             generation: next,
@@ -1370,7 +1370,7 @@ impl ReuseWriter {
         fault("matrix_reuse.head_prefix")?;
         write_at(&self.file, head_at + 64, &head_bytes[64..])?;
         fault("matrix_reuse.head_written")?;
-        self.file.sync_all()?;
+        crate::durability::sync_all(&self.file, self.geometry.spec.device_flush)?;
         self.head = head;
         fault("matrix_reuse.head_durable")?;
         self.notify.store(next, Ordering::Release);

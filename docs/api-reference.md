@@ -432,6 +432,12 @@ another handle appends afterwards are not visible until it advances with
   barrier instead of two; open then verifies the newest transaction before it
   is trusted. It requires `crc32_with_header`. See
   [single-barrier commit](durability-model.md#single-barrier-commit).
+- **Drive cache flush.** `DeviceFlush::Full` (the default) makes every durable
+  sync flush the drive's write cache, `F_FULLFSYNC` on Apple platforms;
+  `DeviceFlush::Os` stops at the plain `fsync(2)`. Declare `device_flush: os;`
+  or call `FormatSpec::with_device_flush`; it is runtime policy, not part of
+  the schema hash. See
+  [drive cache flush](durability-model.md#drive-cache-flush-deviceflush).
 - **Stream durable boundary.** A stream file carries a `VPUB` block as well,
   although stream formats use no transaction markers: each stream `sync()`
   appends a sync marker, issues one storage barrier and then publishes its

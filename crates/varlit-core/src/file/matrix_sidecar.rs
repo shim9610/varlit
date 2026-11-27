@@ -71,7 +71,8 @@ pub(super) fn write_matrix_sidecar_file<P: AsRef<Path>>(
     // sidecar untouched; the old in-place `File::create` truncated it eagerly
     // and could expose a partial sidecar.
     let sidecar_path = sidecar_path.as_ref();
-    let (temp_path, mut temp_file) = create_rewrite_temp_file(sidecar_path)?;
+    let (temp_path, temp_file) = create_rewrite_temp_file(sidecar_path)?;
+    let mut temp_file = temp_file.with_device_flush(spec.device_flush);
     let write_result = (|| -> Result<()> {
         temp_file.write_all(&bytes)?;
         temp_file.write_all(payload)?;
@@ -86,7 +87,7 @@ pub(super) fn write_matrix_sidecar_file<P: AsRef<Path>>(
     }
     drop(temp_file);
 
-    match replace_path_atomically(&temp_path, sidecar_path) {
+    match replace_path_atomically(&temp_path, sidecar_path, spec.device_flush) {
         Ok(ReplaceDurability::Durable) => Ok(manifest),
         Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
             // The replacement is already visible at `sidecar_path`; only the

@@ -17,6 +17,11 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
         )),
         None => quote!(),
     };
+    let device_flush_step = if input.device_flush_os {
+        quote!(.with_device_flush(::varlit::__core::DeviceFlush::Os))
+    } else {
+        quote!()
+    };
     let extension = input
         .extension
         .map(|extension| quote!(::core::option::Option::Some(#extension)))
@@ -482,6 +487,7 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
                 .with_block_identities(BLOCK_IDENTITIES)
                 .with_layout(#layout)
                 #keyed_storage_step
+                #device_flush_step
                 #schema_hash_step
             }
 

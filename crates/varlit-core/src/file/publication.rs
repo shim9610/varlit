@@ -386,6 +386,7 @@ pub(crate) enum ReplaceDurability {
 pub(crate) fn replace_path_atomically(
     replacement: &Path,
     target: &Path,
+    flush: crate::DeviceFlush,
 ) -> Result<ReplaceDurability> {
     #[cfg(feature = "scalable-fault-injection")]
     take_injected_replace_indeterminate(replacement, target)?;
@@ -393,7 +394,7 @@ pub(crate) fn replace_path_atomically(
     let replace = std::fs::rename(replacement, target);
     crate::scalable_fault_point("replace.atomic");
     replace?;
-    match sync_parent_directory(target) {
+    match sync_parent_directory(target, flush) {
         Ok(()) => Ok(ReplaceDurability::Durable),
         Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
     }
@@ -404,6 +405,7 @@ pub(crate) fn replace_path_atomically(
 pub(crate) fn replace_path_atomically(
     replacement: &Path,
     target: &Path,
+    flush: crate::DeviceFlush,
 ) -> Result<ReplaceDurability> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
@@ -416,7 +418,7 @@ pub(crate) fn replace_path_atomically(
         let replace = std::fs::rename(replacement, target);
         crate::scalable_fault_point("replace.atomic");
         replace?;
-        return match sync_parent_directory(target) {
+        return match sync_parent_directory(target, flush) {
             Ok(()) => Ok(ReplaceDurability::Durable),
             Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
         };
@@ -468,7 +470,7 @@ pub(crate) fn replace_path_atomically(
                 {
                     // Reconciled: the replacement object now owns the target
                     // pathname, so the publication effectively happened.
-                    match sync_parent_directory(target) {
+                    match sync_parent_directory(target, flush) {
                         Ok(()) => Ok(ReplaceDurability::Durable),
                         Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
                     }
@@ -485,7 +487,7 @@ pub(crate) fn replace_path_atomically(
             }
         };
     }
-    match sync_parent_directory(target) {
+    match sync_parent_directory(target, flush) {
         Ok(()) => Ok(ReplaceDurability::Durable),
         Err(error) => Ok(ReplaceDurability::ParentSyncPending(error)),
     }
@@ -504,7 +506,7 @@ pub(super) fn path_resolves_to_object(path: &Path, identity: &[u8]) -> bool {
 }
 
 #[cfg(unix)]
-pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_parent_directory(path: &Path, flush: crate::DeviceFlush) -> Result<()> {
     #[cfg(test)]
     record_parent_directory_sync();
     #[cfg(test)]
@@ -520,14 +522,15 @@ pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
     crate::scalable_fault_point("replace.parent_sync");
     #[cfg(feature = "scalable-fault-injection")]
     take_injected_parent_sync_failure()?;
-    let sync = File::open(parent).and_then(|directory| directory.sync_all());
+    let sync =
+        File::open(parent).and_then(|directory| crate::durability::sync_all(&directory, flush));
     crate::scalable_fault_point("replace.parent_sync");
     sync?;
     Ok(())
 }
 
 #[cfg(windows)]
-pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_parent_directory(path: &Path, flush: crate::DeviceFlush) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -559,7 +562,7 @@ pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
     crate::scalable_fault_point("replace.parent_sync");
     #[cfg(feature = "scalable-fault-injection")]
     take_injected_parent_sync_failure()?;
-    let sync = directory.sync_all();
+    let sync = crate::durability::sync_all(&directory, flush);
     crate::scalable_fault_point("replace.parent_sync");
     sync?;
     Ok(())

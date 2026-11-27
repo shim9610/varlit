@@ -403,24 +403,50 @@ pub fn evict_check(dir: &Path) -> std::io::Result<serde_json::Value> {
     )
 }
 
-/// SQLite settings that make its durable commits match the Rust engines'.
-///
-/// Rust's `File::sync_data`/`sync_all` on Apple platforms are `F_FULLFSYNC`,
-/// which also flushes the drive's write cache; SQLite's `fsync` there is a
-/// plain `fsync(2)` unless `fullfsync` is on. Without these pragmas SQLite
-/// would be measured with a weaker durability guarantee than Varlit, HDF5 and
-/// Parquet on the same Mac. Elsewhere the defaults already match.
-pub const SQLITE_DURABILITY: &str = if cfg!(any(target_os = "macos", target_os = "ios")) {
-    "PRAGMA fullfsync=ON; PRAGMA checkpoint_fullfsync=ON;"
-} else {
-    ""
-};
+/// How every engine makes a write durable, chosen with `FB_DEVICE_FLUSH`:
+/// `full` (the default) also flushes the drive's write cache, `os` stops
+/// where the operating system's own sync stops. The two only differ on Apple
+/// platforms, where `fsync(2)` leaves the drive cache and `F_FULLFSYNC`
+/// flushes it; elsewhere both are the platform's ordinary sync.
+pub fn device_flush() -> varlit::DeviceFlush {
+    match std::env::var("FB_DEVICE_FLUSH").as_deref() {
+        Ok("os") => varlit::DeviceFlush::Os,
+        Ok("full") | Err(_) => varlit::DeviceFlush::Full,
+        Ok(other) => panic!("FB_DEVICE_FLUSH must be `full` or `os`, not {other:?}"),
+    }
+}
 
-/// Opens a SQLite database for writing with [`SQLITE_DURABILITY`] applied.
+/// Makes `file` durable under [`device_flush`]: what the Rust engines other
+/// than Varlit (Parquet, the HDF5 adapter's fsync, the tile prototype) use.
+pub fn sync_file(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if device_flush() == varlit::DeviceFlush::Os {
+        use std::os::fd::AsRawFd;
+        unsafe extern "C" {
+            fn fsync(fd: i32) -> i32;
+        }
+        // SAFETY: the descriptor belongs to `file`, which outlives the call.
+        return if unsafe { fsync(file.as_raw_fd()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        };
+    }
+    // `F_FULLFSYNC` on Apple platforms, the ordinary sync elsewhere.
+    file.sync_all()
+}
+
+/// Whether SQLite is set to flush the drive cache: on Apple platforms with
+/// [`device_flush`] `full`, where SQLite's own `fsync` would not.
+pub fn sqlite_fullfsync() -> bool {
+    cfg!(any(target_os = "macos", target_os = "ios")) && device_flush() == varlit::DeviceFlush::Full
+}
+
+/// Opens a SQLite database for writing under [`device_flush`].
 pub fn sqlite_open(p: &Path) -> rusqlite::Result<rusqlite::Connection> {
     let c = rusqlite::Connection::open(p)?;
-    if !SQLITE_DURABILITY.is_empty() {
-        c.execute_batch(SQLITE_DURABILITY)?;
+    if sqlite_fullfsync() {
+        c.execute_batch("PRAGMA fullfsync=ON; PRAGMA checkpoint_fullfsync=ON;")?;
     }
     Ok(c)
 }
@@ -434,6 +460,10 @@ pub fn caveats() -> serde_json::Value {
         "eviction": EVICTION,
         "peak_rss_measured": PEAK_RSS,
         "process_cpu_measured": PROCESS_CPU,
-        "sqlite_fullfsync": !SQLITE_DURABILITY.is_empty(),
+        "device_flush": match device_flush() {
+            varlit::DeviceFlush::Full => "full",
+            varlit::DeviceFlush::Os => "os",
+        },
+        "sqlite_fullfsync": sqlite_fullfsync(),
     })
 }

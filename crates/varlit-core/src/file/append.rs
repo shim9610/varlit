@@ -734,7 +734,7 @@ impl VarlitFile {
         if !self.pending_pathname_parent_sync {
             return Ok(());
         }
-        match sync_parent_directory(&self.path) {
+        match sync_parent_directory(&self.path, self.spec.device_flush) {
             Ok(()) => {
                 self.pending_pathname_parent_sync = false;
                 Ok(())

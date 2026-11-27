@@ -50,7 +50,7 @@ pub struct W {
 }
 pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
     Ok(Box::new(W {
-        w: BankRows::create_writer(p)?,
+        w: BankRowsWriter::from_inner(vl_write(BankRows::spec()).create_writer(p)?)?,
         scratch: Vec::new(),
         acc: Account::empty(),
     }))

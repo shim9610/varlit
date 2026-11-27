@@ -72,6 +72,15 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   The `key_index` block attribute is now a compile error. Stream handles,
   native keyed files and matrices are unchanged; read indexed data with 0.12.1
   and rewrite it (see the [migration guide](docs/migration-guide.md)).
+- Add `DeviceFlush`: whether a durable sync also flushes the drive's write
+  cache. `Full` (the default, unchanged behavior) is `F_FULLFSYNC` on Apple
+  platforms; `Os` is a plain `fsync(2)`, as SQLite does there by default. Set
+  it with `device_flush: os;` in the DSL or `FormatSpec::with_device_flush`;
+  every durable sync honours it, parent-directory syncs included. It is not
+  stored in the file nor part of the schema hash, and changes nothing off
+  Apple platforms. Breaking: `FileMatrixDurabilityBarrier` is no longer a
+  unit struct; use `FileMatrixDurabilityBarrier::default()` or
+  `with_device_flush`.
 - Breaking: remove the stream `.vks` state sidecar. A stream file carries its
   durable boundary itself: each `sync()` writes its end into the file's `VPUB`
   header block (two 24-byte slots, written after the barrier), readers expose

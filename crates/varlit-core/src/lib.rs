@@ -24,6 +24,7 @@ mod decode_state;
 mod diagnostics;
 mod primary_file;
 
+mod durability;
 mod error;
 mod fallible;
 mod file;
@@ -118,6 +119,7 @@ pub use diagnostics::{
 };
 
 pub use anchor::{Anchor, AnchorLayout, AnchorPolicy};
+pub use durability::DeviceFlush;
 pub use error::{AllocationFailureContext, Error, Result};
 pub use fallible::{TryClone, try_box};
 pub use fallible::{try_box_uninit, try_box_with};

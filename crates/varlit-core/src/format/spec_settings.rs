@@ -59,6 +59,7 @@ impl FormatSpec {
             layout: LayoutSpec::varlit_native(),
             read_limits: ReadLimits::MISSING,
             anchors: crate::AnchorPolicy::DEFAULT,
+            device_flush: crate::DeviceFlush::Full,
         }
     }
 
@@ -276,6 +277,13 @@ impl FormatSpec {
 
     pub const fn with_layout(mut self, layout: LayoutSpec) -> Self {
         self.layout = layout;
+        self
+    }
+
+    /// Sets whether durable syncs also flush the drive's write cache; see
+    /// [`crate::DeviceFlush`]. Not part of the schema hash.
+    pub const fn with_device_flush(mut self, device_flush: crate::DeviceFlush) -> Self {
+        self.device_flush = device_flush;
         self
     }
 

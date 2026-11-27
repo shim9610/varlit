@@ -17,6 +17,11 @@ supported version. This release has breaking changes:
   carries its durable boundary in a `VPUB` header block; stream files written
   by earlier versions open as they are. Earlier versions are not tested
   against stream files written by 0.13.0.
+- `DeviceFlush` chooses whether durable syncs also flush the drive cache
+  (`Full`, the default, or `Os`; see
+  [drive cache flush](durability-model.md#drive-cache-flush-deviceflush)).
+  `FileMatrixDurabilityBarrier` is no longer a unit struct: write
+  `FileMatrixDurabilityBarrier::default()`.
 - The indexed primary is removed (see
   [indexed primary removal](#indexed-primary-removal)). Indexed files are not
   converted: read their data with the release that wrote them and rewrite it

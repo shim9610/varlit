@@ -16,6 +16,8 @@ pub(super) struct FormatInput {
     pub(super) header_slots: Option<HeaderSlotsChoice>,
     /// `keyed_storage: in_place(free_space = N%)`: the free-space percent.
     pub(super) keyed_storage: Option<u16>,
+    /// `device_flush: full|os`: `true` for `os`.
+    pub(super) device_flush_os: bool,
     pub(super) recovery: RecoveryChoice,
     pub(super) manifest: ManifestChoice,
     pub(super) compression: CompressionChoice,
@@ -343,6 +345,7 @@ impl Parse for FormatInput {
         let mut liveness = LivenessChoice::None;
         let mut header_slots: Option<HeaderSlotsChoice> = None;
         let mut keyed_storage: Option<u16> = None;
+        let mut device_flush_os: Option<bool> = None;
         let mut recovery = RecoveryChoice::Strict;
         let mut manifest = ManifestChoice::None;
         let mut compression = CompressionChoice::None;
@@ -494,6 +497,21 @@ impl Parse for FormatInput {
                         ));
                     }
                 };
+            } else if key == "device_flush" {
+                if device_flush_os.is_some() {
+                    return Err(syn::Error::new_spanned(key, "duplicate device_flush"));
+                }
+                let value: Ident = content.parse()?;
+                device_flush_os = Some(match value.to_string().as_str() {
+                    "full" => false,
+                    "os" => true,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "expected full (flush the drive cache) or os (the OS's plain sync)",
+                        ));
+                    }
+                });
             } else if key == "liveness" {
                 let value: Ident = content.parse()?;
                 liveness = match value.to_string().as_str() {
@@ -612,6 +630,7 @@ impl Parse for FormatInput {
             liveness,
             header_slots,
             keyed_storage,
+            device_flush_os: device_flush_os.unwrap_or(false),
             recovery,
             manifest,
             compression,
