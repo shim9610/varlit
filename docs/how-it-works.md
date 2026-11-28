@@ -4,6 +4,17 @@ Varlit is a format generator plus runtime. You declare a static file contract in
 Rust, and Varlit writes/reads bytes according to that contract. The format itself
 is not dynamic: the static `FormatSpec` in your program remains the authority.
 
+## One Declaration, One File Format
+
+Varlit is not a single file format. Each `varlit_format!` declaration is its
+own format, with its own magic, version, block types and storage choices, and
+a file is read by the reader generated from the declaration that wrote it. A
+reader generated from another declaration refuses the file: a different magic
+is `InvalidMagic`, and a format that pins its schema hash (`schema_hash: computed`) refuses any declaration whose wire layout
+differs with `SchemaHashMismatch`. Nothing reads an arbitrary Varlit file's
+values without its declaration; `inspect_layout_file` reports a native file's
+physical record ranges, not its values.
+
 ## The Big Picture
 
 ```mermaid
@@ -20,21 +31,53 @@ The macro handles repetitive code:
 
 - explicit block ids and versions
 - fixed/variable/matrix block structs
-- typed writer methods
+- typed writer methods, including `put_*` / `remove_*` for keyed storage
 - typed reader methods
+- native, stream and keyed handle families for the same declaration
 - static registry entries
 - schema hash computation when requested
 
 The runtime handles storage mechanics:
 
-- file headers
+- file headers, header extension blocks and anchors
 - record headers and optional footers
 - canonical encoding/decoding
 - checkpoint/index scan
 - compression/decompression
 - integrity checks
+- the published end (`VPUB`) that bounds what readers see
+- stream sync-marker chains and anchor-based resume
 - matrix tiles, tile directories, commit bitmaps, and the write-ahead ring
+- the keyed-storage B-tree, published through the same ring
 - writer locks and explicit durability calls
+
+One declaration selects the storage paths it uses. They share the file header,
+the record framing and the ring machinery:
+
+```mermaid
+flowchart TD
+    D["varlit_format! declaration"] --> N["native append log<br/>fixed, variable and keyed blocks"]
+    D --> S["stream file<br/>append log with a sync-marker chain"]
+    D --> M["matrix blocks<br/>tiles overwritten in place"]
+    D --> K["keyed storage<br/>B-tree of pages, one record per key"]
+    D --> L["custom physical layout<br/>preset: none"]
+    N --> P["published end (VPUB)<br/>for transaction-marker formats"]
+    S --> P
+    S --> A["anchors with stream summaries"]
+    M --> R["write-ahead ring<br/>publication index, overflow regions"]
+    K --> R
+```
+
+| Path | Declared with | Writes | Readers see | Read about it in |
+| --- | --- | --- | --- | --- |
+| Native append log | fixed / variable / keyed blocks | appends records | committed records ([commit policies](#commit-policies)) | [Append-Log Records](#append-log-records) |
+| Stream file | the same blocks, opened with the stream handles | appends records in bounded batches | records up to the last verified `sync()` | [Stream Files](#stream-files) |
+| Matrix blocks | `matrix` blocks | overwrites cells in tiles | one published generation | [Matrix Storage](#matrix-storage) |
+| Keyed storage | `keyed_storage: in_place` | puts and removes records by key | one published generation | [Keyed Storage](#keyed-storage) |
+| Custom layout | `preset: none` | the declared segments | the validated segments | [Custom Physical Layouts](#custom-physical-layouts) |
+
+A format cannot declare both keyed storage and matrix blocks, and the stream
+handles refuse a format that declares keyed storage.
 
 ## File Header
 
@@ -50,6 +93,26 @@ Every file starts with:
 
 The user magic and version prevent opening the wrong file type. The schema hash
 can pin the exact declared shape when you choose `schema_hash: computed;`.
+
+The extension bytes carry the header blocks a format uses, each framed
+`magic | length`. Two matter for what follows:
+
+- `VPUB`, the **published end**: two 24-byte checksummed slots, written
+  alternately, each naming the logical end readers may see. Every
+  transaction-marker format and every stream file carries it. A reader treats
+  the file as ending there, so bytes a writer has appended but not yet
+  published (or not yet made durable) are invisible to it. A torn slot fails its
+  checksum and the other slot holds.
+- the **header tail table** (`index: header_tails`): each block's newest record
+  offset, the next sequence and the committed end, rewritten in place at every
+  commit point, so a lazy open frames a handful of records instead of the file.
+
+The flags byte can declare **anchors**: a fixed-size block reserved every
+`spacing` bytes of the file (4 MiB by default for streams), written once when
+the log first reaches it. An anchor names the record that spans it and can
+carry a summary of the state before that record, so an open can start from the
+newest anchor instead of from the header. The byte layout is in the
+[wire contract](spec.md#file-header-flags-and-anchors).
 
 ## Custom Physical Layouts
 
@@ -262,11 +325,7 @@ stateful updates, use `push_op`, tombstones, merge, and compact APIs.
 That model appends every update, so the file grows with the number of updates
 and lookup needs a resident index. A format that declares
 `keyed_storage: in_place` instead keeps one record per key in a B-tree inside
-the file, updated in place: `put_user`, `remove_user`,
-`get_user(&key, &mut scratch, &mut out)` and `range_user(..)` read and change it,
-and lookup reads only the pages on the path. Changes are staged through a
-write-ahead ring and published atomically, like matrix cells. See
-[keyed storage](api-reference.md#keyed-storage).
+the file; see [Keyed Storage](#keyed-storage).
 
 ## Commit Policies
 
@@ -283,6 +342,11 @@ Varlit supports these append-log commit modes:
 Offset chains use `VARVE3` footers to link previous records with the same block
 id and, for keyed generated writers, previous records with the same key.
 
+A transaction-marker format publishes its end in the `VPUB` header block after
+the marker is written: at once for `commit()` and `flush()`, and only after the
+barrier returns for `commit_durable()`. A reader that follows therefore never
+adopts a durable transaction before its sync has completed.
+
 ## Flush, Sync, And Durability
 
 `push_*` writes through the current file handle but does not imply per-record
@@ -298,6 +362,59 @@ id and, for keyed generated writers, previous records with the same key.
   call them explicitly.
 
 This is deliberate: applications choose their own durability/performance trade.
+`DeviceFlush` sets how far each of those syncs goes on Apple platforms (drive
+cache or OS); see the [durability model](durability-model.md#drive-cache-flush-deviceflush).
+
+## Stream Files
+
+The stream handles (`create_stream_writer`, `open_stream_writer`,
+`open_stream_reader`) write the same declared blocks to an append log whose
+open and append cost does not depend on the file's size or record count. A
+stream file has no companion file: the file itself says how far it is durable.
+
+```mermaid
+flowchart TD
+    A["push_*(records, BatchOptions)"] --> B["append records in bounded writes"]
+    B --> C["sync()"]
+    C --> D["append a sync marker: CRC-32 of every byte since the previous marker"]
+    D --> E["one barrier"]
+    E --> F["write the marker's end into the next VPUB slot"]
+    F --> G["readers that follow() see the records up to that end"]
+```
+
+- **Sync markers chain the file.** Each marker covers every byte from where
+  the previous marker ended, headers included. Readers and recovery accept a
+  prefix only up to the last marker whose bytes verify.
+- **The published end is the durable boundary.** `sync()` appends its marker,
+  issues one barrier, then writes the end into the slot after the newest one
+  (one 24-byte positional write, made durable by the next barrier). `flush()`
+  writes bytes but publishes nothing, so readers do not see it.
+- **Readers open at the published end.** They read it before measuring the
+  file, then walk only the syncs after it whose markers verify; on a clean file
+  they frame nothing. `follow()` frames only the newly confirmed records and is
+  all-or-nothing.
+- **Writers resume from an anchor.** `open_stream_writer` takes the newest of
+  at most four anchors before the published end whose stream summary is intact
+  (next sequence, record count, block tails), frames from there, keeps every
+  later sync whose marker verifies, cuts the unsynced suffix, syncs and
+  publishes the kept end. Open costs at most one anchor spacing of framing.
+- **Older files still open.** A file without a `VPUB` block, or with both slots
+  unreadable, is framed from its header and verified from its first marker's
+  link start; a file with no marker keeps every record that frames.
+
+```mermaid
+flowchart LR
+    H["file header<br/>VPUB: end"] --> R1["records"]
+    R1 --> M1["sync marker 1"]
+    M1 --> AN["anchor<br/>stream summary"]
+    AN --> R2["records"]
+    R2 --> M2["sync marker 2<br/>= published end"]
+    M2 --> T["unsynced tail<br/>(cut on writer open)"]
+```
+
+Stream readers have no lookup by key; they scan (`events()`, typed plural
+methods, `follow_blocks`) and report lag with `snapshot_status()`. The byte
+layout is in [stream records](spec.md#stream-records).
 
 ## Matrix Storage
 
@@ -354,6 +471,59 @@ the file (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`).
 
 Readers trust commit bits. If the commit bit is clear, Varlit returns
 `MatrixNotCommitted` even if slot bytes exist.
+
+A publication's staged bytes and its index live in **overflow space**: records
+appended once and reused, each holding one generation's bytes and a B+tree of
+4 KiB index pages keyed by target offset. The ring frames name them, so a
+publication larger than the ring still commits atomically, and readers look up
+ranges through a cache of 256 index pages allocated when they open. See
+[publications larger than the ring](durability-model.md#publications-larger-than-the-ring).
+
+```mermaid
+flowchart LR
+    W["writer stages ranges"] --> O["overflow region<br/>staged bytes + B+tree index"]
+    W --> RG["ring frame<br/>names the generation"]
+    RG --> SY["sync: generation published"]
+    SY --> RD["reader overlay:<br/>file bytes + newer ranges"]
+    SY --> CK["checkpoint when the ring needs room:<br/>copy into place, raise checkpointed"]
+```
+
+## Keyed Storage
+
+A format that declares `keyed_storage: in_place` keeps its keyed blocks once
+per key, in a B-tree of 4 KiB pages inside the file, instead of appending a
+record per update. The file follows the live data, not the number of updates.
+
+```mermaid
+flowchart TD
+    A["put_user(&user) / remove_user(&key)"] --> B["encode key big-endian, value without key fields"]
+    B --> C["find the leaf through the type's root"]
+    C --> D["change the leaf; split or merge pages as needed"]
+    D --> E["stage changed pages through the write-ahead ring"]
+    E --> F{"round full?<br/>change budget or ring"}
+    F -->|yes| G["publish the round as one generation"]
+    F -->|no| H["sync() publishes what is staged"]
+    G --> H
+```
+
+- **Pages.** Leaf (`VKLF`) and interior (`VKIN`) pages hold sorted cells;
+  records over 1 KiB continue in overflow pages (`VKOV`). Pages are carved from
+  blocks appended as needed (16 pages first, doubling to 1 MiB). Each keyed
+  block type has its own tree, found through a slot in the metadata record.
+- **Publication.** Changed pages are staged whole through the same ring,
+  publication index and overflow regions as matrix storage. `sync()`
+  publishes them as one generation; a load larger than the change budget
+  (64 MiB by default) or the ring publishes in round-sized atomic steps.
+- **Reading.** `get_user(&key, &mut scratch, &mut out)` reads only the pages on
+  the path; `range_user(..)` walks leaves in key order. A reader keeps up to
+  512 pages of its generation in memory. The writer raises the ring's mark
+  at the end of every round so it can reuse freed pages; a reader whose
+  snapshot is older gets `MatrixSnapshotExpired` and calls `follow()`.
+- **Space.** Freed pages are reused once no reader can still see them. The file
+  is never shrunk; rebuild it to reclaim space.
+
+The byte layout is in the
+[keyed storage wire contract](spec.md#keyed-storage-wire-contract).
 
 ## Aux Regions
 

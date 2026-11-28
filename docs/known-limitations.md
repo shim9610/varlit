@@ -169,9 +169,9 @@ open, or use a commit-marker policy.
 `flush()` alone does not publish a matrix generation; `sync()` or explicit
 Immediate does. See [durability](durability-model.md) for each storage policy.
 
-Stream sidecar compaction retains old files until old owners close. On Windows,
-companion replacement requires filesystem support for the native POSIX
-rename semantics used by the implementation. Failure returns an OS error and
+On Windows, replacing a file (rewrite, compaction, matrix sidecar
+publication) requires filesystem support for the native POSIX rename semantics
+used by the implementation. Failure returns an OS error and
 poisons the writer; reconcile and reopen. Lock files coordinate cooperating
 writers. Unsupported native locking returns an error; advisory locks do not
 prevent arbitrary external file changes.
@@ -195,7 +195,7 @@ is retried without limit, so a signal storm that interrupts every call keeps
 the operation retrying.
 
 Cancellation is cooperative. `ScanCancellationToken` is checked between
-records and at progress callbacks during scans, bootstrap and rebuild; it is
+records and at progress callbacks during verification scans; it is
 not observed inside a system call, and other operations have no cancellation
 point. A caller that needs a deadline runs the operation on a thread or in a
 process it can abandon or terminate, and treats the file as it would after a
