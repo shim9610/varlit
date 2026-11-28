@@ -1,7 +1,10 @@
-# Matrix Durability Model
+# Durability Model
 
-This document defines ordered durability for matrix writes and the boundary for
-post-commit hooks.
+This document defines what each storage path makes durable and visible, and
+when: append-log transaction markers, stream syncs, matrix and keyed-storage
+publications, ordered barriers for matrix writes, and the boundary for
+post-commit hooks. [How Varlit works](how-it-works.md) shows how the paths fit
+together.
 
 Append writers also expose [Immediate policies](immediate-policy.md): block
 attributes, automatic conditions, and an explicit `immediate()` boundary. These
@@ -221,10 +224,8 @@ parent directory with write access, and no open or flush failure is ever
 promoted to a `Durable` result. On filesystems that refuse a directory
 write-open or flush, every publication surfaces
 `PublishedButParentSyncPending` rather than a false durability claim; the same
-honesty applies to the native sidecar publication sites (stream sidecar
-create, stream bootstrap and sidecar compaction), which surface the pending state
-while preserving the already-published sidecar instead of silently discarding
-it.
+honesty applies to stream create, which syncs the parent directory itself
+and surfaces the pending state naming the stream file.
 
 Exclusive-create constructors (`VarlitFile::create_new`,
 `VarlitWriter::create_new`, and the matrix `create_new_with_dims` pair) open
@@ -257,6 +258,24 @@ predecessor can never be read afterwards — not after a write that fails
 part-way, not through a poisoned writer that is later inspected, and not after
 a contract violation. The invalidation is infallible and allocation-free, so it
 adds no fallible step in either direction of the commit.
+
+## Stream Sync
+
+A stream file's durable boundary is in the file: the `VPUB` published end in
+its header.
+
+1. `sync()` writes the buffered records and a sync marker whose CRC-32 covers
+   every byte since the previous marker.
+2. One barrier makes them durable.
+3. The marker's end is written into the next `VPUB` slot (24 bytes, no barrier
+   of its own; the next sync's barrier makes it durable).
+
+Readers see records only up to the published end plus later syncs whose markers
+verify, so a follower never sees a stream record before the sync that covers
+it has completed. `flush()` publishes nothing. After a crash,
+`open_stream_writer` keeps every sync whose marker verifies and cuts the rest;
+a slot torn by the crash fails its checksum and the other slot holds. See
+[stream files](how-it-works.md#stream-files).
 
 ## Matrix Storage And Publication
 
@@ -651,8 +670,7 @@ If detailed source/path storage cannot be allocated, they return
 append/commit sequence, published index, replacement rebind (including pending
 parent sync), published replacement, or experimental reuse generation and its
 uncertainty. Details can be lost; the completed/uncertain outcome is retained.
-A caller must inspect that outcome before retrying. Stream sidecar wrapping preserves
-a primary publication error even when an additional wrapper cannot be allocated.
+A caller must inspect that outcome before retrying.
 
 This replaces the earlier abort-on-error-box policy. Preallocation of a scalar
 placeholder makes it possible to reserve space before the eventual source error

@@ -82,22 +82,37 @@ def check_file(path, root=ROOT):
     return checked, errors
 
 
-def execute_quickstart():
-    text = (ROOT / "docs/quickstart.md").read_text()
-    blocks = re.findall(r"^```rust\n(.*?)^```", text, re.M | re.S)
-    if len(blocks) != 1 or "fn main()" not in blocks[0]:
+def executable_examples():
+    """The quickstart's one example and every Rust example in the README."""
+    quickstart = re.findall(r"^```rust\n(.*?)^```", (ROOT / "docs/quickstart.md").read_text(), re.M | re.S)
+    if len(quickstart) != 1 or "fn main()" not in quickstart[0]:
         raise ValueError("quickstart must contain one complete executable Rust example")
+    readme = re.findall(r"^```rust\n(.*?)^```", (ROOT / "README.md").read_text(), re.M | re.S)
+    for block in readme:
+        if "fn main()" not in block:
+            raise ValueError("every README Rust example must be a complete program with fn main()")
+    return [("quickstart", quickstart[0])] + [(f"readme{i}", b) for i, b in enumerate(readme)]
+
+
+def execute_quickstart():
+    examples = executable_examples()
     with tempfile.TemporaryDirectory(prefix="varlit-doc-") as temp:
         crate = Path(temp)
-        (crate / "src").mkdir()
-        (crate / "src/main.rs").write_text(blocks[0])
+        (crate / "src/bin").mkdir(parents=True)
+        for name, body in examples:
+            (crate / "src/bin" / f"{name}.rs").write_text(body)
         dependency = (ROOT / "crates/varlit").as_posix()
         (crate / "Cargo.toml").write_text(
             '[package]\nname="varlit-quickstart-contract"\nversion="0.0.0"\nedition="2024"\n'
             '[workspace]\n[dependencies]\n'
             f'varlit={{path="{dependency}",features=["integrity"]}}\n')
         env = dict(os.environ, CARGO_TARGET_DIR=str(ROOT / "target"))
-        subprocess.run(["cargo", "run", "--offline", "--quiet"], cwd=crate, env=env, check=True)
+        for name, _ in examples:
+            run = crate / "run" / name
+            run.mkdir(parents=True)
+            subprocess.run(["cargo", "run", "--offline", "--quiet", "--manifest-path",
+                            str(crate / "Cargo.toml"), "--bin", name],
+                           cwd=run, env=env, check=True)
 
 
 def check_hashes(manifest):
