@@ -421,7 +421,7 @@ layout is in [stream records](spec.md#stream-records).
 A matrix lives in internal records of the append log, the first records after
 the file header: a metadata record, a fixed-size write-ahead ring, directory
 pages and tiles. The byte layout is in the
-[matrix wire contract](spec.md#preallocated-matrix-wire-contract).
+[matrix wire contract](spec.md#tiled-matrix-wire-contract).
 
 ```mermaid
 flowchart TD

@@ -1312,7 +1312,7 @@ do not grow the file, so there is nothing to reclaim. See [durability](durabilit
 | `clear_matrix_cell::<T>(key)` | clear one cell commit bit |
 | `clear_matrix_category(category)` | clear a whole commit category |
 | `matrix_cell_payload::<T>(key)` | checked raw payload bytes for a committed cell |
-| `write_matrix_aux(name, offset, bytes)` | write preallocated noncommit aux bytes |
+| `write_matrix_aux(name, offset, bytes)` | write aux bytes (reserved in the matrix metadata, not commit-controlled, published through the ring) |
 | `read_matrix_aux(name, offset, len)` | read aux bytes |
 | `read_matrix_region_into::<T>(region, out)` / `read_matrix_region_from::<T>(cursor, out)` | read a rectangle row-major into `out`; returns how many cells were filled and a cursor to continue from |
 | `read_matrix_cells_into::<T>(keys, out)` | read the cells `keys` names, in any order and with repeats, into `out` in key order |

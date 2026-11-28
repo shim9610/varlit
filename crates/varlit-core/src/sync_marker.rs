@@ -1,21 +1,22 @@
-//! Sync markers: the durable commit boundary of a checkpointed stream primary.
+//! Sync markers: the durable commit boundary of a stream file.
 //!
-//! A checkpointed writer (indexed, or stream with a state sidecar) publishes a
-//! sync with one storage barrier, on the primary. Its sidecar is confirmed —
-//! written and synced — only every so often, so after a crash the sidecar can
-//! cover less than the primary acknowledged. What the sidecar does not cover is
-//! recovered from the primary, and the primary has to say how far its
-//! acknowledged prefix reaches without trusting anything the barrier did not
+//! A stream writer publishes each sync with one storage barrier: it appends a
+//! marker after the records the sync commits, issues the barrier, then writes
+//! the marker's end into the file's published end (`VPUB`), which the next
+//! barrier makes durable. After a crash the published end can therefore trail
+//! what the last barrier made durable, and the file has to say how far its
+//! acknowledged prefix reaches without trusting anything a barrier did not
 //! cover. That is this record.
 //!
 //! Each sync appends one marker after the records it commits. The marker names
 //! where its chain link starts and carries the CRC-32 of every byte from there
 //! to its own first byte. A link starts where the previous marker ended — or at
-//! the sidecar's confirmed EOF, which is always such a boundary — so a walk from
-//! a confirmed EOF accepts a prefix only up to the last marker whose bytes it
-//! has verified. Bytes after that marker were never acknowledged, whatever they
-//! look like: a crash can persist a record header whose payload pages never
-//! reached storage, and without a checksum policy nothing else could tell.
+//! the end the writer published when it created or opened the file, which is
+//! always such a boundary — so a walk from a published end accepts a prefix
+//! only up to the last marker whose bytes it has verified. Bytes after that
+//! marker were never acknowledged, whatever they look like: a crash can persist
+//! a record header whose payload pages never reached storage, and without a
+//! checksum policy nothing else could tell.
 //!
 //! The marker is independent of the format's integrity policy: it checksums the
 //! physical bytes, header and footer included, so it works for formats with no

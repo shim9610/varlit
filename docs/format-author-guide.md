@@ -203,7 +203,7 @@ drop do not. Readers advance through `follow(&mut self)` and queries take
 the ring holds gets `MatrixSnapshotExpired` and must `follow()`; the ring size
 is set with `FormatSpec::with_matrix_ring_bytes`. Everything is in the primary
 file; there is no companion file. The byte layout is in the
-[matrix wire contract](spec.md#preallocated-matrix-wire-contract), and the
+[matrix wire contract](spec.md#tiled-matrix-wire-contract), and the
 durability rules in the [durability model](durability-model.md).
 
 Rules to keep stable:

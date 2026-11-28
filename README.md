@@ -256,13 +256,13 @@ allocation and durability depend on the actual filesystem. See
 
 [Benchmarks](https://github.com/shim9610/varlit/blob/main/docs/benchmarks.md) states the purpose, the method and the latest
 results, including where Varlit is behind.
-[`tools/format-bench`](tools/format-bench/README.md) compares Varlit with SQLite,
+[`tools/format-bench`](https://github.com/shim9610/varlit/blob/main/tools/format-bench/README.md) compares Varlit with SQLite,
 HDF5 and Parquet on grid, OLTP, analytics, mixed-stream and cell workloads, and
 its `ab.py` compares two Varlit revisions. The manual *Performance A/B*
 workflow runs that comparison on hosted runners; a change is flagged only when
 the run ranges do not overlap and the medians differ by 5 % or more. Hosted
 runners vary, so treat those numbers as comparisons, not absolute figures.
-[`tools/storage-bench`](tools/storage-bench/README.md) keeps the older storage
+[`tools/storage-bench`](https://github.com/shim9610/varlit/blob/main/tools/storage-bench/README.md) keeps the older storage
 workload definitions.
 
 CI covers native Linux, Windows and Intel macOS, 32-bit x86 Linux, s390x
