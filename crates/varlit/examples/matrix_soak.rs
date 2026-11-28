@@ -74,6 +74,26 @@ fn epoch(reader: &VarlitReader) -> Result<u64> {
 fn open(path: &Path) -> varlit::Result<VarlitReader> {
     Soak::spec().open_reader_with_resource_limits(path, ReadLimits::STANDARD)
 }
+/// Whether a reader's snapshot fell behind the write-ahead ring: expected for
+/// a reader that does not follow often enough, never a data error.
+fn expired(error: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    matches!(
+        error.downcast_ref::<varlit::Error>(),
+        Some(varlit::Error::MatrixSnapshotExpired { .. })
+    )
+}
+/// Open a reader and read its epoch; a fresh open can itself be overtaken by
+/// the writer before its first read, so retry that case.
+fn pin(path: &Path) -> Result<(VarlitReader, u64)> {
+    loop {
+        let reader = open(path)?;
+        match epoch(&reader) {
+            Ok(e) => return Ok((reader, e)),
+            Err(error) if expired(&*error) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
 fn latency(name: &str, mut values: Vec<u128>) {
     if values.is_empty() {
         return;
@@ -141,14 +161,20 @@ fn run() -> Result {
             let stop = &stop;
             let latest = &latest;
             workers.push(scope.spawn(move || -> Result {
-                // Both an uncached pinned descriptor and an independently following reader.
+                // A pinned reader that never follows and a reader that follows
+                // every round. A reader whose snapshot is older than what the
+                // write-ahead ring keeps gets `MatrixSnapshotExpired`, by
+                // contract: the following reader follows again, the pinned one
+                // re-pins with a fresh open. Any other error, and any wrong
+                // value, fails the run.
                 let _stop_on_exit = StopOnExit(stop);
-                let pinned = open(path)?;
-                let pinned_epoch = epoch(&pinned)?;
+                let (mut pinned, mut pinned_epoch) = pin(path)?;
                 let mut reader = open(path)?;
                 let mut state = id as u64 + 1;
                 let mut reads = 0u64;
                 let mut previous = 0;
+                let mut expired_follows = 0u64;
+                let mut repins = 0u64;
                 let mut follows = Vec::new();
                 loop {
                     let done = stop.load(Ordering::Acquire);
@@ -156,20 +182,43 @@ fn run() -> Result {
                     reader.follow()?;
                     // Bound instrumentation memory independently of run duration.
                     if follows.len() < 100_000 { follows.push(t.elapsed().as_micros()); }
-                    let e = epoch(&reader)?;
+                    let e = match epoch(&reader) {
+                        Ok(e) => e,
+                        Err(error) if expired(&*error) => {
+                            expired_follows += 1;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
                     assert!(e >= previous, "reader generation regressed");
                     previous = e;
                     for _ in 0..32 {
                         state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
                         let row = (state >> 32) as u32 % rows;
-                        check(&reader, row, e, groups)?;
-                        check(&pinned, row, pinned_epoch, groups)?;
-                        reads += 2;
+                        match check(&reader, row, e, groups) {
+                            Ok(()) => reads += 1,
+                            Err(error) if expired(&*error) => {
+                                expired_follows += 1;
+                                break;
+                            }
+                            Err(error) => return Err(error),
+                        }
+                        match check(&pinned, row, pinned_epoch, groups) {
+                            Ok(()) => reads += 1,
+                            Err(error) if expired(&*error) => {
+                                (pinned, pinned_epoch) = pin(path)?;
+                                repins += 1;
+                            }
+                            Err(error) => return Err(error),
+                        }
                     }
                     if reads.is_multiple_of(1024) {
                         let fresh = open(path)?;
-                        let e = epoch(&fresh)?;
-                        check(&fresh, (state >> 32) as u32 % rows, e, groups)?;
+                        match epoch(&fresh).and_then(|e| check(&fresh, (state >> 32) as u32 % rows, e, groups)) {
+                            Ok(()) => {}
+                            Err(error) if expired(&*error) => {}
+                            Err(error) => return Err(error),
+                        }
                     }
                     if done {
                         assert_eq!(e, latest.load(Ordering::Acquire));
@@ -177,7 +226,7 @@ fn run() -> Result {
                     }
                 }
                 latency(&format!("follow-reader-{id}-first-100000"), follows);
-                println!("{{\"event\":\"reader_complete\",\"id\":{id},\"checks\":{reads},\"last_epoch\":{previous}}}");
+                println!("{{\"event\":\"reader_complete\",\"id\":{id},\"checks\":{reads},\"last_epoch\":{previous},\"expired_follows\":{expired_follows},\"repins\":{repins}}}");
                 Ok(())
             }));
         }
