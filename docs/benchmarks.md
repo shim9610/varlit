@@ -4,6 +4,32 @@ This page is the entry point for Varlit's performance numbers: why they are
 measured, how, and what the latest runs found. The harness and its full
 scenario definitions are in [`tools/format-bench`](../tools/format-bench/README.md).
 
+## Read this first: Varlit is a different file format in each scenario
+
+SQLite, HDF5 and Parquet each write one file format, and any reader of that
+format opens any of their files. Varlit does not: it is a library for
+declaring file formats. Each scenario declares its own format with
+`varlit_format!` (its own magic, block types and storage layout: matrix
+blocks, keyed storage, finite-keyed records or a native append log), and
+each Varlit number below was measured on the format declared for that
+scenario.
+
+A Varlit file is read by the reader generated from the same declaration.
+A reader generated for another scenario's format refuses the file
+(`InvalidMagic`, and `SchemaHashMismatch` where the format pins its schema
+hash); there is no general reader that opens every scenario's file. The
+comparison is therefore between one general-purpose format per engine and a
+Varlit format built for each workload.
+
+| Scenario | Varlit format used (magic) | Storage layout | Declaration |
+| --- | --- | --- | --- |
+| grid | `GRID6F32` | matrix block, one array chunk per cell, the first axis grows | [`grid/vl_matrix.rs`](../tools/format-bench/src/grid/vl_matrix.rs) |
+| oltp | `BANKMTX1` | matrix blocks, one account per cell, branch index as two more matrix blocks | [`oltp/vl_matrix.rs`](../tools/format-bench/src/oltp/vl_matrix.rs) |
+| oltp-sparse | `BANKROW1` | keyed storage (`keyed_storage: in_place`), one record per account key | [`oltp/vl_keyed.rs`](../tools/format-bench/src/oltp/vl_keyed.rs) |
+| analytics | one format per candidate layout | finite-keyed records, one per column chunk, zstd, zone-map record per row group | [`analytics/vl.rs`](../tools/format-bench/src/analytics/vl.rs) |
+| mixed, mixed-live | `MIXEDNSB` | native append log, one record per type per burst, explicit transaction markers with a single-barrier durable commit | [`mixed/vl_native.rs`](../tools/format-bench/src/mixed/vl_native.rs) |
+| cells | `CELLGRID` | matrix block, 1 KiB cells overwritten in place | [`cells/varlit_matrix.rs`](../tools/format-bench/src/cells/varlit_matrix.rs) |
+
 ## Purpose
 
 1. **Know where Varlit stands, honestly.** Each competing format is measured
@@ -62,7 +88,7 @@ run says nothing about the other.
 | macOS 1 GB (2026-11-27) | Mac mini, Apple M4 (10 cores), 16 GiB, internal SSD, APFS | 1 GB per scenario (grid 2 GiB) | 3, median | `39edc54` | [results-mac/20261127.md](../tools/format-bench/results-mac/20261127.md) |
 | Linux 10 GB (2026-11-27) | Cloud VM, Intel Xeon 2.10 GHz (4 vCPUs), 15.7 GiB, virtio disk, ext4 | 10 GB per scenario | 1 | `f290766` | [results-10gb-20261127.md](../tools/format-bench/results-10gb-20261127.md) |
 
-Both runs use sidecar-free streams and `device_flush: full` (on macOS,
+Both runs use `device_flush: full` (on macOS,
 `F_FULLFSYNC` and SQLite `fullfsync`). Every run passed the oracle (78 on
 macOS, 26 on Linux) and the page cache check went from 100 % to 0 % resident
 on both. Neither run was gated: the Mac's disk probe (3.9 s per 1000 full
