@@ -180,7 +180,7 @@ and compile-time schema validation.
 - A stream file has no companion file. A `.vks` file left by an earlier
   release is ignored.
 
-## Preallocated Matrix Wire Contract
+## Tiled Matrix Wire Contract
 
 All integers below are little-endian. "CRC32" is the IEEE CRC32 computed by
 `crc32fast`. Offsets inside matrix structures (ring position, directory

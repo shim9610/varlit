@@ -53,12 +53,33 @@ env:
   MSRV: 1.95.0
 
 jobs:
-  verification:
+  # Documentation-only pull requests skip the jobs that build and run code;
+  # see scripts/ci_changes.py. `fmt` and `rustdoc` still run, and the
+  # required gate accepts the skipped jobs only for such a change.
+  changes:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: classify
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci_changes.py --base "$BASE" --head HEAD
+
+  verification:
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     uses: ./.github/workflows/verification.yml
 
   storage-contracts:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: storage failure and resource contracts
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -92,7 +113,8 @@ jobs:
           retention-days: 14
 
   codeql:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: codeql (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -167,7 +189,8 @@ jobs:
   # Discover configurations from Cargo metadata. Adding a feature adds both
   # Clippy and a native singleton test job without editing this workflow.
   feature-config:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     outputs:
       checks: ${{ steps.features.outputs.checks }}
@@ -219,7 +242,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: test (${{ matrix.features.name }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -252,7 +276,8 @@ jobs:
   # Execute on the native OS: a cross-check cannot exercise tempfile lifetime,
   # positional reads, file replacement, mmap or an independently opened reader.
   platform-io:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: bounded I/O (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -283,7 +308,8 @@ jobs:
   # run and each failure fails this required job; no infrastructure error is
   # converted into success. This reduces acquisitions, not provider outages.
   macos-native:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: native tests and bounded I/O (macos-15-intel)
     runs-on: macos-15-intel
     timeout-minutes: 60
@@ -397,7 +423,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     # Literal, not `${{ env.MSRV }}`: the `env` context is not available in
     # `jobs.<id>.name`. The value is asserted against the manifests below.
     name: msrv (1.95.0)
@@ -441,7 +468,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: renamed-dependency fixture
     runs-on: ubuntu-latest
     steps:
@@ -472,7 +500,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: public-api fixture
     runs-on: ubuntu-latest
     steps:
@@ -521,6 +550,7 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
+    needs: changes
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: rustdoc (-D warnings)
     runs-on: ubuntu-latest
@@ -540,6 +570,14 @@ jobs:
         run: cargo doc --locked --workspace --no-default-features --no-deps
       - name: Current documentation links and executable quickstart
         run: python3 scripts/check_docs.py --quickstart
+      # A documentation-only change skips the test jobs, so the tests that read
+      # the documents run here instead.
+      - name: Tests that read the documentation (documentation-only change)
+        if: needs.changes.outputs.docs_only == 'true'
+        run: |
+          cargo test --locked -p varlit --features integrity --test doc_claims --test doc_dsl_examples
+          cargo test --locked -p varlit --features integrity --test matrix \
+            the_allocator_failure_narrowing_is_published_with_the_outcome_family
 
   # Release gate: audit/deny failures block the merge.
   supply-chain:
@@ -548,7 +586,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: deny + audit
     runs-on: ubuntu-latest
     steps:
@@ -586,7 +625,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: deny negative fixture
     runs-on: ubuntu-latest
     steps:
@@ -634,7 +674,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: fuzz workspace (locked)
     runs-on: ubuntu-latest
     steps:
@@ -676,7 +717,8 @@ jobs:
   # Verify archives before the first registry release. Cargo stages sibling
   # packages in a local registry, so the facade is verified before publication.
   package-archives:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: verified package archives
     runs-on: ubuntu-latest
     steps:
@@ -694,7 +736,8 @@ jobs:
 
   # Keep source notices and an independent Git consumer covered too.
   source-contents:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: source contents
     runs-on: ubuntu-latest
     steps:
@@ -708,7 +751,8 @@ jobs:
           done
 
   git-consumer:
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     # Preserve the existing status-check name used by branch protection.
     name: Git consumer + pinned dependency sources
     runs-on: ubuntu-latest
@@ -733,7 +777,8 @@ jobs:
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: clean source archive
     runs-on: ubuntu-latest
     steps:
@@ -776,7 +821,8 @@ jobs:
     # to `usize` only through checked helpers (`width.rs`); this job is what
     # notices a new unchecked path. Examples are not built: they add build
     # time and nothing the tests do not exercise.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: test (all-features, i686 32-bit)
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -812,7 +858,8 @@ jobs:
     # several threads unwind at once (`decoder_contracts`; never serially and
     # never natively). Debug info is left out to keep the cross build within
     # the runner's disk.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: test (all-features, s390x big-endian, QEMU)
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -859,7 +906,8 @@ jobs:
     # pass of two scenarios, so a platform assumption fails here, not on
     # someone's machine. HDF5 is left out (it builds its C library with
     # CMake); the Rust engines and SQLite are built and run.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: bench harness (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -916,6 +964,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs:
+      - changes
       - verification
       - codeql
       - fmt
@@ -948,4 +997,5 @@ jobs:
       - name: Require every configured job to succeed
         env:
           VARLIT_CI_NEEDS: ${{ toJSON(needs) }}
+          VARLIT_CI_DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
         run: python3 scripts/check_ci_results.py

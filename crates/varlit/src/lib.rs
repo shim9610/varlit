@@ -4,10 +4,18 @@
 //! Varlit turns a *declaration* of a binary format into the format: you write
 //! the header identity, resource limits, durability and integrity policies, and
 //! the block set once, and the macro generates the on-disk contract together
-//! with the typed Rust API that reads and writes it. Files are append-friendly
-//! — records are added at the tail, readers take a snapshot at open — with an
-//! optional preallocated matrix storage mode for dense, directly addressed
-//! cells.
+//! with the typed Rust API that reads and writes it. Each declaration is a
+//! file format of its own: its files are read by the reader generated from
+//! the same declaration, and a reader generated from another declaration
+//! refuses them.
+//!
+//! A declaration chooses its storage paths. Records are appended to a log,
+//! and readers take a snapshot at open and follow new publications; stream
+//! handles append and follow at a cost that does not grow with the file; keyed
+//! storage keeps one record per key in a B-tree inside the file, updated in
+//! place; matrix blocks address fixed-size cells in tiles overwritten in place.
+//! Matrix and keyed-storage changes go through a write-ahead ring inside the
+//! file and are published atomically.
 //!
 //! The README is deliberately not inlined here: it is packaged alongside this
 //! crate, but its path differs between the repository checkout and the
@@ -116,8 +124,8 @@
 //! | --- | --- |
 //! | `quickstart.md` | shortest path from declaration to a file |
 //! | `format-author-guide.md` | declaring a format clause by clause, and what each clause generates |
-//! | `spec.md` | the normative wire contract, the `varlit_format!` macro contract, and the `VMAT` matrix layout |
-//! | `how-it-works.md` | what the generated code does at run time, region by region, including the preallocated matrix storage mode |
+//! | `spec.md` | the normative wire contract, including streams, tiled matrices and keyed storage, and the `varlit_format!` macro contract |
+//! | `how-it-works.md` | how a declaration becomes a file: the storage paths, the published end, streams, matrices and keyed storage, with diagrams |
 //! | `api-reference.md` | the complete public surface, feature by feature |
 //! | `custom-codec-guide.md` | writing a codec, and the mandatory `SCHEMA_ID` identity contract |
 //! | `durability-model.md` | what `flush`, `sync`, and `commit_durable` promise |

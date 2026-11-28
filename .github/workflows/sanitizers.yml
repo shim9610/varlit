@@ -46,13 +46,32 @@ env:
   CARGO_FUZZ_VERSION: 0.13.2
 
 jobs:
+  # Documentation-only pull requests skip the sanitizers; see
+  # scripts/ci_changes.py. A skipped required check counts as passed.
+  changes:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: classify
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci_changes.py --base "$BASE" --head HEAD
+
   fuzz-smoke:
     # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: fuzz smoke (every target, 90s each)
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -119,7 +138,8 @@ jobs:
 
   asan:
     # Same public-repository guard as above.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: address sanitizer + leaks
     runs-on: ubuntu-latest
     timeout-minutes: 300
@@ -203,7 +223,8 @@ jobs:
 
   miri:
     # Same public-repository guard as above.
-    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    needs: changes
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private && needs.changes.outputs.docs_only != 'true'
     name: miri (unsafe modules)
     runs-on: ubuntu-latest
     timeout-minutes: 90

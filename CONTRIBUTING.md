@@ -70,7 +70,17 @@ does not duplicate the PR checks. All feature configurations, native Linux/
 Windows/macOS tests, the 32-bit x86 and s390x big-endian (QEMU) test jobs,
 Kani, Verus, Loom, coverage, packaging, dependency checks and CodeQL feed the
 stable `ci / required` gate. A failed, cancelled, missing or skipped job cannot pass it.
-Separate required checks cover ASan, portable Miri and fuzz smoke. Scheduled
+Separate required checks cover ASan, portable Miri and fuzz smoke.
+
+A pull request that changes only documentation (Markdown files, and images
+under `docs/`; `docs/verification/` records count as code) runs a shorter
+set: `scripts/ci_changes.py` classifies the changed files, the build, test,
+verification and sanitizer jobs are skipped, and `rustfmt` and `rustdoc` still
+run. `rustdoc` then also runs the tests that read the documents (`doc_claims`,
+`doc_dsl_examples` and the documentation check in `matrix`), alongside the link
+check and the executable quickstart and README examples. The gate accepts
+skipped jobs only for such a change; a change that touches any other file runs
+everything. Scheduled
 workflows run longer qualification profiles (`qualification.yml`) and grow the
 fuzz corpus (`fuzz-corpus.yml`); the manual *Performance A/B* workflow
 (`perf.yml`) compares a change against its base.

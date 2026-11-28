@@ -130,7 +130,9 @@ pub fn derive_varlit_block(input: TokenStream) -> TokenStream {
 /// | `endian` | format byte order; a block may override it |
 /// | `schema_hash` | `computed` (derived from the declaration) or a pinned literal |
 /// | `index`, `commit`, `manifest`, `integrity`, `compression` | policies |
-/// | `dims`, `commit: cell_bitmap`, `aux` | preallocated-matrix declarations |
+/// | `keyed_storage` | keep keyed blocks once per key in an in-file B-tree, updated in place |
+/// | `device_flush` | whether durable syncs flush the drive cache (`full`, the default) or stop at the OS (`os`); runtime policy, not stored in the file |
+/// | `dims`, `commit: cell_bitmap`, `aux` | tiled-matrix declarations |
 /// | `layout { … }` | custom physical layout, for non-Varlit-native byte shapes |
 /// | `blocks { … }` | `fixed` / `variable` / `matrix` block declarations |
 ///
