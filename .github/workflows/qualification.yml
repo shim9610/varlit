@@ -116,21 +116,22 @@ jobs:
           key: qualification-release
       - name: run endurance
         run: |
-          data="$RUNNER_TEMP/endurance-${{ matrix.mode }}"
+          # endurance.py refuses report and data paths inside the checkout.
+          data="$RUNNER_TEMP/endurance-data-${{ matrix.mode }}"
           args=(--mode "${{ matrix.mode }}" --seconds "$ENDURANCE_SECONDS"
-                --output "target/qualification/endurance-${{ matrix.mode }}" --data-root "$data")
+                --output "$RUNNER_TEMP/endurance-report-${{ matrix.mode }}" --data-root "$data")
           if [[ "${{ matrix.mode }}" == io ]]; then args+=(--file-gib 1); fi
           python3 scripts/endurance.py "${args[@]}" --plan
           python3 scripts/endurance.py "${args[@]}"
       - name: remove the data files
         if: always()
-        run: rm -rf "$RUNNER_TEMP/endurance-${{ matrix.mode }}"
+        run: rm -rf "$RUNNER_TEMP/endurance-data-${{ matrix.mode }}"
       - name: keep the report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-endurance-${{ matrix.mode }}
-          path: target/qualification/endurance-${{ matrix.mode }}/
+          path: ${{ runner.temp }}/endurance-report-${{ matrix.mode }}/
           if-no-files-found: warn
           retention-days: 30
 

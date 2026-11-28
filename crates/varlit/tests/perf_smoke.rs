@@ -938,15 +938,21 @@ fn matrix_aux_region_access(case: PerfCase) -> varlit::Result<()> {
     let aux_len = spec.matrix_aux[0].byte_len;
 
     let mut writer = spec.create_writer_with_dims(&path, dims)?;
-    let stable_len = metadata(&path)?.len();
-    let elapsed = timed(|| {
+    let created_len = metadata(&path)?.len();
+    let mut write_aux = |round: u32| -> varlit::Result<()> {
         for index in 0..case.records {
             let offset = ((index * 4) as u64) % (aux_len - 4);
-            writer.write_matrix_aux("scratch", offset, &(index as u32).to_le_bytes())?;
+            let value = (index as u32).wrapping_add(round);
+            writer.write_matrix_aux("scratch", offset, &value.to_le_bytes())?;
         }
-        writer.flush()?;
-        Ok(())
-    })?;
+        writer.sync() // aux writes are published through the ring, like cells
+    };
+    let elapsed = timed(|| write_aux(0))?;
+    // The first publication may append one overflow region for its staged
+    // bytes and index; after that, aux writes reuse the space.
+    let stable_len = metadata(&path)?.len();
+    assert!(stable_len >= created_len);
+    write_aux(1)?;
     assert_eq!(metadata(&path)?.len(), stable_len);
     report("matrix aux write", case.records, &path, elapsed);
 
@@ -995,7 +1001,7 @@ fn matrix_direct_access_with_spec(
             )?;
             writer.commit_matrix_cell::<PerfMatrixCell>(key)?;
         }
-        writer.flush()?;
+        writer.sync()?; // publishes the matrix generation; flush() does not
         Ok(())
     })?;
     report(
@@ -1066,22 +1072,27 @@ fn matrix_direct_access_with_spec(
     }
 
     let overwrite_count = case.records.min(1_024);
-    let elapsed = timed(|| {
+    let overwrite = |round: u32| -> varlit::Result<()> {
         let mut writer = spec.open_writer(&path)?;
         for index in 0..overwrite_count {
             let key = MatrixKey::new((index / channels) as u64, (index % channels) as u64);
             writer.write_matrix_cell(
                 key,
                 &PerfMatrixCell {
-                    value: (index as u32).wrapping_add(1),
+                    value: (index as u32).wrapping_add(round),
                 },
             )?;
             writer.commit_matrix_cell::<PerfMatrixCell>(key)?;
         }
-        writer.flush()?;
-        Ok(())
-    })?;
-    assert_eq!(metadata(&path)?.len(), stable_len);
+        writer.sync() // publishes the matrix generation; flush() does not
+    };
+    let elapsed = timed(|| overwrite(1))?;
+    // The first overwrite publication may append one overflow region for
+    // its staged bytes and index; after that, overwrites reuse the space.
+    let overwritten_len = metadata(&path)?.len();
+    assert!(overwritten_len >= stable_len);
+    overwrite(2)?;
+    assert_eq!(metadata(&path)?.len(), overwritten_len);
     report(
         &format!("{label_prefix} overwrite"),
         overwrite_count,
@@ -1096,7 +1107,7 @@ fn matrix_direct_access_with_spec(
                 writer.rebuild_matrix_commit_from_crc::<PerfMatrixCell>()?,
                 case.records as u64
             );
-            writer.flush()?;
+            writer.sync()?; // publishes the matrix generation; flush() does not
             Ok(())
         })?;
         report(

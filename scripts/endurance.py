@@ -101,7 +101,6 @@ def main(argv=None):
     parser.add_argument("--readers", type=int, default=8)
     parser.add_argument("--file-gib", type=float, default=20)
     parser.add_argument("--epoch-mib", type=int, default=256)
-    parser.add_argument("--read-seconds", type=int, default=30)
     parser.add_argument("--cycle-timeout", type=int, default=3600)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
@@ -114,7 +113,7 @@ def main(argv=None):
     epoch = args.epoch_mib * 1024**2
     if seconds <= 0 or args.rows <= 0 or args.rows % 256 or not 1 <= args.readers <= 64:
         parser.error("positive duration, rows divisible by 256, readers 1..64 required")
-    if epoch <= 0 or total < 2 * epoch or total % (2 * epoch) or args.read_seconds <= 0 or args.cycle_timeout <= 0:
+    if epoch <= 0 or total < 2 * epoch or total % (2 * epoch) or args.cycle_timeout <= 0:
         parser.error("file size must contain an even number of epochs; timeouts must be positive")
     output, data = args.output.resolve(), args.data_root.resolve()
     for path in (output, data):
@@ -183,7 +182,7 @@ def main(argv=None):
             else:
                 command = [sys.executable, str(ROOT / "scripts/load_scalable.py"), "--suite", "large",
                            "--only", CASES[cycle % len(CASES)], "--total-gib", str(args.file_gib),
-                           "--epoch-mib", str(args.epoch_mib), "--read-seconds", str(args.read_seconds),
+                           "--epoch-mib", str(args.epoch_mib),
                            "--timeout", str(args.cycle_timeout)]
                 timeout = args.cycle_timeout
             command += ["--output", str(logs), "--data-root", str(files)]
