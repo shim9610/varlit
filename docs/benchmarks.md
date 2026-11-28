@@ -202,30 +202,6 @@ Fixed 1 KiB cells updated in place, 64 per atomic update, four followers (Parque
 | File size (MB) | Linux 10 GB | 10092 | 13369 | 10077 | - |
 
 
-### Varlit between revisions
-
-`ab.py` on the Mac compared the revision before the stream `.vks` sidecar
-removal (`03678d7`) with the one after it (`39edc54`) on oltp, analytics,
-mixed, mixed-live and cells, 3 alternating runs per side. No metric was
-flagged (ranges overlapping, or medians within 5 %). Full table in
-[results-mac/20261127.md](../tools/format-bench/results-mac/20261127.md).
-
-| Metric | Before (median, range) | After (median, range) |
-| --- | --- | --- |
-| oltp 1000 transfers (s) | 4.06 (4.03 to 4.10) | 4.04 (3.88 to 4.08) |
-| oltp transfer p99 (ms) | 5.05 (5.04 to 6.01) | 5.06 (5.02 to 5.22) |
-| analytics Q1 (s) | 0.264 (0.262 to 0.284) | 0.263 (0.261 to 0.281) |
-| mixed throughput (x real time) | 4.27 (3.23 to 10.36) | 8.41 (3.22 to 9.71) |
-| mixed-live late windows (%) | 3.22 (0.31 to 6.77) | 2.37 (0.17 to 8.12) |
-| mixed-live publish p99 (ms) | 9.23 (4.80 to 9.44) | 9.58 (4.86 to 9.72) |
-| cells updates per second | 145 (133 to 220) | 207 (150 to 229) |
-
-`oltp-sparse` and `grid` were not part of that comparison. On Linux, the
-previous 10 GB pass ([results-10gb-20261118.md](../tools/format-bench/results-10gb-20261118.md),
-before the sidecar removal, on a different host) measured oltp-sparse
-1000 transfers at 1.29 s for Varlit and 1.31 s for SQLite, against 1.91 s and
-1.80 s now; whether Varlit's part of that change is a regression is open.
-
 ## Where Varlit is behind
 
 Every metric (file size aside) where another engine measured a better value
