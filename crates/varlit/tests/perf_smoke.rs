@@ -995,7 +995,7 @@ fn matrix_direct_access_with_spec(
             )?;
             writer.commit_matrix_cell::<PerfMatrixCell>(key)?;
         }
-        writer.flush()?;
+        writer.sync()?; // publishes the matrix generation; flush() does not
         Ok(())
     })?;
     report(
@@ -1078,7 +1078,7 @@ fn matrix_direct_access_with_spec(
             )?;
             writer.commit_matrix_cell::<PerfMatrixCell>(key)?;
         }
-        writer.flush()?;
+        writer.sync()?; // publishes the matrix generation; flush() does not
         Ok(())
     })?;
     assert_eq!(metadata(&path)?.len(), stable_len);
@@ -1096,7 +1096,7 @@ fn matrix_direct_access_with_spec(
                 writer.rebuild_matrix_commit_from_crc::<PerfMatrixCell>()?,
                 case.records as u64
             );
-            writer.flush()?;
+            writer.sync()?; // publishes the matrix generation; flush() does not
             Ok(())
         })?;
         report(
